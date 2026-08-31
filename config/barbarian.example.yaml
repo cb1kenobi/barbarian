@@ -1,0 +1,51 @@
+version: 1
+
+profile:
+  name: Developer
+  timezone: America/Chicago
+  githubLogin: ""
+
+monitor:
+  intervalMinutes: 20
+  runOnStartup: true
+  includeDraftPullRequests: false
+
+repositories: []
+# Example:
+# repositories:
+#   - name: your-org/important-storage-repo
+#     priority: 100
+#     watchIssues: true
+#     watchPullRequests: true
+#     reviewSkill: cb1-code-review
+#     labels:
+#       data-loss: 100
+#       security: 80
+
+review:
+  requestedReviewer: ""
+  fallbackTeams: []
+  workspaceRoot: .barbarian/workspaces
+  autoCleanup: true
+
+linear:
+  enabled: false
+  command: []
+
+agents:
+  default: codex
+  providers:
+    codex:
+      command: codex
+      args: [exec, --skip-git-repo-check, "-"]
+    claude:
+      command: claude
+      args: [-p]
+    gemini:
+      command: gemini
+      args: []
+
+statusUpdate:
+  enabled: true
+  workdays: [monday, tuesday, wednesday, thursday, friday]
+  daysOff: []

@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Barbarian Review Companion",
+  "version": "0.1.0",
+  "description": "Connect GitHub pull request pages to your local Barbarian review room.",
+  "permissions": ["storage"],
+  "host_permissions": ["http://127.0.0.1:4142/*"],
+  "action": { "default_popup": "src/popup.html", "default_title": "Barbarian" },
+  "content_scripts": [
+    {
+      "matches": ["https://github.com/*/*/pull/*"],
+      "js": ["src/content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

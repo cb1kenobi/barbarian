@@ -1,0 +1,12 @@
+node_modules/
+.pnpm-store/
+dist/
+.env
+config/barbarian.yaml
+data/
+.barbarian/
+*.log
+.DS_Store
+apps/*/node_modules/
+apps/*/dist/
+*.vsix

@@ -1,0 +1,85 @@
+export type ReviewStatus =
+  | 'unreviewed'
+  | 'agent_working'
+  | 'issues_found'
+  | 'awaiting_feedback'
+  | 'ready_to_merge'
+  | 'approved'
+  | 'merged'
+  | 'closed';
+
+export interface RepositoryConfig {
+  name: string;
+  priority: number;
+  watchIssues: boolean;
+  watchPullRequests: boolean;
+  reviewSkill: string;
+  labels: Record<string, number>;
+}
+
+export interface AgentProviderConfig {
+  command: string;
+  args: string[];
+}
+
+export interface BarbarianConfig {
+  version: number;
+  profile: { name: string; timezone: string; githubLogin: string };
+  monitor: { intervalMinutes: number; runOnStartup: boolean; includeDraftPullRequests: boolean };
+  repositories: RepositoryConfig[];
+  review: {
+    requestedReviewer: string;
+    fallbackTeams: string[];
+    workspaceRoot: string;
+    autoCleanup: boolean;
+  };
+  linear: { enabled: boolean; command: string[] };
+  agents: { default: string; providers: Record<string, AgentProviderConfig> };
+  statusUpdate: { enabled: boolean; workdays: string[]; daysOff: string[] };
+}
+
+export interface DiscoveredIssue {
+  provider: 'github' | 'linear';
+  repository: string;
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  updatedAt: string;
+  labels: string[];
+  milestone: string | null;
+  duplicateOf: string | null;
+  inProgressPr: string | null;
+  fixedBy: string | null;
+  priority: number;
+  priorityReasons: string[];
+}
+
+export interface DiscoveredPullRequest {
+  provider: 'github';
+  repository: string;
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  author: string;
+  headSha: string;
+  headRefName: string;
+  baseRefName: string;
+  updatedAt: string;
+  isDraft: boolean;
+  reviewDecision: string | null;
+  requestedReviewers: string[];
+  requestedTeams: string[];
+  linkedIssues: number[];
+  mergedAt: string | null;
+  state: string;
+}
+
+export interface DiscoveryResult {
+  discoveredAt: string;
+  githubLogin: string;
+  issues: DiscoveredIssue[];
+  pullRequests: DiscoveredPullRequest[];
+  warnings: string[];
+}
