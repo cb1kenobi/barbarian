@@ -29,6 +29,7 @@ export class BarbarianDatabase {
         body TEXT NOT NULL DEFAULT '',
         simple_summary TEXT NOT NULL DEFAULT '',
         url TEXT NOT NULL,
+        assignees TEXT NOT NULL DEFAULT '[]',
         priority INTEGER NOT NULL DEFAULT 0,
         priority_reasons TEXT NOT NULL DEFAULT '[]',
         status TEXT NOT NULL DEFAULT 'queued',
@@ -54,6 +55,8 @@ export class BarbarianDatabase {
         body TEXT NOT NULL DEFAULT '',
         url TEXT NOT NULL,
         author TEXT NOT NULL,
+        additions INTEGER NOT NULL DEFAULT 0,
+        deletions INTEGER NOT NULL DEFAULT 0,
         head_sha TEXT NOT NULL,
         head_ref_name TEXT NOT NULL,
         base_ref_name TEXT NOT NULL,
@@ -107,6 +110,58 @@ export class BarbarianDatabase {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         UNIQUE(review_id, remote_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS local_branches (
+        id TEXT PRIMARY KEY,
+        repository TEXT NOT NULL,
+        remote_url TEXT NOT NULL,
+        branch_name TEXT NOT NULL,
+        base_branch TEXT NOT NULL,
+        base_ref TEXT NOT NULL,
+        head_sha TEXT NOT NULL,
+        worktree_state TEXT NOT NULL DEFAULT '',
+        is_dirty INTEGER NOT NULL DEFAULT 0,
+        workspace_path TEXT NOT NULL,
+        review_id TEXT REFERENCES review_queue(id) ON DELETE SET NULL,
+        pull_request_repository TEXT,
+        pull_request_number INTEGER,
+        pull_request_title TEXT,
+        pull_request_summary TEXT,
+        pull_request_url TEXT,
+        pull_request_author TEXT,
+        status TEXT NOT NULL DEFAULT 'unreviewed',
+        summary TEXT NOT NULL DEFAULT '',
+        findings_count INTEGER NOT NULL DEFAULT 0,
+        last_reviewed_sha TEXT,
+        last_reviewed_worktree_state TEXT,
+        last_agent_error TEXT,
+        first_seen_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        UNIQUE(repository, branch_name)
+      );
+
+      CREATE TABLE IF NOT EXISTS local_branch_findings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        branch_id TEXT NOT NULL REFERENCES local_branches(id) ON DELETE CASCADE,
+        ordinal INTEGER NOT NULL,
+        path TEXT NOT NULL,
+        line INTEGER NOT NULL,
+        side TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        body TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(branch_id, ordinal)
+      );
+
+      CREATE TABLE IF NOT EXISTS local_branch_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        branch_id TEXT NOT NULL REFERENCES local_branches(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        author TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS chat_messages (
@@ -166,6 +221,9 @@ export class BarbarianDatabase {
       CREATE INDEX IF NOT EXISTS idx_work_items_queue ON work_items(remote_state, status, priority DESC);
       CREATE INDEX IF NOT EXISTS idx_review_queue_active ON review_queue(remote_state, status, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_review_findings_review ON review_findings(review_id, resolved, outdated);
+      CREATE INDEX IF NOT EXISTS idx_local_branches_review ON local_branches(review_id);
+      CREATE INDEX IF NOT EXISTS idx_local_branch_findings_branch ON local_branch_findings(branch_id, ordinal);
+      CREATE INDEX IF NOT EXISTS idx_local_branch_messages_branch ON local_branch_messages(branch_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_chat_messages_review ON chat_messages(review_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_events(created_at DESC);
     `);
@@ -177,6 +235,8 @@ export class BarbarianDatabase {
     if (!initialReviewColumns.some((column) => column.name === 'plain_summary')) {
       this.connection.exec("ALTER TABLE review_queue ADD COLUMN plain_summary TEXT NOT NULL DEFAULT ''");
     }
+    const workItemColumns = new Set((this.connection.prepare('PRAGMA table_info(work_items)').all() as Array<{ name: string }>).map((column) => column.name));
+    if (!workItemColumns.has('assignees')) this.connection.exec("ALTER TABLE work_items ADD COLUMN assignees TEXT NOT NULL DEFAULT '[]'");
     const reviewColumns = new Set((this.connection.prepare('PRAGMA table_info(review_queue)').all() as Array<{ name: string }>).map((column) => column.name));
     const reviewAdditions: Array<[string, string]> = [
       ['discussion_watermark', "TEXT NOT NULL DEFAULT ''"],
@@ -196,6 +256,8 @@ export class BarbarianDatabase {
       ['other_approvals', 'INTEGER NOT NULL DEFAULT 0'],
       ['remote_created_at', 'TEXT'],
       ['remote_updated_at', 'TEXT'],
+      ['additions', 'INTEGER NOT NULL DEFAULT 0'],
+      ['deletions', 'INTEGER NOT NULL DEFAULT 0'],
     ];
     for (const [name, definition] of reviewAdditions) {
       if (!reviewColumns.has(name)) this.connection.exec(`ALTER TABLE review_queue ADD COLUMN ${name} ${definition}`);
@@ -207,6 +269,17 @@ export class BarbarianDatabase {
     ];
     for (const [name, definition] of runAdditions) {
       if (!runColumns.has(name)) this.connection.exec(`ALTER TABLE agent_runs ADD COLUMN ${name} ${definition}`);
+    }
+    if (!runColumns.has('branch_id')) this.connection.exec('ALTER TABLE agent_runs ADD COLUMN branch_id TEXT REFERENCES local_branches(id) ON DELETE SET NULL');
+    const branchColumns = new Set((this.connection.prepare('PRAGMA table_info(local_branches)').all() as Array<{ name: string }>).map((column) => column.name));
+    const branchAdditions: Array<[string, string]> = [
+      ['is_dirty', 'INTEGER NOT NULL DEFAULT 0'],
+      ['pull_request_repository', 'TEXT'], ['pull_request_number', 'INTEGER'],
+      ['pull_request_title', 'TEXT'], ['pull_request_summary', 'TEXT'],
+      ['pull_request_url', 'TEXT'], ['pull_request_author', 'TEXT'],
+    ];
+    for (const [name, definition] of branchAdditions) {
+      if (!branchColumns.has(name)) this.connection.exec(`ALTER TABLE local_branches ADD COLUMN ${name} ${definition}`);
     }
     this.connection.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_remote_key ON activity_events(remote_key) WHERE remote_key IS NOT NULL');
     this.connection.exec('PRAGMA optimize');

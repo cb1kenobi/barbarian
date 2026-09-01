@@ -18,6 +18,10 @@ describe('Chrome extension API policy', () => {
       type: 'barbarian-api',
       path: '/api/browser/context?url=https%3A%2F%2Fgithub.com%2FHarperFast%2Fharper%2Fpull%2F9999',
     }, senderUrl)).toBe(false);
+    expect(isAllowedApiMessage({
+      type: 'barbarian-api',
+      path: `/api/browser/context?url=${encodeURIComponent(senderUrl)}&refresh=1`,
+    }, senderUrl)).toBe(true);
   });
 
   it('allows same-PR review actions but rejects unrelated local API access', () => {

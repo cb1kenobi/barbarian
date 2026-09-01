@@ -31,23 +31,25 @@ function database(): BarbarianDatabase {
 }
 
 describe('applyDiscovery', () => {
-  it('withholds issues that are already claimed, fixed, or duplicates', async () => {
+  it('keeps assignment and progress metadata for every discovered issue', async () => {
     const db = database();
-    const base = { provider: 'github' as const, repository: 'Acme/storage', body: '', updatedAt: '2026-08-31T10:00:00Z', labels: [], milestone: null, priority: 10, priorityReasons: [] };
+    const base = { provider: 'github' as const, repository: 'Acme/storage', body: '', updatedAt: '2026-08-31T10:00:00Z', labels: [], assignees: [] as string[], milestone: null, priority: 10, priorityReasons: [] };
     const result: DiscoveryResult = {
       discoveredAt: '2026-08-31T12:00:00Z', githubLogin: 'cb1kenobi', warnings: [], pullRequests: [],
       issues: [
-        { ...base, number: 1, title: 'Actionable', url: 'https://example/1', duplicateOf: null, inProgressPr: null, fixedBy: null },
+        { ...base, assignees: ['cb1kenobi'], number: 1, title: 'Actionable', url: 'https://example/1', duplicateOf: null, inProgressPr: null, fixedBy: null },
         { ...base, number: 2, title: 'Claimed', url: 'https://example/2', duplicateOf: null, inProgressPr: 'https://example/pr/2', fixedBy: null },
         { ...base, number: 3, title: 'Fixed', url: 'https://example/3', duplicateOf: null, inProgressPr: null, fixedBy: 'https://example/pr/3' },
         { ...base, number: 4, title: 'Duplicate', url: 'https://example/4', duplicateOf: '#1', inProgressPr: null, fixedBy: null },
       ],
     };
     await applyDiscovery(db, config, result);
-    const rows = db.connection.prepare('SELECT number, status FROM work_items ORDER BY number').all();
+    const rows = db.connection.prepare('SELECT number, status, assignees FROM work_items ORDER BY number').all();
     expect(rows).toEqual([
-      { number: 1, status: 'queued' }, { number: 2, status: 'claimed_elsewhere' },
-      { number: 3, status: 'already_fixed' }, { number: 4, status: 'duplicate' },
+      { number: 1, status: 'queued', assignees: '["cb1kenobi"]' },
+      { number: 2, status: 'in_progress', assignees: '[]' },
+      { number: 3, status: 'already_fixed', assignees: '[]' },
+      { number: 4, status: 'duplicate', assignees: '[]' },
     ]);
     db.close();
   });
@@ -58,6 +60,7 @@ describe('applyDiscovery', () => {
       provider: 'github' as const, repository: 'Acme/storage', body: '', author: 'author',
       headSha: 'abc', headRefName: 'feature', baseRefName: 'main', createdAt: '2026-08-01T10:00:00Z',
       updatedAt: '2026-08-31T10:00:00Z',
+      additions: 42, deletions: 7,
       isDraft: false, reviewDecision: null, requestedTeams: [], linkedIssues: [], mergedAt: null, state: 'OPEN',
       reviewedBy: [], viewerReviewState: null, viewerReviewSha: null, otherApprovals: 0,
       discussionWatermark: '',
@@ -76,8 +79,8 @@ describe('applyDiscovery', () => {
       { number: 10 },
       { number: 12 },
     ]);
-    expect(db.connection.prepare('SELECT remote_updated_at FROM review_queue WHERE number=10').get())
-      .toEqual({ remote_updated_at: '2026-08-31T10:00:00Z' });
+    expect(db.connection.prepare('SELECT remote_updated_at, additions, deletions FROM review_queue WHERE number=10').get())
+      .toEqual({ remote_updated_at: '2026-08-31T10:00:00Z', additions: 42, deletions: 7 });
 
     discovery.pullRequests[0] = {
       ...discovery.pullRequests[0]!, reviewDecision: 'APPROVED', otherApprovals: 1,

@@ -1,4 +1,5 @@
 import { githubPullRequestKey, isAllowedApiMessage } from './api-policy.js';
+import { reviewActionIsVisible } from './review-events.js';
 
 const endpoint = 'http://127.0.0.1:4142';
 const panelPath = 'src/sidepanel.html';
@@ -52,6 +53,25 @@ async function activeSelection(sender) {
   catch { return null; }
 }
 
+async function refreshSubmittedReview(sender, reviewAction) {
+  const tab = sender.tab;
+  const key = githubPullRequestKey(tab?.url || '');
+  if (!tab?.url || !key) return { ok: false };
+  for (const delay of [350, 1_000, 2_500, 5_000]) {
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    const result = await proxyApi({
+      type: 'barbarian-api',
+      path: `/api/browser/context?url=${encodeURIComponent(tab.url)}&refresh=1`,
+    }, sender);
+    if (!result.ok) continue;
+    await chrome.runtime.sendMessage({
+      type: 'barbarian-context-updated', key, context: result.body,
+    }).catch(() => {});
+    if (reviewActionIsVisible(result.body, reviewAction)) return { ok: true };
+  }
+  return { ok: false };
+}
+
 async function configureTab(tabId, url) {
   const enabled = Boolean(githubPullRequestKey(url || ''));
   await chrome.sidePanel.setOptions(enabled
@@ -76,6 +96,9 @@ chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'barbarian-api') void proxyApi(message, sender).then(sendResponse);
   else if (message?.type === 'barbarian-active-selection') void activeSelection(sender).then(sendResponse);
+  else if (message?.type === 'barbarian-review-submitted') {
+    void refreshSubmittedReview(sender, message.reviewAction).then(sendResponse);
+  }
   else return false;
   return true;
 });

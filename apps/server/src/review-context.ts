@@ -154,12 +154,13 @@ export async function refreshReviewContext(database: BarbarianDatabase, reviewId
     }
     database.connection.prepare(`
       UPDATE review_queue SET status=?, findings_count=?, review_decision=?, remote_state=?,
+        additions=?, deletions=?,
         viewer_review_state=?, viewer_review_sha=?, other_approvals=?, merged_at=?, review_paused=CASE
           WHEN head_sha<>? OR ?>discussion_watermark THEN 0 ELSE review_paused END,
         head_sha=?, discussion_watermark=?,
         last_reviewed_watermark=COALESCE(last_reviewed_watermark, ?), updated_at=? WHERE id=?
     `).run(
-      status, openFindings, remote.reviewDecision, remote.state,
+      status, openFindings, remote.reviewDecision, remote.state, remote.additions, remote.deletions,
       remote.viewerReviewState, remote.viewerReviewSha, remote.otherApprovals, remote.mergedAt,
       remote.headSha, watermark, remote.headSha, watermark, reviewedWatermark, now, reviewId,
     );

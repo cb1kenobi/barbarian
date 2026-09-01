@@ -1,3 +1,9 @@
+import { applyAppearance } from './appearance.js';
+import { pullRequestSummary } from './review-content.js';
+import { renderMarkdown } from './markdown.js';
+import { shouldSubmitQuestion } from './chat-input.js';
+import { selectionLabel, selectionPromptContext } from './selection-context.js';
+
 let currentTab;
 let currentPrKey = '';
 let currentContext;
@@ -48,24 +54,43 @@ function renderFindings(findings) {
 
 function renderMessages(messages = []) {
   if (!messages.length) return '';
-  return `<div class="transcript">${messages.map((message) => `<div class="message ${message.role === 'user' ? 'user' : 'assistant'}"><span class="message-author">${escapeHtml(message.author)}</span>${escapeHtml(message.content)}</div>`).join('')}</div>`;
+  return `<div class="transcript">${messages.map((message) => `<div class="message ${message.role === 'user' ? 'user' : 'assistant'}"><span class="message-author">${escapeHtml(message.author)}</span><div class="markdown">${renderMarkdown(message.content)}</div></div>`).join('')}</div>`;
+}
+
+function fixedIssuesForReview(review) {
+  if (Array.isArray(review.fixed_issues)) return review.fixed_issues;
+  return (review.linked_issues || []).map((number) => ({
+    provider: 'github', identifier: `#${number}`, url: `https://github.com/${review.repository}/issues/${number}`,
+  }));
+}
+
+function renderFixedIssues(review) {
+  const issues = fixedIssuesForReview(review);
+  if (!issues.length) return '';
+  const links = issues.map((issue) => issue.url
+    ? `<a href="${escapeHtml(issue.url)}" target="_blank" rel="noreferrer">${escapeHtml(issue.identifier)}</a>`
+    : `<span>${escapeHtml(issue.identifier)}</span>`).join(', ');
+  return `<p class="fixed-issues"><strong>Fixes</strong> ${links}</p>`;
 }
 
 function updateSelectionPreview() {
   const preview = document.querySelector('.selection');
+  const button = document.querySelector('.ask-selection');
+  if (button) button.disabled = busy || !lastSelection;
   if (!preview) return;
   if (!lastSelection) {
     preview.classList.remove('visible');
     preview.textContent = '';
     return;
   }
-  const location = lastSelection.path ? `${lastSelection.path}${lastSelection.line ? `:${lastSelection.line}` : ''} — ` : '';
-  preview.textContent = `${location}${lastSelection.text.replace(/\s+/g, ' ')}`;
+  const location = lastSelection.path ? ` · ${lastSelection.path}${lastSelection.line ? `:${lastSelection.line}${lastSelection.endLine && lastSelection.endLine !== lastSelection.line ? `-${lastSelection.endLine}` : ''}` : ''}` : '';
+  preview.textContent = `${selectionLabel(lastSelection)}${location}`;
   preview.title = lastSelection.text;
   preview.classList.add('visible');
 }
 
 function renderContext(context) {
+  applyAppearance(context.appearance);
   currentContext = context;
   const main = document.querySelector('main');
   if (!context.review) {
@@ -73,18 +98,21 @@ function renderContext(context) {
     return;
   }
   const { review, assessment, findings = [], messages = [] } = context;
-  const summary = review.plain_summary || review.simple_summary || 'Barbarian does not have a summary for this pull request yet.';
+  const summary = pullRequestSummary(review);
   const counts = assessment?.counts || { open: review.findings_count || 0, resolved: 0, outdated: 0, total: review.findings_count || 0 };
   const reviewRunning = review.status === 'agent_working' || Boolean(review.manual_requested_at);
   main.innerHTML = `
     <div class="status ${escapeHtml(assessment?.tone || 'attention')}">${escapeHtml(assessment?.label || 'Needs Review')}</div>
     <section class="review-actions"><h2>Review actions</h2><div class="actions"><button class="agent-review${reviewRunning ? ' running' : ''}" data-running="${reviewRunning}"><span class="button-icon" aria-hidden="true">${reviewRunning ? '■' : '▶'}</span><span>${reviewRunning ? 'Stop agent review' : 'Agent review'}</span></button><button class="secondary test-locally">Test locally</button></div><p class="action-status"></p>${review.workspace_path ? `<code class="workspace-path">${escapeHtml(review.workspace_path)}</code>` : ''}</section>
-    <section><h2>AI assessment</h2><div class="assessment"><p class="assessment-message">${escapeHtml(assessment?.message || 'Waiting for an AI review.')}</p>${assessment?.stale ? '<p class="stale">⚠ This assessment is older than the latest commit.</p>' : ''}<div class="counts"><div class="count"><strong>${Number(counts.open) || 0}</strong><span>Open</span></div><div class="count"><strong>${Number(counts.resolved) || 0}</strong><span>Resolved</span></div><div class="count"><strong>${Number(counts.outdated) || 0}</strong><span>Outdated</span></div><div class="count"><strong>${Number(counts.total) || 0}</strong><span>Total</span></div></div></div></section>
-    <section><h2>Summary</h2><p class="summary">${escapeHtml(summary)}</p></section>
-    <section><h2>AI review comments</h2>${renderFindings(findings)}</section>
-    <section><h2>Ask about this PR</h2>${renderMessages(messages)}<p class="selection"></p><textarea placeholder="Ask what changed, why it works, what could break, or how to test it…"></textarea><div class="actions"><button class="ask-pr">Ask about PR</button><button class="secondary ask-selection">Ask about selection</button></div><p class="error"></p><div class="reply"><span class="reply-label">AGENT REPLY</span><span class="reply-text"></span></div></section>`;
-  document.querySelector('.ask-pr')?.addEventListener('click', () => void sendQuestion('pr'));
+    <section><h2>Summary</h2><p class="summary">${escapeHtml(summary)}</p>${renderFixedIssues(review)}</section>
+    <section class="findings-panel"><h2>Findings</h2><div class="assessment"><p class="assessment-message">${escapeHtml(assessment?.message || 'Waiting for an AI review.')}</p>${assessment?.stale ? '<p class="stale">⚠ This assessment is older than the latest commit.</p>' : ''}<div class="counts"><div class="count"><strong>${Number(counts.open) || 0}</strong><span>Open</span></div><div class="count"><strong>${Number(counts.resolved) || 0}</strong><span>Resolved</span></div><div class="count"><strong>${Number(counts.outdated) || 0}</strong><span>Outdated</span></div><div class="count"><strong>${Number(counts.total) || 0}</strong><span>Total</span></div></div></div>${renderFindings(findings)}</section>
+    <section class="review-room"><h2>Review Room</h2><div class="conversation">${renderMessages(messages)}<div class="reply"><span class="reply-label">AGENT REPLY</span><div class="reply-text"></div></div></div><p class="selection"></p><textarea placeholder="Ask what changed, why it works, what could break, or how to test it…"></textarea><div class="actions"><button class="secondary ask-selection" disabled>Ask about selection</button></div><p class="error"></p></section>`;
   document.querySelector('.ask-selection')?.addEventListener('click', () => void sendQuestion('selection'));
+  document.querySelector('textarea')?.addEventListener('keydown', (event) => {
+    if (!shouldSubmitQuestion(event.key, event.shiftKey, event.isComposing)) return;
+    event.preventDefault();
+    void sendQuestion('pr');
+  });
   document.querySelector('.agent-review')?.addEventListener('click', () => void runReviewAction('review'));
   document.querySelector('.test-locally')?.addEventListener('click', () => void runReviewAction('workspace'));
   document.querySelectorAll('[data-github-url]').forEach((link) => link.addEventListener('click', (event) => {
@@ -92,6 +120,7 @@ function renderContext(context) {
     if (currentTab?.id) void chrome.tabs.update(currentTab.id, { url: link.href });
   }));
   updateSelectionPreview();
+  void captureSelection();
 }
 
 async function runReviewAction(kind) {
@@ -153,6 +182,7 @@ async function runReviewAction(kind) {
   } finally {
     busy = false;
     document.querySelectorAll('button').forEach((button) => { button.disabled = false; });
+    updateSelectionPreview();
   }
 }
 
@@ -166,7 +196,7 @@ function setReviewButton(running) {
 
 async function captureSelection() {
   const selection = await chrome.runtime.sendMessage({ type: 'barbarian-active-selection' });
-  if (selection?.text) lastSelection = selection;
+  lastSelection = selection?.text ? selection : undefined;
   updateSelectionPreview();
   return lastSelection;
 }
@@ -181,9 +211,7 @@ async function sendQuestion(kind) {
   if (kind === 'selection') await captureSelection();
   if (kind === 'pr' && !question) { error.textContent = 'Write a question first.'; input?.focus(); return; }
   if (kind === 'selection' && !lastSelection) { error.textContent = 'Select lines on the GitHub page first.'; return; }
-  const selectionContext = kind === 'selection'
-    ? `\n\nSelected code${lastSelection.path ? ` from ${lastSelection.path}${lastSelection.line ? `:${lastSelection.line}` : ''}` : ''}:\n\n${lastSelection.text}\n\nGitHub location: ${lastSelection.url}`
-    : '';
+  const selectionContext = kind === 'selection' ? selectionPromptContext(lastSelection) : '';
   const message = `${question || 'Explain this selected code and how it relates to the pull request.'}${selectionContext}`;
   busy = true;
   error.textContent = 'Agent is thinking…';
@@ -194,13 +222,14 @@ async function sendQuestion(kind) {
       method: 'POST', body: JSON.stringify({ message, askAgent: true, author: 'GitHub extension' }),
     });
     if (input) input.value = '';
-    if (replyText) replyText.textContent = result.message?.content || 'The response was saved in Barbarian.';
+    if (replyText) replyText.innerHTML = renderMarkdown(result.message?.content || 'The response was saved in Barbarian.');
     reply?.classList.add('visible');
     error.textContent = '';
   } catch (caught) { error.textContent = caught.message; }
   finally {
     busy = false;
     document.querySelectorAll('button').forEach((button) => { button.disabled = false; });
+    updateSelectionPreview();
   }
 }
 
@@ -233,6 +262,14 @@ async function refresh({ quiet = false } = {}) {
 chrome.tabs.onActivated.addListener(() => void refresh());
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (tabId === currentTab?.id && (change.url || change.status === 'complete')) void refresh();
+});
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === 'barbarian-context-updated' && message.key === currentPrKey && message.context) {
+    renderContext(message.context);
+  } else if (message?.type === 'barbarian-selection-changed' && parsePullRequest(message.url)?.key === currentPrKey) {
+    lastSelection = message.selection?.text ? message.selection : undefined;
+    updateSelectionPreview();
+  }
 });
 setInterval(() => { if (!document.hidden && !busy && !document.querySelector('textarea')?.value) void refresh({ quiet: true }); }, 30_000);
 void refresh();

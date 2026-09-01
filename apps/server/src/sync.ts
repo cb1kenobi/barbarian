@@ -2,7 +2,7 @@ import type { BarbarianDatabase } from './database.js';
 import type { BarbarianConfig, DiscoveryResult, DiscoveredIssue, DiscoveredPullRequest } from './types.js';
 import { discoverGithub, discoverGithubActivity, fetchPullRequestState } from './github.js';
 import { recordActivity } from './activity.js';
-import { explainPullRequest, simplify } from './summary.js';
+import { explainPullRequest, simplify, summarizePullRequest } from './summary.js';
 import { discoverLinear } from './linear.js';
 import { refreshReviewContext } from './review-context.js';
 import { viewerApprovedCurrentHead, viewerRequestedChangesCurrentHead } from './review-state.js';
@@ -15,26 +15,32 @@ function reviewId(pr: DiscoveredPullRequest): string {
   return `github:${pr.repository}#${pr.number}`;
 }
 
+function hasInProgressLabel(labels: string[]): boolean {
+  return labels.some((label) => /^(?:in[ -]?progress|doing|status[: /-]*in[ -]?progress)$/i.test(label.trim()));
+}
+
 function upsertIssue(database: BarbarianDatabase, issue: DiscoveredIssue, seenAt: string): void {
   const id = issueId(issue);
   const existed = database.connection.prepare('SELECT 1 FROM work_items WHERE id = ?').get(id);
   database.connection.prepare(`
     INSERT INTO work_items(
-      id, provider, repository, number, kind, title, body, simple_summary, url,
+      id, provider, repository, number, kind, title, body, simple_summary, url, assignees,
       priority, priority_reasons, status, milestone, duplicate_of, in_progress_pr,
       fixed_by, remote_state, payload_json, first_seen_at, updated_at, last_seen_at
-    ) VALUES (?, ?, ?, ?, 'issue', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, 'issue', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       title=excluded.title, body=excluded.body, simple_summary=excluded.simple_summary,
-      url=excluded.url, priority=excluded.priority, priority_reasons=excluded.priority_reasons,
+      url=excluded.url, assignees=excluded.assignees,
+      priority=excluded.priority, priority_reasons=excluded.priority_reasons,
       milestone=excluded.milestone, duplicate_of=excluded.duplicate_of,
       in_progress_pr=excluded.in_progress_pr, fixed_by=excluded.fixed_by,
       remote_state='OPEN', payload_json=excluded.payload_json,
       updated_at=excluded.updated_at, last_seen_at=excluded.last_seen_at
   `).run(
     id, issue.provider, issue.repository, issue.number, issue.title, issue.body,
-    simplify(issue.title, issue.body), issue.url, issue.priority, JSON.stringify(issue.priorityReasons),
-    issue.fixedBy ? 'already_fixed' : issue.inProgressPr ? 'claimed_elsewhere' : issue.duplicateOf ? 'duplicate' : 'queued',
+    simplify(issue.title, issue.body), issue.url, JSON.stringify(issue.assignees), issue.priority, JSON.stringify(issue.priorityReasons),
+    issue.fixedBy ? 'already_fixed' : issue.duplicateOf ? 'duplicate'
+      : issue.inProgressPr || hasInProgressLabel(issue.labels) ? 'in_progress' : 'queued',
     issue.milestone, issue.duplicateOf, issue.inProgressPr, issue.fixedBy, JSON.stringify(issue),
     seenAt, issue.updatedAt, seenAt,
   );
@@ -99,16 +105,17 @@ function upsertReview(database: BarbarianDatabase, config: BarbarianConfig, pr: 
 
   database.connection.prepare(`
     INSERT INTO review_queue(
-      id, repository, number, title, simple_summary, plain_summary, body, url, author, head_sha,
+      id, repository, number, title, simple_summary, plain_summary, body, url, author, additions, deletions, head_sha,
       head_ref_name, base_ref_name, status, review_decision, requested_reviewers,
       requested_teams, linked_issues, review_skill, discussion_watermark, is_draft, remote_state,
       remote_updated_at, first_seen_at, updated_at, last_seen_at, merged_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       title=excluded.title, simple_summary=excluded.simple_summary,
       plain_summary=CASE WHEN review_queue.plain_summary='' THEN excluded.plain_summary ELSE review_queue.plain_summary END,
       body=excluded.body,
-      url=excluded.url, author=excluded.author, head_sha=excluded.head_sha,
+      url=excluded.url, author=excluded.author, additions=excluded.additions,
+      deletions=excluded.deletions, head_sha=excluded.head_sha,
       head_ref_name=excluded.head_ref_name, base_ref_name=excluded.base_ref_name,
       status=excluded.status, review_decision=excluded.review_decision,
       requested_reviewers=excluded.requested_reviewers, requested_teams=excluded.requested_teams,
@@ -122,8 +129,8 @@ function upsertReview(database: BarbarianDatabase, config: BarbarianConfig, pr: 
       remote_updated_at=excluded.remote_updated_at, last_seen_at=excluded.last_seen_at,
       merged_at=excluded.merged_at
   `).run(
-    id, pr.repository, pr.number, pr.title, simplify(pr.title, pr.body), explainPullRequest(pr.title, pr.body), pr.body,
-    pr.url, pr.author, pr.headSha, pr.headRefName, pr.baseRefName, status,
+    id, pr.repository, pr.number, pr.title, summarizePullRequest(pr.title, pr.body), explainPullRequest(pr.title, pr.body), pr.body,
+    pr.url, pr.author, pr.additions, pr.deletions, pr.headSha, pr.headRefName, pr.baseRefName, status,
     pr.reviewDecision, JSON.stringify(pr.requestedReviewers), JSON.stringify(pr.requestedTeams),
     JSON.stringify(pr.linkedIssues), configuredSkill(config, pr.repository), watermark, pr.isDraft ? 1 : 0,
     pr.updatedAt, seenAt, pr.updatedAt, seenAt, pr.mergedAt,
@@ -134,6 +141,10 @@ function upsertReview(database: BarbarianDatabase, config: BarbarianConfig, pr: 
   `).run(
     pr.viewerReviewState, pr.viewerReviewSha, pr.otherApprovals, pr.createdAt, id,
   );
+  database.connection.prepare(`
+    UPDATE local_branches SET review_id=?, updated_at=?
+    WHERE repository=? AND branch_name=?
+  `).run(id, seenAt, pr.repository, pr.headRefName);
   if (!existing) recordActivity(database, 'review_discovered', `${pr.repository}#${pr.number} added to the review queue`, id);
   else if (existing.head_sha !== pr.headSha) recordActivity(database, 'review_updated', `${pr.repository}#${pr.number} has new commits`, id);
 }

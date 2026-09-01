@@ -78,6 +78,11 @@ export class ReviewDispatcher {
         UPDATE agent_runs SET status='interrupted', finished_at=?, error='Barbarian restarted during this run'
         WHERE status='running'
       `).run(now.toISOString());
+      this.database.connection.prepare(`
+        UPDATE local_branches SET status='unreviewed',
+          last_agent_error='Barbarian restarted during this run', updated_at=?
+        WHERE status='agent_working'
+      `).run(now.toISOString());
       const release = this.database.connection.prepare(`
         UPDATE review_queue SET status='agent_failed', claim_owner=NULL, claimed_at=NULL,
           retry_after=?, last_agent_error='Barbarian restarted during this run', updated_at=? WHERE id=?

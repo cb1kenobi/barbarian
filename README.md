@@ -231,7 +231,7 @@ pnpm --filter barbarian-vscode-extension build
 pnpm --filter barbarian-vscode-extension package
 ```
 
-This creates `apps/vscode-extension/barbarian-vscode-extension-0.1.0.vsix` (the version in the filename changes with `package.json`).
+This creates a versioned `.vsix` in `apps/vscode-extension` (the version in the filename comes from `package.json`).
 
 Install it from the editor UI:
 
@@ -245,19 +245,23 @@ Or install it from this repository in a terminal:
 
 ```bash
 # Cursor
-cursor --install-extension apps/vscode-extension/barbarian-vscode-extension-0.1.0.vsix --force
+cursor --install-extension apps/vscode-extension/barbarian-vscode-extension-0.2.2.vsix --force
 
 # VS Code
-code --install-extension apps/vscode-extension/barbarian-vscode-extension-0.1.0.vsix --force
+code --install-extension apps/vscode-extension/barbarian-vscode-extension-0.2.2.vsix --force
 ```
 
 After changing the extension, rebuild, package, reinstall with `--force`, and reload the editor window. If the `cursor` or `code` command is unavailable, use the editor UI method above.
 
-Available commands:
+Open the Barbarian icon in the Activity Bar to use the dockable **Branch Review** view. It follows the checked-out branch in the active workspace and keeps working before a pull request exists. The panel provides:
 
-- **Barbarian: Open Review Context** — match the current git remote/branch to a tracked PR.
-- **Barbarian: Send Selection to Review Room** — persist selected local code and a note.
-- **Barbarian: Open Dashboard**.
+- **Agent review** for either the local branch diff or its tracked pull request.
+- A pull-request summary when `gh` can associate the branch with a PR.
+- Findings that open directly at the local file and line.
+- A shared review room. Once the branch is attached to a tracked PR, its conversation is the same one shown in the dashboard and Chrome extension.
+- Inline editor selection context in the question composer, without a separate send-selection command.
+
+Use **Barbarian: Show Branch Review** from the Command Palette to focus the view. VS Code can move the Barbarian view container between the primary and secondary sidebars.
 
 ## Skills
 

@@ -1,23 +1,38 @@
 {
   "name": "barbarian-vscode-extension",
-  "displayName": "Barbarian Review Companion",
-  "description": "Review the current repository with context from your local Barbarian server.",
-  "version": "0.1.0",
+  "displayName": "Barbarian Branch Review",
+  "description": "Review the current git branch with Barbarian, with optional pull request context.",
+  "version": "0.2.2",
   "private": true,
   "license": "UNLICENSED",
   "publisher": "local",
   "engines": { "vscode": "^1.96.0" },
   "categories": ["Other"],
-  "activationEvents": ["onCommand:barbarian.openReview", "onCommand:barbarian.sendSelection", "onCommand:barbarian.openDashboard"],
+  "activationEvents": ["onView:barbarian.branchReview", "onCommand:barbarian.refreshBranch"],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
-      { "command": "barbarian.openReview", "title": "Barbarian: Open Review Context" },
-      { "command": "barbarian.sendSelection", "title": "Barbarian: Send Selection to Review Room" },
-      { "command": "barbarian.openDashboard", "title": "Barbarian: Open Dashboard" }
-    ]
+      { "command": "barbarian.refreshBranch", "title": "Barbarian: Show Branch Review" }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "barbarian", "title": "Barbarian", "icon": "media/barbarian.svg" }
+      ]
+    },
+    "views": {
+      "barbarian": [
+        { "type": "webview", "id": "barbarian.branchReview", "name": "Branch Review" }
+      ]
+    }
   },
-  "files": ["dist/extension.js", "LICENSE"],
-  "scripts": { "build": "esbuild src/extension.ts --bundle --platform=node --external:vscode --outfile=dist/extension.js", "package": "vsce package --allow-missing-repository" },
-  "devDependencies": { "@types/vscode": "^1.96.0", "@vscode/vsce": "^3.6.0", "esbuild": "^0.25.9" }
+  "files": ["dist/extension.js", "media/barbarian.svg", "LICENSE"],
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --platform=node --external:vscode --outfile=dist/extension.js",
+    "package": "vsce package --allow-missing-repository"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.96.0",
+    "@vscode/vsce": "^3.6.0",
+    "esbuild": "^0.25.9"
+  }
 }

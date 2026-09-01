@@ -27,7 +27,7 @@ export function buildStatusDraft(database: BarbarianDatabase, config: BarbarianC
   const previous = previousWorkday(now, config);
   const active = database.connection.prepare(`
     SELECT repository, title FROM work_items
-    WHERE remote_state='OPEN' AND status='queued' ORDER BY priority DESC LIMIT 4
+    WHERE remote_state='OPEN' AND status IN ('queued','in_progress') ORDER BY status='in_progress' DESC, priority DESC LIMIT 4
   `).all() as Array<{ repository: string; title: string }>;
   const reviews = database.connection.prepare(`
     SELECT repository, number, title FROM review_queue

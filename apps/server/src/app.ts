@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import type { ServerResponse } from 'node:http';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
@@ -17,12 +18,40 @@ import { recordActivity } from './activity.js';
 import { buildReviewAssessment, refreshReviewContext, storedReviewFindings } from './review-context.js';
 import { displayReviewStatus, reviewPriorityScore } from './review-state.js';
 import { reviewCardMetadata, type ReviewCardMetadata } from './review-card-metadata.js';
+import { fixedIssueReferences } from './fixed-issues.js';
+import {
+  askLocalBranchAgent,
+  LocalBranchInputError,
+  localBranchFindings,
+  runLocalBranchReview,
+  upsertLocalBranch,
+  type LocalBranchRow,
+} from './branch-context.js';
 
 const chatBody = z.object({
   message: z.string().trim().min(1).max(20_000),
   provider: z.string().optional(),
   askAgent: z.boolean().default(true),
   author: z.string().default('Developer'),
+});
+
+const localBranchBody = z.object({
+  remote: z.string().trim().min(1).max(2_000),
+  branch: z.string().trim().min(1).max(1_000).refine((value) => !value.startsWith('-'), 'Invalid branch name'),
+  baseBranch: z.string().trim().min(1).max(1_000),
+  baseRef: z.string().trim().min(1).max(1_000).regex(/^[A-Za-z0-9._/~^@{}-]+$/).refine((value) => !value.startsWith('-'), 'Invalid base ref'),
+  headSha: z.string().trim().regex(/^[0-9a-f]{7,64}$/i),
+  worktreeState: z.string().max(100_000).default(''),
+  dirty: z.boolean().default(false),
+  workspacePath: z.string().trim().min(1).max(10_000),
+  pullRequest: z.object({
+    repository: z.string().trim().min(1).max(1_000),
+    number: z.number().int().positive(),
+    title: z.string().trim().min(1).max(2_000),
+    body: z.string().max(100_000).default(''),
+    url: z.string().url().max(4_000),
+    author: z.string().trim().max(1_000).default(''),
+  }).nullable().optional(),
 });
 
 const reviewStatuses = new Set<ReviewStatus>([
@@ -32,6 +61,47 @@ const reviewStatuses = new Set<ReviewStatus>([
 
 function parseJson<T>(value: string): T {
   return JSON.parse(value) as T;
+}
+
+interface ActiveLocalBranch {
+  repository: string;
+  branch_name: string;
+}
+
+function branchMatchesIssue(branchName: string, issueNumber: number): boolean {
+  const number = String(issueNumber).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?:^|[/_-])(?:(?:issue|gh)[_-]?)?${number}(?=$|[/_-])`, 'i').test(branchName);
+}
+
+function workItemView(row: Record<string, unknown>, activeBranches: ActiveLocalBranch[]) {
+  const payload = parseJson<{ labels?: string[] }>(String(row.payload_json || '{}'));
+  const labels = payload.labels || [];
+  const fixedOrDuplicate = Boolean(row.fixed_by || row.duplicate_of);
+  const localBranch = fixedOrDuplicate ? undefined : activeBranches.find((branch) =>
+    branch.repository.toLowerCase() === String(row.repository).toLowerCase()
+      && branchMatchesIssue(branch.branch_name, Number(row.number)),
+  );
+  const labelInProgress = !fixedOrDuplicate && labels.some((label) =>
+    /^(?:in[ -]?progress|doing|status[: /-]*in[ -]?progress)$/i.test(label.trim()),
+  );
+  const inProgressSource = fixedOrDuplicate
+    ? null
+    : row.in_progress_pr
+      ? 'pull_request'
+      : localBranch
+        ? 'local_branch'
+        : labelInProgress
+          ? 'label'
+          : null;
+  return {
+    ...row,
+    assignees: parseJson<string[]>(String(row.assignees || '[]')),
+    priority_reasons: parseJson<string[]>(String(row.priority_reasons)),
+    labels,
+    in_progress: Boolean(inProgressSource),
+    in_progress_source: inProgressSource,
+    in_progress_branch: localBranch?.branch_name ?? null,
+  };
 }
 
 function settingsView(config: BarbarianConfig): {
@@ -78,6 +148,7 @@ function rowToReview(
   cardMetadata: ReviewCardMetadata = emptyCardMetadata,
 ) {
   const reviewPaused = Boolean(row.review_paused);
+  const linkedIssues = parseJson<number[]>(String(row.linked_issues));
   const review = {
     ...row,
     pending_reason: reviewPaused ? null : reviewTrigger({
@@ -91,7 +162,8 @@ function rowToReview(
     is_draft: Boolean(row.is_draft),
     requested_reviewers: parseJson<string[]>(String(row.requested_reviewers)),
     requested_teams: parseJson<string[]>(String(row.requested_teams)),
-    linked_issues: parseJson<number[]>(String(row.linked_issues)),
+    linked_issues: linkedIssues,
+    fixed_issues: fixedIssueReferences(String(row.repository), String(row.body || ''), linkedIssues),
   };
   const repositoryPriority = config.repositories.find(
     (repository) => repository.name.toLowerCase() === String(row.repository).toLowerCase(),
@@ -151,12 +223,19 @@ export async function createApp(
     runtime?: AgentRuntime;
     dispatcher?: ReviewDispatcher;
     onConfigUpdated?: (previous: BarbarianConfig, next: BarbarianConfig) => void | Promise<void>;
+    refreshReview?: typeof refreshReviewContext;
   } = {},
 ) {
   const app = Fastify({ logger: true, bodyLimit: 2 * 1024 * 1024 });
   const initialConfig = configStore.get();
   const runtime = services.runtime || new AgentRuntime(initialConfig.agents.maxConcurrent);
   const dispatcher = services.dispatcher || new ReviewDispatcher(database, () => configStore.get(), runtime, app.log);
+  const refreshReview = services.refreshReview || refreshReviewContext;
+  const dashboardClients = new Set<ServerResponse>();
+  const publishReviewUpdated = (id: string) => {
+    const message = `event: review-updated\ndata: ${JSON.stringify({ id })}\n\n`;
+    for (const client of dashboardClients) client.write(message);
+  };
   await app.register(cors, {
     origin(origin, callback) {
       const allowed = !origin || /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin)
@@ -167,16 +246,34 @@ export async function createApp(
 
   app.get('/api/health', async () => ({ ok: true, now: new Date().toISOString() }));
 
+  app.get('/api/events', (request, reply) => {
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+    });
+    reply.raw.write(': connected\n\n');
+    dashboardClients.add(reply.raw);
+    request.raw.on('close', () => dashboardClients.delete(reply.raw));
+  });
+
+  app.addHook('onClose', async () => {
+    for (const client of dashboardClients) client.end();
+    dashboardClients.clear();
+  });
+
   app.get('/api/dashboard', async () => {
     const config = configStore.get();
     const cardMetadata = reviewCardMetadata(database);
+    const activeBranchCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const activeBranches = database.connection.prepare(`
+      SELECT repository, branch_name FROM local_branches WHERE last_seen_at >= ?
+    `).all(activeBranchCutoff) as unknown as ActiveLocalBranch[];
     const workQueue = database.connection.prepare(`
       SELECT * FROM work_items WHERE remote_state='OPEN'
-      ORDER BY CASE status WHEN 'queued' THEN 0 ELSE 1 END, priority DESC, updated_at DESC LIMIT 12
-    `).all().map((row) => ({
-      ...row,
-      priority_reasons: parseJson<string[]>(String((row as Record<string, unknown>).priority_reasons)),
-    }));
+      ORDER BY priority DESC, updated_at DESC
+    `).all().map((row) => workItemView(row as Record<string, unknown>, activeBranches));
     const reviews = database.connection.prepare(`
       SELECT * FROM review_queue WHERE remote_state='OPEN'
       ORDER BY updated_at DESC
@@ -194,14 +291,9 @@ export async function createApp(
       SELECT COUNT(*) AS total FROM review_queue
       WHERE status IN ('issues_found','awaiting_feedback') AND remote_state='OPEN'
     `).get() as { total: number }).total);
-    const needsAttention = Number((database.connection.prepare(`
-      SELECT
-        (SELECT COUNT(*) FROM work_items WHERE status='queued' AND remote_state='OPEN') +
-        (SELECT COUNT(*) FROM review_queue
-          WHERE remote_state='OPEN' AND is_draft=0 AND status NOT IN ('approved','merged','closed')
-            AND (manual_requested_at IS NOT NULL OR last_reviewed_sha IS NULL OR head_sha<>last_reviewed_sha
-              OR (last_reviewed_watermark IS NOT NULL AND discussion_watermark>last_reviewed_watermark))) AS total
-    `).get() as { total: number }).total);
+    const queuedIssues = workQueue.length;
+    const reviewsNeedingApproval = reviews.filter((review) => review.display_status !== 'approved').length;
+    const needsAttention = queuedIssues + reviewsNeedingApproval;
     const draft = buildStatusDraft(database, config);
     const savedStatus = database.connection.prepare('SELECT * FROM daily_statuses WHERE workday=?').get(draft.workday);
     const day = todayParts(config);
@@ -213,9 +305,13 @@ export async function createApp(
       profile: config.profile,
       appearance: config.appearance,
       monitor: { ...config.monitor, nextSyncAt: monitorRuntime.nextSyncAt },
+      repositories: config.repositories.map((repository) => ({
+        name: repository.name,
+        url: `https://github.com/${repository.name.split('/').map(encodeURIComponent).join('/')}`,
+      })),
       workQueue,
       reviews,
-      metrics: { needsAttention, agentWorking, waiting, previousWorkday: draft.stats },
+      metrics: { needsAttention, queuedIssues, reviewsNeedingApproval, agentWorking, waiting, previousWorkday: draft.stats },
       statusDraft: draft,
       statusDue,
       lastSync,
@@ -353,19 +449,33 @@ export async function createApp(
 
   app.get('/api/browser/context', async (request, reply) => {
     const config = configStore.get();
-    const query = z.object({ url: z.string().url() }).parse(request.query);
+    const query = z.object({
+      url: z.string().url(),
+      refresh: z.enum(['1', 'true']).optional(),
+    }).parse(request.query);
     const match = new URL(query.url).pathname.match(/^\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
     if (!match) return reply.code(400).send({ error: 'Not a GitHub pull request URL' });
     const id = `github:${match[1]}/${match[2]}#${match[3]}`;
-    const review = database.connection.prepare('SELECT * FROM review_queue WHERE id=?').get(id);
-    if (!review) return { id, review: null, findings: [], assessment: null, messages: [] };
+    let review = database.connection.prepare('SELECT * FROM review_queue WHERE id=?').get(id);
+    if (!review) return { id, appearance: config.appearance, review: null, findings: [], assessment: null, messages: [] };
+    if (query.refresh) {
+      await refreshReview(database, id);
+      review = database.connection.prepare('SELECT * FROM review_queue WHERE id=?').get(id);
+      if (!review) return reply.code(404).send({ error: 'Review is no longer tracked' });
+      publishReviewUpdated(id);
+    }
     const messages = database.connection.prepare(`
       SELECT * FROM (
         SELECT id, role, author, substr(content, 1, 4000) AS content, created_at
         FROM chat_messages WHERE review_id=? ORDER BY id DESC LIMIT 12
       ) ORDER BY id ASC
     `).all(id);
-    return { id, ...reviewContextPayload(database, config, review as Record<string, unknown>), messages };
+    return {
+      id,
+      appearance: config.appearance,
+      ...reviewContextPayload(database, config, review as Record<string, unknown>),
+      messages,
+    };
   });
 
   app.get('/api/local/context', async (request) => {
@@ -383,6 +493,170 @@ export async function createApp(
       const record = row as Record<string, unknown>;
       return rowToReview(record, config, cardMetadata.get(String(record.id)));
     }) };
+  });
+
+  app.post('/api/local/branches/context', async (request, reply) => {
+    const config = configStore.get();
+    try {
+      const branch = await upsertLocalBranch(database, localBranchBody.parse(request.body));
+      let linkedReview: Record<string, unknown> | undefined;
+      if (branch.review_id) {
+        const review = database.connection.prepare('SELECT * FROM review_queue WHERE id=?').get(branch.review_id);
+        if (review) linkedReview = review as Record<string, unknown>;
+        const hasCurrentLocalReview = branch.last_reviewed_sha === branch.head_sha
+          && branch.last_reviewed_worktree_state === branch.worktree_state;
+        if (review && !branch.is_dirty && branch.status !== 'agent_working' && !hasCurrentLocalReview) {
+          const messages = database.connection.prepare(`
+            SELECT * FROM (
+              SELECT id, role, author, substr(content, 1, 4000) AS content, created_at
+              FROM chat_messages WHERE review_id=? ORDER BY id DESC LIMIT 20
+            ) ORDER BY id ASC
+          `).all(branch.review_id);
+          return {
+            appearance: config.appearance,
+            branch,
+            ...reviewContextPayload(database, config, linkedReview!),
+            messages,
+          };
+        }
+      }
+      const findings = localBranchFindings(database, branch.id);
+      const messages = linkedReview ? database.connection.prepare(`
+          SELECT * FROM (
+            SELECT id, role, author, substr(content, 1, 4000) AS content, created_at
+            FROM chat_messages WHERE review_id=? ORDER BY id DESC LIMIT 20
+          ) ORDER BY id ASC
+        `).all(branch.review_id) : database.connection.prepare(`
+          SELECT * FROM (
+            SELECT id, role, author, substr(content, 1, 4000) AS content, created_at
+            FROM local_branch_messages WHERE branch_id=? ORDER BY id DESC LIMIT 20
+          ) ORDER BY id ASC
+        `).all(branch.id);
+      const stale = Boolean(
+        branch.last_reviewed_sha && branch.last_reviewed_sha !== branch.head_sha
+        || branch.last_reviewed_worktree_state !== null
+          && branch.last_reviewed_worktree_state !== branch.worktree_state,
+      );
+      let message = 'Run an agent review to check this branch before it becomes a pull request.';
+      if (branch.status === 'agent_working') message = 'An AI reviewer is checking this branch now.';
+      else if (branch.status === 'agent_failed') message = branch.last_agent_error || 'The AI reviewer failed.';
+      else if (branch.last_agent_error) message = branch.last_agent_error;
+      else if (stale) message = 'The branch changed after the last AI review. It needs another pass.';
+      else if (findings.length) message = `${findings.length} agent ${findings.length === 1 ? 'finding needs' : 'findings need'} attention.`;
+      else if (branch.last_reviewed_sha) message = 'The latest agent review found no issues.';
+      if (branch.is_dirty && linkedReview) {
+        message = `This working tree has local changes, so Agent review checks the branch locally. ${message}`;
+      }
+      if (branch.base_branch === 'previous commit') {
+        message = `Base branch could not be discovered; this review compares against the previous commit. ${message}`;
+      }
+      return {
+        appearance: config.appearance,
+        branch,
+        review: linkedReview ? rowToReview(linkedReview, config, reviewCardMetadata(database).get(String(linkedReview.id))) : null,
+        pullRequest: !linkedReview && branch.pull_request_number ? {
+          repository: branch.pull_request_repository,
+          number: branch.pull_request_number,
+          title: branch.pull_request_title,
+          summary: branch.pull_request_summary,
+          url: branch.pull_request_url,
+          author: branch.pull_request_author,
+        } : null,
+        findings,
+        messages,
+        assessment: {
+          message,
+          stale,
+          counts: { open: findings.length, resolved: 0, outdated: 0, total: findings.length },
+        },
+      };
+    } catch (error) {
+      if (error instanceof ZodError || error instanceof LocalBranchInputError) {
+        return reply.code(400).send({ error: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.post('/api/local/branches/:id/run-review', async (request, reply) => {
+    const id = decodeURIComponent((request.params as { id: string }).id);
+    const branch = database.connection.prepare('SELECT * FROM local_branches WHERE id=?').get(id) as unknown as LocalBranchRow | undefined;
+    if (!branch) return reply.code(404).send({ error: 'Local branch is not tracked' });
+    const body = z.object({ provider: z.string().optional() }).parse(request.body || {});
+    if (branch.status === 'agent_working') return reply.code(409).send({ error: 'An agent review is already running' });
+    if (branch.review_id && !branch.is_dirty && dispatcher.requestManual(branch.review_id, body.provider)) {
+      return reply.code(202).send({ accepted: true, target: 'pull_request' });
+    }
+    database.connection.prepare(`
+      UPDATE local_branches SET status='agent_working', last_agent_error=NULL, updated_at=? WHERE id=?
+    `).run(new Date().toISOString(), id);
+    void runtime.run(
+      (signal) => runLocalBranchReview(database, configStore.get(), id, signal),
+      id,
+    ).catch((error) => {
+      database.connection.prepare(`
+        UPDATE local_branches SET status='unreviewed', last_agent_error=?, updated_at=?
+        WHERE id=? AND status='agent_working'
+      `).run(
+        error instanceof Error ? error.message.slice(0, 4000) : String(error).slice(0, 4000),
+        new Date().toISOString(), id,
+      );
+      app.log.error(error, `local branch review failed for ${id}`);
+    });
+    return reply.code(202).send({ accepted: true, target: 'branch' });
+  });
+
+  app.delete('/api/local/branches/:id/run-review', async (request, reply) => {
+    const id = decodeURIComponent((request.params as { id: string }).id);
+    const branch = database.connection.prepare('SELECT * FROM local_branches WHERE id=?').get(id) as unknown as LocalBranchRow | undefined;
+    if (!branch) return reply.code(404).send({ error: 'Local branch is not tracked' });
+    const localCancelled = runtime.cancel(id, new Error('Agent review stopped by user'));
+    const pullRequest = branch.review_id ? dispatcher.cancelReview(branch.review_id) : null;
+    database.connection.prepare(`
+      UPDATE local_branches SET status='unreviewed', last_agent_error=NULL, updated_at=? WHERE id=?
+    `).run(new Date().toISOString(), id);
+    return {
+      ok: true,
+      stopped: localCancelled > 0 || Boolean(pullRequest?.stopped),
+      cancelled: localCancelled + (pullRequest?.cancelled || 0),
+    };
+  });
+
+  app.post('/api/local/branches/:id/chat', async (request, reply) => {
+    const id = decodeURIComponent((request.params as { id: string }).id);
+    const branch = database.connection.prepare('SELECT * FROM local_branches WHERE id=?').get(id) as unknown as LocalBranchRow | undefined;
+    if (!branch) return reply.code(404).send({ error: 'Local branch is not tracked' });
+    const config = configStore.get();
+    const body = chatBody.parse(request.body);
+    const now = new Date().toISOString();
+    if (branch.review_id) {
+      const review = database.connection.prepare('SELECT id FROM review_queue WHERE id=?').get(branch.review_id);
+      if (!review) return reply.code(404).send({ error: 'The linked pull request is no longer tracked' });
+      database.connection.prepare(`
+        INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'user', ?, ?, ?)
+      `).run(branch.review_id, body.author, body.message, now);
+      if (!body.askAgent) return { message: null };
+      const response = await runtime.run(
+        (signal) => askAgent(database, config, branch.review_id!, body.message, body.provider, signal),
+        branch.review_id,
+      );
+      const inserted = database.connection.prepare(`
+        INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'assistant', ?, ?, ?)
+      `).run(branch.review_id, body.provider || config.agents.default, response, new Date().toISOString());
+      return { message: { id: Number(inserted.lastInsertRowid), role: 'assistant', author: body.provider || config.agents.default, content: response } };
+    }
+    database.connection.prepare(`
+      INSERT INTO local_branch_messages(branch_id, role, author, content, created_at) VALUES (?, 'user', ?, ?, ?)
+    `).run(id, body.author, body.message, now);
+    if (!body.askAgent) return { message: null };
+    const response = await runtime.run(
+      (signal) => askLocalBranchAgent(database, config, id, body.message, body.provider, signal),
+      id,
+    );
+    const inserted = database.connection.prepare(`
+      INSERT INTO local_branch_messages(branch_id, role, author, content, created_at) VALUES (?, 'assistant', ?, ?, ?)
+    `).run(id, body.provider || config.agents.default, response, new Date().toISOString());
+    return { message: { id: Number(inserted.lastInsertRowid), role: 'assistant', author: body.provider || config.agents.default, content: response } };
   });
 
   app.get('/api/settings', async () => ({

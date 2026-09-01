@@ -57,6 +57,7 @@ export interface DiscoveredIssue {
   url: string;
   updatedAt: string;
   labels: string[];
+  assignees: string[];
   milestone: string | null;
   duplicateOf: string | null;
   inProgressPr: string | null;
@@ -73,6 +74,8 @@ export interface DiscoveredPullRequest {
   body: string;
   url: string;
   author: string;
+  additions: number;
+  deletions: number;
   headSha: string;
   headRefName: string;
   baseRefName: string;
