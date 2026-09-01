@@ -2,6 +2,7 @@
 let input = '';
 for await (const chunk of process.stdin) input += chunk;
 const payload = JSON.parse(input);
+if (typeof payload.discussionWatermark !== 'string') throw new Error('discussionWatermark is required');
 const response = await fetch('http://127.0.0.1:4142/api/integrations/review-result', {
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
 });

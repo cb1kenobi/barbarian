@@ -2,8 +2,10 @@ import type { BarbarianDatabase } from './database.js';
 import type { BarbarianConfig, DiscoveryResult, DiscoveredIssue, DiscoveredPullRequest } from './types.js';
 import { discoverGithub, discoverGithubActivity, fetchPullRequestState } from './github.js';
 import { recordActivity } from './activity.js';
-import { simplify } from './summary.js';
+import { explainPullRequest, simplify } from './summary.js';
 import { discoverLinear } from './linear.js';
+import { refreshReviewContext } from './review-context.js';
+import { viewerApprovedCurrentHead, viewerRequestedChangesCurrentHead } from './review-state.js';
 
 function issueId(issue: DiscoveredIssue): string {
   return `${issue.provider}:${issue.repository}#${issue.number}`;
@@ -51,45 +53,86 @@ function shouldTrackReview(
 ): boolean {
   const target = config.review.requestedReviewer || githubLogin;
   const explicitlyRequested = pr.requestedReviewers.some((login) => login.toLowerCase() === target.toLowerCase());
+  const alreadyReviewed = pr.reviewedBy.some((login) => login.toLowerCase() === target.toLowerCase());
   const fallbackTeam = pr.requestedReviewers.length === 0 && pr.requestedTeams.some((team) =>
     config.review.fallbackTeams.some((candidate) => candidate.toLowerCase() === team.toLowerCase()),
   );
   const tracked = database.connection.prepare('SELECT 1 FROM review_queue WHERE id = ?').get(reviewId(pr));
-  return Boolean(explicitlyRequested || fallbackTeam || tracked);
+  return Boolean(explicitlyRequested || alreadyReviewed || fallbackTeam || tracked);
 }
 
 function upsertReview(database: BarbarianDatabase, config: BarbarianConfig, pr: DiscoveredPullRequest, seenAt: string): void {
   const id = reviewId(pr);
   const existing = database.connection.prepare(
-    'SELECT head_sha, last_reviewed_sha, status FROM review_queue WHERE id = ?',
-  ).get(id) as { head_sha: string; last_reviewed_sha: string | null; status: string } | undefined;
+    `SELECT head_sha, last_reviewed_sha, discussion_watermark, last_reviewed_watermark,
+      attempt_head_sha, attempt_watermark, status FROM review_queue WHERE id = ?`,
+  ).get(id) as {
+    head_sha: string;
+    last_reviewed_sha: string | null;
+    discussion_watermark: string;
+    last_reviewed_watermark: string | null;
+    attempt_head_sha: string | null;
+    attempt_watermark: string | null;
+    status: string;
+  } | undefined;
 
+  const watermark = pr.discussionWatermark > (existing?.discussion_watermark || '')
+    ? pr.discussionWatermark
+    : existing?.discussion_watermark || '';
+  const failedOnCurrentInput = existing?.status === 'agent_failed'
+    && existing.attempt_head_sha === pr.headSha
+    && existing.attempt_watermark === watermark;
   let status = existing?.status || 'unreviewed';
-  if (pr.reviewDecision === 'APPROVED') status = 'approved';
-  else if (existing?.last_reviewed_sha && existing.head_sha !== pr.headSha && status !== 'agent_working') status = 'unreviewed';
+  const viewerReview = {
+    head_sha: pr.headSha,
+    viewer_review_state: pr.viewerReviewState,
+    viewer_review_sha: pr.viewerReviewSha,
+  };
+  if (viewerApprovedCurrentHead(viewerReview)) status = 'approved';
+  else if (viewerRequestedChangesCurrentHead(viewerReview)) status = 'awaiting_feedback';
+  else if (status === 'approved') status = 'unreviewed';
+  else if (status !== 'agent_working' && !failedOnCurrentInput && (
+    !existing?.last_reviewed_sha
+    || existing.last_reviewed_sha !== pr.headSha
+    || (existing.last_reviewed_watermark !== null && watermark > existing.last_reviewed_watermark)
+  )) status = 'unreviewed';
 
   database.connection.prepare(`
     INSERT INTO review_queue(
-      id, repository, number, title, simple_summary, body, url, author, head_sha,
+      id, repository, number, title, simple_summary, plain_summary, body, url, author, head_sha,
       head_ref_name, base_ref_name, status, review_decision, requested_reviewers,
-      requested_teams, linked_issues, review_skill, is_draft, remote_state,
-      first_seen_at, updated_at, last_seen_at, merged_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)
+      requested_teams, linked_issues, review_skill, discussion_watermark, is_draft, remote_state,
+      remote_updated_at, first_seen_at, updated_at, last_seen_at, merged_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
-      title=excluded.title, simple_summary=excluded.simple_summary, body=excluded.body,
+      title=excluded.title, simple_summary=excluded.simple_summary,
+      plain_summary=CASE WHEN review_queue.plain_summary='' THEN excluded.plain_summary ELSE review_queue.plain_summary END,
+      body=excluded.body,
       url=excluded.url, author=excluded.author, head_sha=excluded.head_sha,
       head_ref_name=excluded.head_ref_name, base_ref_name=excluded.base_ref_name,
       status=excluded.status, review_decision=excluded.review_decision,
       requested_reviewers=excluded.requested_reviewers, requested_teams=excluded.requested_teams,
       linked_issues=excluded.linked_issues, review_skill=excluded.review_skill,
+      discussion_watermark=excluded.discussion_watermark,
+      review_paused=CASE
+        WHEN review_queue.head_sha<>excluded.head_sha
+          OR excluded.discussion_watermark>review_queue.discussion_watermark THEN 0
+        ELSE review_queue.review_paused END,
       is_draft=excluded.is_draft, remote_state='OPEN', updated_at=excluded.updated_at,
-      last_seen_at=excluded.last_seen_at, merged_at=excluded.merged_at
+      remote_updated_at=excluded.remote_updated_at, last_seen_at=excluded.last_seen_at,
+      merged_at=excluded.merged_at
   `).run(
-    id, pr.repository, pr.number, pr.title, simplify(pr.title, pr.body), pr.body,
+    id, pr.repository, pr.number, pr.title, simplify(pr.title, pr.body), explainPullRequest(pr.title, pr.body), pr.body,
     pr.url, pr.author, pr.headSha, pr.headRefName, pr.baseRefName, status,
     pr.reviewDecision, JSON.stringify(pr.requestedReviewers), JSON.stringify(pr.requestedTeams),
-    JSON.stringify(pr.linkedIssues), configuredSkill(config, pr.repository), pr.isDraft ? 1 : 0,
-    seenAt, pr.updatedAt, seenAt, pr.mergedAt,
+    JSON.stringify(pr.linkedIssues), configuredSkill(config, pr.repository), watermark, pr.isDraft ? 1 : 0,
+    pr.updatedAt, seenAt, pr.updatedAt, seenAt, pr.mergedAt,
+  );
+  database.connection.prepare(`
+    UPDATE review_queue SET viewer_review_state=?, viewer_review_sha=?, other_approvals=?,
+      remote_created_at=? WHERE id=?
+  `).run(
+    pr.viewerReviewState, pr.viewerReviewSha, pr.otherApprovals, pr.createdAt, id,
   );
   if (!existing) recordActivity(database, 'review_discovered', `${pr.repository}#${pr.number} added to the review queue`, id);
   else if (existing.head_sha !== pr.headSha) recordActivity(database, 'review_updated', `${pr.repository}#${pr.number} has new commits`, id);
@@ -170,6 +213,15 @@ export function synchronize(database: BarbarianDatabase, config: BarbarianConfig
         catch (error) { discovery.warnings.push(`linear: ${error instanceof Error ? error.message : String(error)}`); }
       }
       await applyDiscovery(database, config, discovery);
+      const trackedReviews = database.connection.prepare(`
+        SELECT id FROM review_queue WHERE remote_state='OPEN' ORDER BY updated_at DESC
+      `).all() as Array<{ id: string }>;
+      for (const review of trackedReviews) {
+        try { await refreshReviewContext(database, review.id); }
+        catch (error) {
+          discovery.warnings.push(`review context ${review.id}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
       try {
         const from = new Date();
         from.setDate(from.getDate() - 14);

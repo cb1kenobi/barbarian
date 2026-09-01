@@ -1,11 +1,28 @@
 {
   "manifest_version": 3,
   "name": "Barbarian Review Companion",
-  "version": "0.1.0",
-  "description": "Connect GitHub pull request pages to your local Barbarian review room.",
-  "permissions": ["storage"],
+  "version": "0.3.0",
+  "minimum_chrome_version": "114",
+  "description": "A native Barbarian review side panel for GitHub pull requests.",
+  "permissions": ["storage", "sidePanel", "tabs"],
   "host_permissions": ["http://127.0.0.1:4142/*"],
-  "action": { "default_popup": "src/popup.html", "default_title": "Barbarian" },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "background": { "service_worker": "src/background.js", "type": "module" },
+  "side_panel": { "default_path": "src/sidepanel.html" },
+  "action": {
+    "default_title": "Open Barbarian side panel",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
   "content_scripts": [
     {
       "matches": ["https://github.com/*/*/pull/*"],

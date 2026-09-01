@@ -35,8 +35,8 @@ export function buildStatusDraft(database: BarbarianDatabase, config: BarbarianC
     ORDER BY updated_at DESC LIMIT 3
   `).all() as Array<{ repository: string; number: number; title: string }>;
   const lines = [
-    ...active.map((item) => `${item.repository.split('/').at(-1)} - ${item.title}`),
-    ...reviews.map((pr) => `${pr.repository.split('/').at(-1)} - Reviewing #${pr.number}: ${pr.title}`),
+    ...active.map((item) => `* ${item.repository.split('/').at(-1)}: ${item.title}`),
+    ...reviews.map((pr) => `* ${pr.repository.split('/').at(-1)}: Reviewing #${pr.number}: ${pr.title}`),
   ];
   const recent = database.connection.prepare(`
     SELECT kind, created_at FROM activity_events ORDER BY created_at DESC LIMIT 2000

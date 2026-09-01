@@ -1,11 +1,19 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark" data-font-size="normal">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#11120f" />
     <meta name="description" content="Barbarian — your local developer command center." />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Barbarian</title>
+    <script>
+      try {
+        const appearance = JSON.parse(localStorage.getItem('barbarian.appearance') || '{}');
+        if (['light', 'dark', 'slayer'].includes(appearance.theme)) document.documentElement.dataset.theme = appearance.theme;
+        if (['small', 'normal'].includes(appearance.fontSize)) document.documentElement.dataset.fontSize = appearance.fontSize;
+      } catch {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

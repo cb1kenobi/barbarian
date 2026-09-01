@@ -3,6 +3,7 @@ export type ReviewStatus =
   | 'agent_working'
   | 'issues_found'
   | 'awaiting_feedback'
+  | 'agent_failed'
   | 'ready_to_merge'
   | 'approved'
   | 'merged'
@@ -25,6 +26,7 @@ export interface AgentProviderConfig {
 export interface BarbarianConfig {
   version: number;
   profile: { name: string; timezone: string; githubLogin: string };
+  appearance: { theme: 'light' | 'dark' | 'slayer'; fontSize: 'small' | 'normal' };
   monitor: { intervalMinutes: number; runOnStartup: boolean; includeDraftPullRequests: boolean };
   repositories: RepositoryConfig[];
   review: {
@@ -34,7 +36,15 @@ export interface BarbarianConfig {
     autoCleanup: boolean;
   };
   linear: { enabled: boolean; command: string[] };
-  agents: { default: string; providers: Record<string, AgentProviderConfig> };
+  agents: {
+    default: string;
+    autoReview: boolean;
+    maxConcurrent: number;
+    maxAutomaticAttempts: number;
+    retryBaseMinutes: number;
+    maxRunsPerPullRequestPerHour: number;
+    providers: Record<string, AgentProviderConfig>;
+  };
   statusUpdate: { enabled: boolean; workdays: string[]; daysOff: string[] };
 }
 
@@ -66,14 +76,20 @@ export interface DiscoveredPullRequest {
   headSha: string;
   headRefName: string;
   baseRefName: string;
+  createdAt: string;
   updatedAt: string;
   isDraft: boolean;
   reviewDecision: string | null;
   requestedReviewers: string[];
   requestedTeams: string[];
+  reviewedBy: string[];
+  viewerReviewState: string | null;
+  viewerReviewSha: string | null;
+  otherApprovals: number;
   linkedIssues: number[];
   mergedAt: string | null;
   state: string;
+  discussionWatermark: string;
 }
 
 export interface DiscoveryResult {

@@ -16,5 +16,8 @@ const [metadata, diff, inlineComments, issueComments] = await Promise.all([
   run(['api', `repos/${repository}/pulls/${number}/comments`, '--paginate']),
   run(['api', `repos/${repository}/issues/${number}/comments`, '--paginate']),
 ]);
-process.stdout.write(`${JSON.stringify({ repository, number, metadata: JSON.parse(metadata), diff, inlineComments: JSON.parse(inlineComments), issueComments: JSON.parse(issueComments) })}\n`);
-
+const url = `https://github.com/${repository}/pull/${number}`;
+const barbarian = await fetch(`http://127.0.0.1:4142/api/browser/context?url=${encodeURIComponent(url)}`)
+  .then((response) => response.ok ? response.json() : null)
+  .catch(() => null);
+process.stdout.write(`${JSON.stringify({ repository, number, metadata: JSON.parse(metadata), diff, inlineComments: JSON.parse(inlineComments), issueComments: JSON.parse(issueComments), barbarian })}\n`);

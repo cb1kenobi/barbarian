@@ -42,11 +42,12 @@ For a GitHub PR, batch confirmed inline comments into one review following [rule
 After a tracked PR review, report the result to Barbarian:
 
 ```bash
-printf '%s\n' '{"repository":"owner/repo","number":123,"headSha":"abc...","findings":2,"summary":"two blocking correctness issues"}' \
+printf '%s\n' '{"repository":"owner/repo","number":123,"headSha":"abc...","discussionWatermark":"<value captured in review context>","findings":2,"summary":"two blocking correctness issues"}' \
   | node scripts/report-result.mjs
 ```
 
 If Barbarian is offline, finish the review and say the durable status update could not be recorded; do not treat that as a review failure.
+When Barbarian launched the review automatically, do not call this integration; the dispatcher records the result from `BARBARIAN_RESULT`.
 
 ## Output
 
@@ -63,4 +64,3 @@ Tests: <commands and result, or why not run>
 ```
 
 When there are no findings, say what was checked, what tests ran, and any remaining coverage gap. A clean review is a valid result.
-

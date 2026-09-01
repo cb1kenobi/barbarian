@@ -3,6 +3,8 @@ node_modules/
 dist/
 .env
 config/barbarian.yaml
+config/barbarian.yaml.bak
+config/barbarian.yaml.*.tmp
 data/
 .barbarian/
 *.log

@@ -12,11 +12,15 @@ afterEach(() => { for (const directory of directories.splice(0)) rmSync(director
 const config: BarbarianConfig = {
   version: 1,
   profile: { name: 'Chris', timezone: 'America/Chicago', githubLogin: 'cb1kenobi' },
+  appearance: { theme: 'dark', fontSize: 'small' },
   monitor: { intervalMinutes: 20, runOnStartup: true, includeDraftPullRequests: false },
   repositories: [{ name: 'Acme/storage', priority: 10, watchIssues: true, watchPullRequests: true, reviewSkill: 'cb1-code-review', labels: {} }],
   review: { requestedReviewer: 'cb1kenobi', fallbackTeams: ['Developers'], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
   linear: { enabled: false, command: [] },
-  agents: { default: 'codex', providers: {} },
+  agents: {
+    default: 'codex', autoReview: false, maxConcurrent: 2, maxAutomaticAttempts: 3,
+    retryBaseMinutes: 5, maxRunsPerPullRequestPerHour: 3, providers: {},
+  },
   statusUpdate: { enabled: true, workdays: ['monday'], daysOff: [] },
 };
 
@@ -48,21 +52,63 @@ describe('applyDiscovery', () => {
     db.close();
   });
 
-  it('tracks requested reviews and ignores unrelated pull requests', async () => {
+  it('tracks requested and previously reviewed pull requests while ignoring unrelated ones', async () => {
     const db = database();
     const base = {
       provider: 'github' as const, repository: 'Acme/storage', body: '', author: 'author',
-      headSha: 'abc', headRefName: 'feature', baseRefName: 'main', updatedAt: '2026-08-31T10:00:00Z',
+      headSha: 'abc', headRefName: 'feature', baseRefName: 'main', createdAt: '2026-08-01T10:00:00Z',
+      updatedAt: '2026-08-31T10:00:00Z',
       isDraft: false, reviewDecision: null, requestedTeams: [], linkedIssues: [], mergedAt: null, state: 'OPEN',
+      reviewedBy: [], viewerReviewState: null, viewerReviewSha: null, otherApprovals: 0,
+      discussionWatermark: '',
     };
-    await applyDiscovery(db, config, {
+    const discovery: DiscoveryResult = {
       discoveredAt: '2026-08-31T12:00:00Z', githubLogin: 'cb1kenobi', warnings: [], issues: [],
       pullRequests: [
         { ...base, number: 10, title: 'Requested', url: 'https://example/10', requestedReviewers: ['cb1kenobi'] },
         { ...base, number: 11, title: 'Unrelated', url: 'https://example/11', requestedReviewers: ['someone-else'] },
+        { ...base, number: 12, title: 'Previously reviewed', url: 'https://example/12', requestedReviewers: [], reviewedBy: ['cb1kenobi'] },
+        { ...base, number: 13, title: 'Reviewed by someone else', url: 'https://example/13', requestedReviewers: [], reviewedBy: ['someone-else'] },
       ],
-    });
-    expect(db.connection.prepare('SELECT number FROM review_queue').all()).toEqual([{ number: 10 }]);
+    };
+    await applyDiscovery(db, config, discovery);
+    expect(db.connection.prepare('SELECT number FROM review_queue ORDER BY number').all()).toEqual([
+      { number: 10 },
+      { number: 12 },
+    ]);
+    expect(db.connection.prepare('SELECT remote_updated_at FROM review_queue WHERE number=10').get())
+      .toEqual({ remote_updated_at: '2026-08-31T10:00:00Z' });
+
+    discovery.pullRequests[0] = {
+      ...discovery.pullRequests[0]!, reviewDecision: 'APPROVED', otherApprovals: 1,
+    };
+    await applyDiscovery(db, config, discovery);
+    expect(db.connection.prepare('SELECT status FROM review_queue WHERE number=10').get())
+      .toEqual({ status: 'unreviewed' });
+
+    discovery.pullRequests[0] = {
+      ...discovery.pullRequests[0]!, viewerReviewState: 'APPROVED', viewerReviewSha: 'abc',
+    };
+    await applyDiscovery(db, config, discovery);
+    expect(db.connection.prepare('SELECT status FROM review_queue WHERE number=10').get())
+      .toEqual({ status: 'approved' });
+
+    discovery.pullRequests[2] = { ...discovery.pullRequests[2]!, reviewedBy: [] };
+    await applyDiscovery(db, config, discovery);
+    expect(db.connection.prepare('SELECT number FROM review_queue ORDER BY number').all()).toEqual([
+      { number: 10 },
+      { number: 12 },
+    ]);
+
+    db.connection.prepare('UPDATE review_queue SET review_paused=1 WHERE number=10').run();
+    await applyDiscovery(db, config, discovery);
+    expect(db.connection.prepare('SELECT review_paused FROM review_queue WHERE number=10').get())
+      .toEqual({ review_paused: 1 });
+
+    discovery.pullRequests[0] = { ...discovery.pullRequests[0]!, headSha: 'new-head' };
+    await applyDiscovery(db, config, discovery);
+    expect(db.connection.prepare('SELECT review_paused FROM review_queue WHERE number=10').get())
+      .toEqual({ review_paused: 0 });
     db.close();
   });
 });

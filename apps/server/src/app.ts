@@ -3,15 +3,20 @@ import path from 'node:path';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
-import { z } from 'zod';
+import { z, ZodError } from 'zod';
 import type { BarbarianDatabase } from './database.js';
 import type { BarbarianConfig, ReviewStatus } from './types.js';
-import { projectRoot } from './config.js';
+import { ConfigConflictError, ConfigStore, projectRoot, type WritableConfig } from './config.js';
 import { synchronize } from './sync.js';
-import { askAgent, runReviewAgent } from './agents.js';
+import { askAgent } from './agents.js';
+import { AgentRuntime } from './agent-runtime.js';
+import { ReviewDispatcher, reviewTrigger } from './dispatcher.js';
 import { cleanupWorkspace, prepareWorkspace } from './workspaces.js';
 import { buildStatusDraft } from './status.js';
 import { recordActivity } from './activity.js';
+import { buildReviewAssessment, refreshReviewContext, storedReviewFindings } from './review-context.js';
+import { displayReviewStatus, reviewPriorityScore } from './review-state.js';
+import { reviewCardMetadata, type ReviewCardMetadata } from './review-card-metadata.js';
 
 const chatBody = z.object({
   message: z.string().trim().min(1).max(20_000),
@@ -22,20 +27,105 @@ const chatBody = z.object({
 
 const reviewStatuses = new Set<ReviewStatus>([
   'unreviewed', 'agent_working', 'issues_found', 'awaiting_feedback',
-  'ready_to_merge', 'approved', 'merged', 'closed',
+  'agent_failed', 'ready_to_merge', 'approved', 'merged', 'closed',
 ]);
 
 function parseJson<T>(value: string): T {
   return JSON.parse(value) as T;
 }
 
-function rowToReview(row: Record<string, unknown>) {
+function settingsView(config: BarbarianConfig): {
+  config: WritableConfig;
+  advanced: { workspaceRoot: string; linear: { enabled: boolean; configured: boolean }; providers: string[] };
+} {
   return {
+    config: {
+      profile: config.profile,
+      appearance: config.appearance,
+      monitor: config.monitor,
+      repositories: config.repositories,
+      review: {
+        requestedReviewer: config.review.requestedReviewer,
+        fallbackTeams: config.review.fallbackTeams,
+        autoCleanup: config.review.autoCleanup,
+      },
+      agents: {
+        default: config.agents.default,
+        autoReview: config.agents.autoReview,
+        maxConcurrent: config.agents.maxConcurrent,
+        maxAutomaticAttempts: config.agents.maxAutomaticAttempts,
+        retryBaseMinutes: config.agents.retryBaseMinutes,
+        maxRunsPerPullRequestPerHour: config.agents.maxRunsPerPullRequestPerHour,
+      },
+      statusUpdate: config.statusUpdate,
+    },
+    advanced: {
+      workspaceRoot: config.review.workspaceRoot,
+      linear: { enabled: config.linear.enabled, configured: config.linear.command.length > 0 },
+      providers: Object.keys(config.agents.providers),
+    },
+  };
+}
+
+const emptyCardMetadata: ReviewCardMetadata = {
+  last_agent_review_at: null,
+  issue_counts: { high: 0, medium: 0, low: 0 },
+};
+
+function rowToReview(
+  row: Record<string, unknown>,
+  config: BarbarianConfig,
+  cardMetadata: ReviewCardMetadata = emptyCardMetadata,
+) {
+  const reviewPaused = Boolean(row.review_paused);
+  const review = {
     ...row,
+    pending_reason: reviewPaused ? null : reviewTrigger({
+      manual_requested_at: row.manual_requested_at ? String(row.manual_requested_at) : null,
+      head_sha: String(row.head_sha),
+      last_reviewed_sha: row.last_reviewed_sha ? String(row.last_reviewed_sha) : null,
+      discussion_watermark: String(row.discussion_watermark || ''),
+      last_reviewed_watermark: row.last_reviewed_watermark === null ? null : String(row.last_reviewed_watermark || ''),
+    }),
+    review_paused: reviewPaused,
     is_draft: Boolean(row.is_draft),
     requested_reviewers: parseJson<string[]>(String(row.requested_reviewers)),
     requested_teams: parseJson<string[]>(String(row.requested_teams)),
     linked_issues: parseJson<number[]>(String(row.linked_issues)),
+  };
+  const repositoryPriority = config.repositories.find(
+    (repository) => repository.name.toLowerCase() === String(row.repository).toLowerCase(),
+  )?.priority ?? 0;
+  const reviewState = {
+    status: String(row.status),
+    head_sha: String(row.head_sha),
+    viewer_review_state: row.viewer_review_state ? String(row.viewer_review_state) : null,
+    viewer_review_sha: row.viewer_review_sha ? String(row.viewer_review_sha) : null,
+    other_approvals: Number(row.other_approvals || 0),
+  };
+  return {
+    ...review,
+    display_status: displayReviewStatus(reviewState),
+    repository_priority: repositoryPriority,
+    priority_score: reviewPriorityScore(reviewState, repositoryPriority),
+    remote_created_at: row.remote_created_at ? String(row.remote_created_at) : String(row.first_seen_at),
+    remote_updated_at: row.remote_updated_at ? String(row.remote_updated_at) : String(row.updated_at),
+    ...cardMetadata,
+  };
+}
+
+function reviewContextPayload(database: BarbarianDatabase, config: BarbarianConfig, row: Record<string, unknown>) {
+  const metadata = reviewCardMetadata(database).get(String(row.id));
+  const review = rowToReview(row, config, metadata);
+  const findings = storedReviewFindings(database, String(row.id)).map((finding) => ({
+    ...finding,
+    resolved: Boolean(finding.resolved),
+    outdated: Boolean(finding.outdated),
+  }));
+  return {
+    review,
+    findings,
+    assessment: buildReviewAssessment(review as unknown as Parameters<typeof buildReviewAssessment>[0], findings),
   };
 }
 
@@ -49,8 +139,24 @@ function todayParts(config: BarbarianConfig): { date: string; weekday: string } 
   };
 }
 
-export async function createApp(database: BarbarianDatabase, config: BarbarianConfig) {
+export interface MonitorRuntime {
+  nextSyncAt: string | null;
+}
+
+export async function createApp(
+  database: BarbarianDatabase,
+  configStore: ConfigStore,
+  monitorRuntime: MonitorRuntime = { nextSyncAt: null },
+  services: {
+    runtime?: AgentRuntime;
+    dispatcher?: ReviewDispatcher;
+    onConfigUpdated?: (previous: BarbarianConfig, next: BarbarianConfig) => void | Promise<void>;
+  } = {},
+) {
   const app = Fastify({ logger: true, bodyLimit: 2 * 1024 * 1024 });
+  const initialConfig = configStore.get();
+  const runtime = services.runtime || new AgentRuntime(initialConfig.agents.maxConcurrent);
+  const dispatcher = services.dispatcher || new ReviewDispatcher(database, () => configStore.get(), runtime, app.log);
   await app.register(cors, {
     origin(origin, callback) {
       const allowed = !origin || /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin)
@@ -62,6 +168,8 @@ export async function createApp(database: BarbarianDatabase, config: BarbarianCo
   app.get('/api/health', async () => ({ ok: true, now: new Date().toISOString() }));
 
   app.get('/api/dashboard', async () => {
+    const config = configStore.get();
+    const cardMetadata = reviewCardMetadata(database);
     const workQueue = database.connection.prepare(`
       SELECT * FROM work_items WHERE remote_state='OPEN'
       ORDER BY CASE status WHEN 'queued' THEN 0 ELSE 1 END, priority DESC, updated_at DESC LIMIT 12
@@ -71,16 +179,16 @@ export async function createApp(database: BarbarianDatabase, config: BarbarianCo
     }));
     const reviews = database.connection.prepare(`
       SELECT * FROM review_queue WHERE remote_state='OPEN'
-      ORDER BY CASE status
-        WHEN 'issues_found' THEN 0 WHEN 'unreviewed' THEN 1 WHEN 'agent_working' THEN 2
-        WHEN 'awaiting_feedback' THEN 3 WHEN 'ready_to_merge' THEN 4 WHEN 'approved' THEN 5 ELSE 6 END,
-        updated_at DESC LIMIT 12
-    `).all().map((row) => rowToReview(row as Record<string, unknown>));
+      ORDER BY updated_at DESC
+    `).all().map((row) => {
+      const record = row as Record<string, unknown>;
+      return rowToReview(record, config, cardMetadata.get(String(record.id)));
+    });
     const lastSync = database.connection.prepare(`
-      SELECT * FROM sync_runs ORDER BY id DESC LIMIT 1
+      SELECT * FROM sync_runs WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1
     `).get();
     const agentWorking = Number((database.connection.prepare(
-      "SELECT COUNT(*) AS total FROM review_queue WHERE status='agent_working' AND remote_state='OPEN'",
+      "SELECT COUNT(*) AS total FROM agent_runs WHERE status='running'",
     ).get() as { total: number }).total);
     const waiting = Number((database.connection.prepare(`
       SELECT COUNT(*) AS total FROM review_queue
@@ -89,7 +197,10 @@ export async function createApp(database: BarbarianDatabase, config: BarbarianCo
     const needsAttention = Number((database.connection.prepare(`
       SELECT
         (SELECT COUNT(*) FROM work_items WHERE status='queued' AND remote_state='OPEN') +
-        (SELECT COUNT(*) FROM review_queue WHERE status='unreviewed' AND remote_state='OPEN') AS total
+        (SELECT COUNT(*) FROM review_queue
+          WHERE remote_state='OPEN' AND is_draft=0 AND status NOT IN ('approved','merged','closed')
+            AND (manual_requested_at IS NOT NULL OR last_reviewed_sha IS NULL OR head_sha<>last_reviewed_sha
+              OR (last_reviewed_watermark IS NOT NULL AND discussion_watermark>last_reviewed_watermark))) AS total
     `).get() as { total: number }).total);
     const draft = buildStatusDraft(database, config);
     const savedStatus = database.connection.prepare('SELECT * FROM daily_statuses WHERE workday=?').get(draft.workday);
@@ -100,7 +211,8 @@ export async function createApp(database: BarbarianDatabase, config: BarbarianCo
       && !savedStatus;
     return {
       profile: config.profile,
-      monitor: config.monitor,
+      appearance: config.appearance,
+      monitor: { ...config.monitor, nextSyncAt: monitorRuntime.nextSyncAt },
       workQueue,
       reviews,
       metrics: { needsAttention, agentWorking, waiting, previousWorkday: draft.stats },
@@ -111,7 +223,9 @@ export async function createApp(database: BarbarianDatabase, config: BarbarianCo
   });
 
   app.post('/api/sync', async (_request, reply) => {
+    const config = configStore.get();
     const result = await synchronize(database, config);
+    await dispatcher.pump();
     return reply.send(result);
   });
 
@@ -129,11 +243,19 @@ export async function createApp(database: BarbarianDatabase, config: BarbarianCo
     return { ok: true };
   });
 
-  app.get('/api/reviews', async () => database.connection.prepare(`
-    SELECT * FROM review_queue ORDER BY remote_state='OPEN' DESC, updated_at DESC
-  `).all().map((row) => rowToReview(row as Record<string, unknown>)));
+  app.get('/api/reviews', async () => {
+    const config = configStore.get();
+    const cardMetadata = reviewCardMetadata(database);
+    return database.connection.prepare(`
+      SELECT * FROM review_queue ORDER BY remote_state='OPEN' DESC, updated_at DESC
+    `).all().map((row) => {
+      const record = row as Record<string, unknown>;
+      return rowToReview(record, config, cardMetadata.get(String(record.id)));
+    });
+  });
 
   app.get('/api/reviews/:id', async (request, reply) => {
+    const config = configStore.get();
     const id = decodeURIComponent((request.params as { id: string }).id);
     const review = database.connection.prepare('SELECT * FROM review_queue WHERE id=?').get(id);
     if (!review) return reply.code(404).send({ error: 'Review not found' });
@@ -144,7 +266,7 @@ export async function createApp(database: BarbarianDatabase, config: BarbarianCo
       SELECT id, provider, task, status, started_at, finished_at, error
       FROM agent_runs WHERE review_id=? ORDER BY id DESC LIMIT 20
     `).all(id);
-    return { review: rowToReview(review as Record<string, unknown>), messages, runs };
+    return { ...reviewContextPayload(database, config, review as Record<string, unknown>), messages, runs };
   });
 
   app.patch('/api/reviews/:id', async (request, reply) => {
@@ -158,6 +280,7 @@ export async function createApp(database: BarbarianDatabase, config: BarbarianCo
   });
 
   app.post('/api/reviews/:id/chat', async (request, reply) => {
+    const config = configStore.get();
     const id = decodeURIComponent((request.params as { id: string }).id);
     const body = chatBody.parse(request.body);
     const review = database.connection.prepare('SELECT id FROM review_queue WHERE id=?').get(id);
@@ -167,7 +290,7 @@ export async function createApp(database: BarbarianDatabase, config: BarbarianCo
       INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'user', ?, ?, ?)
     `).run(id, body.author, body.message, now);
     if (!body.askAgent) return { message: null };
-    const response = await askAgent(database, config, id, body.message, body.provider);
+    const response = await runtime.run((signal) => askAgent(database, config, id, body.message, body.provider, signal), id);
     const inserted = database.connection.prepare(`
       INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'assistant', ?, ?, ?)
     `).run(id, body.provider || config.agents.default, response, new Date().toISOString());
@@ -179,29 +302,43 @@ export async function createApp(database: BarbarianDatabase, config: BarbarianCo
     const body = z.object({ provider: z.string().optional() }).parse(request.body || {});
     const review = database.connection.prepare('SELECT id FROM review_queue WHERE id=?').get(id);
     if (!review) return reply.code(404).send({ error: 'Review not found' });
-    void runReviewAgent(database, config, id, body.provider).catch((error) => app.log.error(error));
+    if (!dispatcher.requestManual(id, body.provider)) return reply.code(404).send({ error: 'Review not found' });
     return reply.code(202).send({ accepted: true });
   });
 
+  app.delete('/api/reviews/:id/run-review', async (request, reply) => {
+    const id = decodeURIComponent((request.params as { id: string }).id);
+    const result = dispatcher.cancelReview(id);
+    if (!result.found) return reply.code(404).send({ error: 'Review not found' });
+    if (result.stopped) {
+      recordActivity(database, 'agent_review_cancelled', `Stopped agent work for ${id}`, id, { cancelled: result.cancelled });
+    }
+    return { ok: true, stopped: result.stopped, cancelled: result.cancelled };
+  });
+
   app.post('/api/reviews/:id/workspace', async (request, reply) => {
+    const config = configStore.get();
     const id = decodeURIComponent((request.params as { id: string }).id);
     const workspace = await prepareWorkspace(database, config, id);
     return reply.send({ workspace });
   });
 
   app.delete('/api/reviews/:id/workspace', async (request, reply) => {
+    const config = configStore.get();
     const id = decodeURIComponent((request.params as { id: string }).id);
     await cleanupWorkspace(database, config, id);
     return reply.send({ ok: true });
   });
 
   app.get('/api/status/today', async () => {
+    const config = configStore.get();
     const draft = buildStatusDraft(database, config);
     const saved = database.connection.prepare('SELECT * FROM daily_statuses WHERE workday=?').get(draft.workday);
     return { draft, saved };
   });
 
   app.put('/api/status/today', async (request) => {
+    const config = configStore.get();
     const body = z.object({ content: z.string().max(20_000), personalNote: z.string().max(5_000).default(''), copied: z.boolean().default(false) }).parse(request.body);
     const draft = buildStatusDraft(database, config);
     const now = new Date().toISOString();
@@ -215,15 +352,24 @@ export async function createApp(database: BarbarianDatabase, config: BarbarianCo
   });
 
   app.get('/api/browser/context', async (request, reply) => {
+    const config = configStore.get();
     const query = z.object({ url: z.string().url() }).parse(request.query);
     const match = new URL(query.url).pathname.match(/^\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
     if (!match) return reply.code(400).send({ error: 'Not a GitHub pull request URL' });
     const id = `github:${match[1]}/${match[2]}#${match[3]}`;
     const review = database.connection.prepare('SELECT * FROM review_queue WHERE id=?').get(id);
-    return { id, review: review ? rowToReview(review as Record<string, unknown>) : null };
+    if (!review) return { id, review: null, findings: [], assessment: null, messages: [] };
+    const messages = database.connection.prepare(`
+      SELECT * FROM (
+        SELECT id, role, author, substr(content, 1, 4000) AS content, created_at
+        FROM chat_messages WHERE review_id=? ORDER BY id DESC LIMIT 12
+      ) ORDER BY id ASC
+    `).all(id);
+    return { id, ...reviewContextPayload(database, config, review as Record<string, unknown>), messages };
   });
 
   app.get('/api/local/context', async (request) => {
+    const config = configStore.get();
     const query = z.object({ remote: z.string(), branch: z.string().optional() }).parse(request.query);
     const match = query.remote.match(/github\.com[/:]([^/]+)\/([^/.]+)(?:\.git)?$/);
     if (!match) return { reviews: [] };
@@ -232,30 +378,64 @@ export async function createApp(database: BarbarianDatabase, config: BarbarianCo
       SELECT * FROM review_queue WHERE repository=? AND remote_state='OPEN'
         AND (? IS NULL OR head_ref_name=?) ORDER BY updated_at DESC
     `).all(repository, query.branch || null, query.branch || null);
-    return { reviews: rows.map((row) => rowToReview(row as Record<string, unknown>)) };
+    const cardMetadata = reviewCardMetadata(database);
+    return { reviews: rows.map((row) => {
+      const record = row as Record<string, unknown>;
+      return rowToReview(record, config, cardMetadata.get(String(record.id)));
+    }) };
   });
 
   app.get('/api/settings', async () => ({
-    profile: config.profile,
-    monitor: config.monitor,
-    repositories: config.repositories,
-    agents: { default: config.agents.default, providers: Object.keys(config.agents.providers) },
-    configFile: 'config/barbarian.yaml',
-    envFile: '.env',
+    ...settingsView(configStore.get()), revision: configStore.revision,
+    warning: configStore.warning, configFile: 'config/barbarian.yaml',
   }));
+
+  app.put('/api/settings', async (request, reply) => {
+    try {
+      const origin = request.headers.origin;
+      if (origin?.startsWith('chrome-extension://') || origin?.startsWith('vscode-webview://')) {
+        return reply.code(403).send({ error: 'Settings may only be changed from the Barbarian dashboard.' });
+      }
+      const body = z.object({ revision: z.string().min(1), config: z.unknown() }).parse(request.body);
+      const previous = configStore.get();
+      const updated = await configStore.update(body.config, body.revision);
+      runtime.setMaxConcurrent(updated.config.agents.maxConcurrent);
+      await services.onConfigUpdated?.(previous, updated.config);
+      void dispatcher.pump();
+      return { ok: true, ...settingsView(updated.config), revision: updated.revision };
+    } catch (error) {
+      if (error instanceof ConfigConflictError) return reply.code(409).send({ error: error.message });
+      if (error instanceof ZodError) {
+        return reply.code(400).send({
+          error: 'Configuration is invalid',
+          issues: error.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message })),
+        });
+      }
+      app.log.error(error, 'could not persist settings');
+      return reply.code(500).send({ error: error instanceof Error ? error.message : 'Could not save settings' });
+    }
+  });
 
   app.post('/api/integrations/review-result', async (request, reply) => {
     const body = z.object({
       repository: z.string(), number: z.number().int().positive(), headSha: z.string(),
+      discussionWatermark: z.string(),
       findings: z.number().int().min(0), summary: z.string().default(''),
     }).parse(request.body);
     const id = `github:${body.repository}#${body.number}`;
     const status = body.findings > 0 ? 'issues_found' : 'ready_to_merge';
     const result = database.connection.prepare(`
-      UPDATE review_queue SET status=?, findings_count=?, last_reviewed_sha=?, updated_at=? WHERE id=?
-    `).run(status, body.findings, body.headSha, new Date().toISOString(), id);
+      UPDATE review_queue SET status=CASE
+          WHEN head_sha<>? OR discussion_watermark>? THEN 'unreviewed' ELSE ? END,
+        findings_count=?, last_reviewed_sha=?, last_reviewed_watermark=?,
+        plain_summary=CASE WHEN ?='' THEN plain_summary ELSE ? END, updated_at=? WHERE id=?
+    `).run(
+      body.headSha, body.discussionWatermark, status, body.findings, body.headSha,
+      body.discussionWatermark, body.summary.trim(), body.summary.trim(), new Date().toISOString(), id,
+    );
     if (!result.changes) return reply.code(404).send({ error: 'Review is not tracked by Barbarian' });
     recordActivity(database, 'agent_review_completed', `${body.repository}#${body.number}: ${body.findings} issues`, id, body);
+    void refreshReviewContext(database, id).catch((error) => app.log.warn(error, 'could not refresh review comments'));
     return { ok: true, status };
   });
 

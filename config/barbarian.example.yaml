@@ -5,6 +5,10 @@ profile:
   timezone: America/Chicago
   githubLogin: ""
 
+appearance:
+  theme: dark
+  fontSize: normal
+
 monitor:
   intervalMinutes: 20
   runOnStartup: true
@@ -34,10 +38,15 @@ linear:
 
 agents:
   default: codex
+  autoReview: false
+  maxConcurrent: 2
+  maxAutomaticAttempts: 3
+  retryBaseMinutes: 5
+  maxRunsPerPullRequestPerHour: 3
   providers:
     codex:
       command: codex
-      args: [exec, --skip-git-repo-check, "-"]
+      args: [exec, --sandbox, read-only, --skip-git-repo-check, "-"]
     claude:
       command: claude
       args: [-p]

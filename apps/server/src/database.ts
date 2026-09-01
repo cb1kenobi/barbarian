@@ -13,6 +13,7 @@ export class BarbarianDatabase {
     this.connection = new DatabaseSync(filename);
     this.connection.exec('PRAGMA journal_mode = WAL');
     this.connection.exec('PRAGMA foreign_keys = ON');
+    this.connection.exec('PRAGMA busy_timeout = 2000');
     this.migrate();
   }
 
@@ -49,6 +50,7 @@ export class BarbarianDatabase {
         number INTEGER NOT NULL,
         title TEXT NOT NULL,
         simple_summary TEXT NOT NULL DEFAULT '',
+        plain_summary TEXT NOT NULL DEFAULT '',
         body TEXT NOT NULL DEFAULT '',
         url TEXT NOT NULL,
         author TEXT NOT NULL,
@@ -57,20 +59,54 @@ export class BarbarianDatabase {
         base_ref_name TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'unreviewed',
         review_decision TEXT,
+        viewer_review_state TEXT,
+        viewer_review_sha TEXT,
+        other_approvals INTEGER NOT NULL DEFAULT 0,
         findings_count INTEGER NOT NULL DEFAULT 0,
         requested_reviewers TEXT NOT NULL DEFAULT '[]',
         requested_teams TEXT NOT NULL DEFAULT '[]',
         linked_issues TEXT NOT NULL DEFAULT '[]',
         review_skill TEXT NOT NULL DEFAULT 'cb1-code-review',
         last_reviewed_sha TEXT,
+        discussion_watermark TEXT NOT NULL DEFAULT '',
+        last_reviewed_watermark TEXT,
+        claim_owner TEXT,
+        claimed_at TEXT,
+        manual_requested_at TEXT,
+        manual_provider TEXT,
+        review_paused INTEGER NOT NULL DEFAULT 0,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        attempt_head_sha TEXT,
+        attempt_watermark TEXT,
+        retry_after TEXT,
+        last_agent_error TEXT,
         workspace_path TEXT,
         is_draft INTEGER NOT NULL DEFAULT 0,
         remote_state TEXT NOT NULL DEFAULT 'OPEN',
+        remote_created_at TEXT,
+        remote_updated_at TEXT,
         first_seen_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         last_seen_at TEXT NOT NULL,
         merged_at TEXT,
         UNIQUE(repository, number)
+      );
+
+      CREATE TABLE IF NOT EXISTS review_findings (
+        id TEXT PRIMARY KEY,
+        review_id TEXT NOT NULL REFERENCES review_queue(id) ON DELETE CASCADE,
+        remote_id INTEGER NOT NULL,
+        author TEXT NOT NULL,
+        body TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        url TEXT NOT NULL,
+        path TEXT,
+        line INTEGER,
+        resolved INTEGER NOT NULL DEFAULT 0,
+        outdated INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(review_id, remote_id)
       );
 
       CREATE TABLE IF NOT EXISTS chat_messages (
@@ -91,7 +127,10 @@ export class BarbarianDatabase {
         started_at TEXT NOT NULL,
         finished_at TEXT,
         output TEXT NOT NULL DEFAULT '',
-        error TEXT
+        error TEXT,
+        owner TEXT,
+        reviewed_head_sha TEXT,
+        reviewed_watermark TEXT
       );
 
       CREATE TABLE IF NOT EXISTS sync_runs (
@@ -126,12 +165,48 @@ export class BarbarianDatabase {
 
       CREATE INDEX IF NOT EXISTS idx_work_items_queue ON work_items(remote_state, status, priority DESC);
       CREATE INDEX IF NOT EXISTS idx_review_queue_active ON review_queue(remote_state, status, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_review_findings_review ON review_findings(review_id, resolved, outdated);
       CREATE INDEX IF NOT EXISTS idx_chat_messages_review ON chat_messages(review_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_events(created_at DESC);
     `);
     const activityColumns = this.connection.prepare('PRAGMA table_info(activity_events)').all() as Array<{ name: string }>;
     if (!activityColumns.some((column) => column.name === 'remote_key')) {
       this.connection.exec('ALTER TABLE activity_events ADD COLUMN remote_key TEXT');
+    }
+    const initialReviewColumns = this.connection.prepare('PRAGMA table_info(review_queue)').all() as Array<{ name: string }>;
+    if (!initialReviewColumns.some((column) => column.name === 'plain_summary')) {
+      this.connection.exec("ALTER TABLE review_queue ADD COLUMN plain_summary TEXT NOT NULL DEFAULT ''");
+    }
+    const reviewColumns = new Set((this.connection.prepare('PRAGMA table_info(review_queue)').all() as Array<{ name: string }>).map((column) => column.name));
+    const reviewAdditions: Array<[string, string]> = [
+      ['discussion_watermark', "TEXT NOT NULL DEFAULT ''"],
+      ['last_reviewed_watermark', 'TEXT'],
+      ['claim_owner', 'TEXT'],
+      ['claimed_at', 'TEXT'],
+      ['manual_requested_at', 'TEXT'],
+      ['manual_provider', 'TEXT'],
+      ['review_paused', 'INTEGER NOT NULL DEFAULT 0'],
+      ['attempt_count', 'INTEGER NOT NULL DEFAULT 0'],
+      ['attempt_head_sha', 'TEXT'],
+      ['attempt_watermark', 'TEXT'],
+      ['retry_after', 'TEXT'],
+      ['last_agent_error', 'TEXT'],
+      ['viewer_review_state', 'TEXT'],
+      ['viewer_review_sha', 'TEXT'],
+      ['other_approvals', 'INTEGER NOT NULL DEFAULT 0'],
+      ['remote_created_at', 'TEXT'],
+      ['remote_updated_at', 'TEXT'],
+    ];
+    for (const [name, definition] of reviewAdditions) {
+      if (!reviewColumns.has(name)) this.connection.exec(`ALTER TABLE review_queue ADD COLUMN ${name} ${definition}`);
+    }
+    this.connection.exec('UPDATE review_queue SET remote_updated_at=updated_at WHERE remote_updated_at IS NULL');
+    const runColumns = new Set((this.connection.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>).map((column) => column.name));
+    const runAdditions: Array<[string, string]> = [
+      ['owner', 'TEXT'], ['reviewed_head_sha', 'TEXT'], ['reviewed_watermark', 'TEXT'],
+    ];
+    for (const [name, definition] of runAdditions) {
+      if (!runColumns.has(name)) this.connection.exec(`ALTER TABLE agent_runs ADD COLUMN ${name} ${definition}`);
     }
     this.connection.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_remote_key ON activity_events(remote_key) WHERE remote_key IS NOT NULL');
     this.connection.exec('PRAGMA optimize');

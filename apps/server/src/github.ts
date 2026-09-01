@@ -20,6 +20,12 @@ interface GithubIssueNode {
   };
 }
 
+export interface GithubLatestReviewNode {
+  author: { login: string } | null;
+  state: string;
+  commit: { oid: string } | null;
+}
+
 interface GithubPullRequestNode {
   number: number;
   title: string;
@@ -28,6 +34,7 @@ interface GithubPullRequestNode {
   state: string;
   isDraft: boolean;
   mergedAt: string | null;
+  createdAt: string;
   updatedAt: string;
   headRefOid: string;
   headRefName: string;
@@ -37,7 +44,24 @@ interface GithubPullRequestNode {
   reviewRequests: {
     nodes: Array<{ requestedReviewer: { login?: string; name?: string } | null }>;
   };
+  latestReviews: { nodes: GithubLatestReviewNode[] };
   closingIssuesReferences: { nodes: Array<{ number: number }> };
+}
+
+export interface DiscussionEntry {
+  id: string;
+  fullDatabaseId: string | null;
+  updatedAt: string;
+  author: { login: string } | null;
+  authorAssociation: string;
+}
+
+export interface GithubDiscussionNode {
+  number: number;
+  author: { login: string } | null;
+  comments: { nodes: DiscussionEntry[] };
+  reviews: { nodes: DiscussionEntry[] };
+  reviewThreads: { nodes: Array<{ comments: { nodes: DiscussionEntry[] } }> };
 }
 
 interface RepoQueryResult {
@@ -50,7 +74,7 @@ interface RepoQueryResult {
 }
 
 const repositoryQuery = `
-query($owner:String!, $repo:String!, $login:String!) {
+query($owner:String!, $repo:String!, $login:String!, $cursor:String) {
   repository(owner:$owner, name:$repo) {
     issues(first:100, states:OPEN, filterBy:{assignee:$login}, orderBy:{field:UPDATED_AT,direction:DESC}) {
       nodes {
@@ -60,24 +84,172 @@ query($owner:String!, $repo:String!, $login:String!) {
         closedByPullRequestsReferences(first:20) { nodes { number url state merged } }
       }
     }
-    pullRequests(first:100, states:OPEN, orderBy:{field:UPDATED_AT,direction:DESC}) {
+    pullRequests(first:100, after:$cursor, states:OPEN, orderBy:{field:UPDATED_AT,direction:DESC}) {
+      pageInfo { hasNextPage endCursor }
       nodes {
-        number title body url state isDraft mergedAt updatedAt
+        number title body url state isDraft mergedAt createdAt updatedAt
         headRefOid headRefName baseRefName reviewDecision
         author { login }
         reviewRequests(first:20) {
           nodes { requestedReviewer { ... on User { login } ... on Team { name } } }
         }
+        latestReviews(first:100) { nodes { author { login } state commit { oid } } }
         closingIssuesReferences(first:20) { nodes { number } }
       }
     }
   }
 }`;
 
+const reviewedPullRequestsQuery = `
+query($searchQuery:String!, $cursor:String) {
+  search(query:$searchQuery, type:ISSUE, first:100, after:$cursor) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      ... on PullRequest { number repository { nameWithOwner } }
+    }
+  }
+}`;
+
+interface PullRequestPageResult extends RepoQueryResult {
+  data: RepoQueryResult['data'] & {
+    repository: (NonNullable<RepoQueryResult['data']['repository']> & {
+      pullRequests: { nodes: GithubPullRequestNode[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
+    }) | null;
+  };
+}
+
 async function gh(args: string[]): Promise<string> {
   const result = await runProcess('gh', args, { timeoutMs: 60_000 });
   if (result.exitCode !== 0) throw new Error(result.stderr.trim() || 'GitHub CLI request failed');
   return result.stdout;
+}
+
+export interface ReviewBundle {
+  repository: string;
+  number: number;
+  metadata: Record<string, unknown>;
+  diff: string;
+  inlineComments: unknown[];
+  issueComments: unknown[];
+}
+
+export interface ReviewCommentDraft {
+  path: string;
+  line: number;
+  side: 'LEFT' | 'RIGHT';
+  body: string;
+}
+
+function commentLocation(path: string, side: 'LEFT' | 'RIGHT', line: number): string {
+  return `${path}\0${side}\0${line}`;
+}
+
+/** Return every single-line location GitHub accepts for an inline comment in a unified diff. */
+export function reviewableDiffLines(diff: string): Set<string> {
+  const locations = new Set<string>();
+  let file = '';
+  let oldLine = 0;
+  let newLine = 0;
+  let inHunk = false;
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      file = '';
+      inHunk = false;
+      continue;
+    }
+    if (line.startsWith('+++ ')) {
+      const value = line.slice(4);
+      file = value === '/dev/null' ? '' : value.replace(/^b\//, '');
+      continue;
+    }
+    const hunk = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (hunk) {
+      oldLine = Number(hunk[1]);
+      newLine = Number(hunk[2]);
+      inHunk = Boolean(file);
+      continue;
+    }
+    if (!inHunk || !file || line.startsWith('\\ No newline at end of file')) continue;
+    if (line.startsWith('+')) {
+      locations.add(commentLocation(file, 'RIGHT', newLine));
+      newLine += 1;
+    } else if (line.startsWith('-')) {
+      locations.add(commentLocation(file, 'LEFT', oldLine));
+      oldLine += 1;
+    } else {
+      // GitHub locates unchanged context on the right side of the diff.
+      locations.add(commentLocation(file, 'RIGHT', newLine));
+      oldLine += 1;
+      newLine += 1;
+    }
+  }
+  return locations;
+}
+
+export function validateReviewCommentLocations(diff: string, comments: ReviewCommentDraft[]): void {
+  const locations = reviewableDiffLines(diff);
+  for (const [index, comment] of comments.entries()) {
+    if (!locations.has(commentLocation(comment.path, comment.side, comment.line))) {
+      throw new Error(`Review comment ${index + 1} does not point to a changed diff line`);
+    }
+  }
+}
+
+export async function fetchPullRequestReviewBundle(repository: string, number: number): Promise<ReviewBundle> {
+  const commands = [
+    ['pr', 'view', String(number), '--repo', repository, '--json', 'number,title,body,url,author,headRefOid,headRefName,baseRefName,files,commits,closingIssuesReferences,reviews,reviewDecision,statusCheckRollup'],
+    ['pr', 'diff', String(number), '--repo', repository],
+    ['api', `repos/${repository}/pulls/${number}/comments?per_page=100`, '--paginate', '--slurp'],
+    ['api', `repos/${repository}/issues/${number}/comments?per_page=100`, '--paginate', '--slurp'],
+  ];
+  const results = await Promise.all(commands.map(async (args) => {
+    const result = await runProcess('gh', args, { timeoutMs: 120_000, maxOutputCharacters: 4_000_000 });
+    if (result.exitCode !== 0) throw new Error(result.stderr.trim() || 'GitHub CLI request failed');
+    return result.stdout;
+  }));
+  if (results.some((result) => result.startsWith('[... '))) {
+    throw new Error('Pull request review bundle exceeded the safe capture limit');
+  }
+  const inlinePages = JSON.parse(results[2] || '[]') as unknown[][];
+  const issuePages = JSON.parse(results[3] || '[]') as unknown[][];
+  return {
+    repository,
+    number,
+    metadata: JSON.parse(results[0] || '{}') as Record<string, unknown>,
+    diff: results[1] || '',
+    inlineComments: inlinePages.flat(),
+    issueComments: issuePages.flat(),
+  };
+}
+
+export async function postPullRequestReview(
+  repository: string,
+  number: number,
+  headSha: string,
+  summary: string,
+  comments: ReviewCommentDraft[],
+): Promise<void> {
+  // A clean automatic pass is still recorded locally, but it must not create
+  // repetitive top-level GitHub reviews every time PR discussion changes.
+  if (comments.length === 0) return;
+  const payload = reviewPublicationPayload(headSha, summary, comments);
+  const result = await runProcess('gh', [
+    'api', '--method', 'POST', `repos/${repository}/pulls/${number}/reviews`, '--input', '-',
+  ], {
+    input: JSON.stringify(payload),
+    timeoutMs: 120_000,
+  });
+  if (result.exitCode !== 0) throw new Error(result.stderr.trim() || 'Could not publish the GitHub review');
+}
+
+export function reviewPublicationPayload(headSha: string, summary: string, comments: ReviewCommentDraft[]) {
+  if (comments.length === 0) throw new Error('Refusing to publish an empty pull request review');
+  const signature = '—\n_Generated by Barber AI_';
+  const signedComments = comments.map((comment) => ({
+    ...comment,
+    body: /Generated by Barber AI/i.test(comment.body) ? comment.body : `${comment.body}\n\n${signature}`,
+  }));
+  return { commit_id: headSha, event: 'COMMENT' as const, comments: signedComments };
 }
 
 export async function resolveGithubLogin(config: BarbarianConfig): Promise<string> {
@@ -91,7 +263,7 @@ function splitRepository(name: string): [string, string] {
   return [owner, repo];
 }
 
-async function queryRepository(repository: RepositoryConfig, login: string): Promise<RepoQueryResult> {
+async function queryRepository(repository: RepositoryConfig, login: string, cursor?: string): Promise<PullRequestPageResult> {
   const [owner, repo] = splitRepository(repository.name);
   const raw = await gh([
     'api', 'graphql',
@@ -99,8 +271,58 @@ async function queryRepository(repository: RepositoryConfig, login: string): Pro
     '-F', `owner=${owner}`,
     '-F', `repo=${repo}`,
     '-F', `login=${login}`,
+    ...(cursor ? ['-F', `cursor=${cursor}`] : []),
   ]);
-  return JSON.parse(raw) as RepoQueryResult;
+  return JSON.parse(raw) as PullRequestPageResult;
+}
+
+async function queryReviewedPullRequests(login: string): Promise<Set<string>> {
+  const reviewed = new Set<string>();
+  let cursor: string | null = null;
+  do {
+    const raw = await gh([
+      'api', 'graphql',
+      '-f', `query=${reviewedPullRequestsQuery}`,
+      '-F', `searchQuery=is:pr is:open reviewed-by:${login}`,
+      ...(cursor ? ['-F', `cursor=${cursor}`] : []),
+    ]);
+    const result = JSON.parse(raw) as {
+      data: {
+        search: {
+          nodes: Array<{ number: number; repository: { nameWithOwner: string } } | null>;
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        };
+      };
+    };
+    for (const node of result.data.search.nodes) {
+      if (node) reviewed.add(`${node.repository.nameWithOwner}#${node.number}`.toLowerCase());
+    }
+    cursor = result.data.search.pageInfo.hasNextPage ? result.data.search.pageInfo.endCursor : null;
+  } while (cursor);
+  return reviewed;
+}
+
+const trustedAssociations = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+
+export function discussionWatermark(node: GithubDiscussionNode | undefined, githubLogin: string): string {
+  if (!node) return '';
+  const author = node.author?.login.toLowerCase() || '';
+  const self = githubLogin.toLowerCase();
+  const entries = [
+    ...node.comments.nodes,
+    ...node.reviews.nodes,
+    ...node.reviewThreads.nodes.flatMap((thread) => thread.comments.nodes),
+  ].filter((entry) => {
+    const login = entry.author?.login.toLowerCase();
+    return Boolean(login && login !== self && (login === author || trustedAssociations.has(entry.authorAssociation)));
+  });
+  let watermark = '';
+  for (const entry of entries) {
+    const numericId = String(entry.fullDatabaseId || '').padStart(24, '0');
+    const candidate = `${entry.updatedAt}|${numericId}|${entry.id}`;
+    if (candidate > watermark) watermark = candidate;
+  }
+  return watermark;
 }
 
 function priorityFor(issue: GithubIssueNode, repository: RepositoryConfig): { score: number; reasons: string[] } {
@@ -146,7 +368,12 @@ function similarity(left: string, right: string): number {
   return common / new Set([...a, ...b]).size;
 }
 
-function convertPullRequest(repository: string, node: GithubPullRequestNode): DiscoveredPullRequest {
+function convertPullRequest(
+  repository: string,
+  node: GithubPullRequestNode,
+  reviewedBy: string[],
+  reviewTarget: string,
+): DiscoveredPullRequest {
   const reviewers: string[] = [];
   const teams: string[] = [];
   for (const request of node.reviewRequests.nodes) {
@@ -154,6 +381,15 @@ function convertPullRequest(repository: string, node: GithubPullRequestNode): Di
     if (target?.login) reviewers.push(target.login);
     if (target?.name) teams.push(target.name);
   }
+  const target = reviewTarget.toLowerCase();
+  const viewerReview = node.latestReviews.nodes.find(
+    (review) => review.author?.login.toLowerCase() === target,
+  );
+  const otherApprovals = node.latestReviews.nodes.filter((review) =>
+    review.author?.login.toLowerCase() !== target
+      && review.state === 'APPROVED'
+      && review.commit?.oid === node.headRefOid,
+  ).length;
   return {
     provider: 'github',
     repository,
@@ -165,14 +401,20 @@ function convertPullRequest(repository: string, node: GithubPullRequestNode): Di
     headSha: node.headRefOid,
     headRefName: node.headRefName,
     baseRefName: node.baseRefName,
+    createdAt: node.createdAt,
     updatedAt: node.updatedAt,
     isDraft: node.isDraft,
     reviewDecision: node.reviewDecision,
     requestedReviewers: reviewers,
     requestedTeams: teams,
+    reviewedBy,
+    viewerReviewState: viewerReview?.state ?? null,
+    viewerReviewSha: viewerReview?.commit?.oid ?? null,
+    otherApprovals,
     linkedIssues: node.closingIssuesReferences.nodes.map((issue) => issue.number),
     mergedAt: node.mergedAt,
     state: node.state,
+    discussionWatermark: '',
   };
 }
 
@@ -182,6 +424,14 @@ export async function discoverGithub(config: BarbarianConfig): Promise<Discovery
   const issues: DiscoveredIssue[] = [];
   const pullRequests: DiscoveredPullRequest[] = [];
   const warnings: string[] = [];
+  const reviewTarget = config.review.requestedReviewer || githubLogin;
+  let reviewedPullRequests = new Set<string>();
+
+  try {
+    reviewedPullRequests = await queryReviewedPullRequests(reviewTarget);
+  } catch (error) {
+    warnings.push(`review history: ${error instanceof Error ? error.message : String(error)}`);
+  }
 
   for (const repository of config.repositories) {
     try {
@@ -190,8 +440,21 @@ export async function discoverGithub(config: BarbarianConfig): Promise<Discovery
         warnings.push(`${repository.name}: repository was not found or is inaccessible`);
         continue;
       }
+      const pullRequestNodes = [...result.data.repository.pullRequests.nodes];
+      let pageInfo = result.data.repository.pullRequests.pageInfo;
+      while (pageInfo.hasNextPage && pageInfo.endCursor) {
+        const next = await queryRepository(repository, githubLogin, pageInfo.endCursor);
+        if (!next.data.repository) break;
+        pullRequestNodes.push(...next.data.repository.pullRequests.nodes);
+        pageInfo = next.data.repository.pullRequests.pageInfo;
+      }
       if (repository.watchPullRequests) {
-        pullRequests.push(...result.data.repository.pullRequests.nodes.map((node) => convertPullRequest(repository.name, node)));
+        pullRequests.push(...pullRequestNodes.map((node) => convertPullRequest(
+          repository.name,
+          node,
+          reviewedPullRequests.has(`${repository.name}#${node.number}`.toLowerCase()) ? [reviewTarget] : [],
+          reviewTarget,
+        )));
       }
       if (repository.watchIssues) {
         for (const node of result.data.repository.issues.nodes) {
@@ -234,6 +497,192 @@ export async function discoverGithub(config: BarbarianConfig): Promise<Discovery
 export async function fetchPullRequestState(repository: string, number: number): Promise<{ state: string; mergedAt: string | null }> {
   const raw = await gh(['pr', 'view', String(number), '--repo', repository, '--json', 'state,mergedAt']);
   return JSON.parse(raw) as { state: string; mergedAt: string | null };
+}
+
+interface ReviewThreadCommentNode {
+  databaseId: number;
+  id: string;
+  fullDatabaseId: string | null;
+  url: string;
+  path: string | null;
+  line: number | null;
+  originalLine: number | null;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  author: { login: string } | null;
+  authorAssociation: string;
+}
+
+interface ReviewThreadNode {
+  isResolved: boolean;
+  isOutdated: boolean;
+  comments: { nodes: ReviewThreadCommentNode[] };
+  recentComments: { nodes: ReviewThreadCommentNode[] };
+}
+
+export interface GithubReviewFinding {
+  remoteId: number;
+  author: string;
+  body: string;
+  summary: string;
+  url: string;
+  path: string | null;
+  line: number | null;
+  resolved: boolean;
+  outdated: boolean;
+  createdAt: string;
+}
+
+export interface GithubPullRequestReviewContext {
+  state: string;
+  mergedAt: string | null;
+  reviewDecision: string | null;
+  headSha: string;
+  viewerReviewState: string | null;
+  viewerReviewSha: string | null;
+  otherApprovals: number;
+  discussionWatermark: string;
+  findings: GithubReviewFinding[];
+}
+
+export function isAiReviewComment(author: string, body: string): boolean {
+  return /(?:^|[-_])(claude|gemini|codex|copilot|coderabbit|chatgpt|ai)(?:[-_]|$)/i.test(author)
+    || /generated by (?:barber|[^\n]{0,30}\bai\b)|🤖|—\s*(?:claude|codex|gemini)/i.test(body);
+}
+
+export function summarizeReviewComment(body: string): string {
+  const heading = body.match(/^#{1,6}\s+(.+)$/m)?.[1];
+  const clean = (heading || body)
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/```[^]*?```/g, '')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/[#>*_`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return clean.length <= 180 ? clean : `${clean.slice(0, 179).trimEnd()}…`;
+}
+
+const reviewContextQuery = `
+query($owner:String!, $repo:String!, $number:Int!, $cursor:String) {
+  viewer { login }
+  repository(owner:$owner, name:$repo) {
+    pullRequest(number:$number) {
+      state mergedAt reviewDecision headRefOid author { login }
+      latestReviews(first:100) { nodes { author { login } state commit { oid } } }
+      comments(last:100) { nodes { id fullDatabaseId updatedAt author { login } authorAssociation } }
+      reviews(last:100) { nodes { id fullDatabaseId updatedAt author { login } authorAssociation } }
+      reviewThreads(first:100, after:$cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          isResolved isOutdated
+          comments(first:1) {
+            nodes { databaseId id fullDatabaseId url path line originalLine body createdAt updatedAt author { login } authorAssociation }
+          }
+          recentComments: comments(last:100) {
+            nodes { databaseId id fullDatabaseId url path line originalLine body createdAt updatedAt author { login } authorAssociation }
+          }
+        }
+      }
+    }
+  }
+}`;
+
+export async function fetchPullRequestReviewContext(
+  repository: string,
+  number: number,
+): Promise<GithubPullRequestReviewContext> {
+  const [owner, repo] = splitRepository(repository);
+  let cursor: string | null = null;
+  let pullRequest: {
+    state: string;
+    mergedAt: string | null;
+    reviewDecision: string | null;
+    headRefOid: string;
+    author: { login: string } | null;
+    comments: { nodes: DiscussionEntry[] };
+    reviews: { nodes: DiscussionEntry[] };
+    latestReviews: { nodes: GithubLatestReviewNode[] };
+  } | null = null;
+  let viewerLogin = '';
+  const threads: ReviewThreadNode[] = [];
+  do {
+    const args = [
+      'api', 'graphql',
+      '-f', `query=${reviewContextQuery}`,
+      '-F', `owner=${owner}`,
+      '-F', `repo=${repo}`,
+      '-F', `number=${number}`,
+    ];
+    if (cursor) args.push('-F', `cursor=${cursor}`);
+    const raw = await gh(args);
+    const result = JSON.parse(raw) as {
+      data: { viewer: { login: string }; repository: { pullRequest: {
+        state: string;
+        mergedAt: string | null;
+        reviewDecision: string | null;
+        headRefOid: string;
+        author: { login: string } | null;
+        comments: { nodes: DiscussionEntry[] };
+        reviews: { nodes: DiscussionEntry[] };
+        latestReviews: { nodes: GithubLatestReviewNode[] };
+        reviewThreads: {
+          nodes: ReviewThreadNode[];
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        };
+      } | null } | null };
+    };
+    const page = result.data.repository?.pullRequest;
+    if (!page) throw new Error(`${repository}#${number} was not found`);
+    pullRequest = page;
+    viewerLogin = result.data.viewer.login;
+    threads.push(...page.reviewThreads.nodes);
+    cursor = page.reviewThreads.pageInfo.hasNextPage ? page.reviewThreads.pageInfo.endCursor : null;
+  } while (cursor);
+
+  const findings = threads.flatMap((thread) => {
+    const comment = thread.comments.nodes[0];
+    if (!comment || !isAiReviewComment(comment.author?.login || '', comment.body)) return [];
+    return [{
+      remoteId: comment.databaseId,
+      author: comment.author?.login || 'AI reviewer',
+      body: comment.body,
+      summary: summarizeReviewComment(comment.body),
+      url: comment.url,
+      path: comment.path,
+      line: comment.line || comment.originalLine,
+      resolved: thread.isResolved,
+      outdated: thread.isOutdated,
+      createdAt: comment.createdAt,
+    }];
+  });
+  const discussionNode: GithubDiscussionNode = {
+    number,
+    author: pullRequest.author,
+    comments: pullRequest.comments,
+    reviews: pullRequest.reviews,
+    reviewThreads: { nodes: threads.map((thread) => ({ comments: { nodes: thread.recentComments.nodes } })) },
+  };
+  const self = viewerLogin.toLowerCase();
+  const viewerReview = pullRequest.latestReviews.nodes.find(
+    (review) => review.author?.login.toLowerCase() === self,
+  );
+  const otherApprovals = pullRequest.latestReviews.nodes.filter((review) =>
+    review.author?.login.toLowerCase() !== self
+      && review.state === 'APPROVED'
+      && review.commit?.oid === pullRequest.headRefOid,
+  ).length;
+  return {
+    state: pullRequest.state,
+    mergedAt: pullRequest.mergedAt,
+    reviewDecision: pullRequest.reviewDecision,
+    headSha: pullRequest.headRefOid,
+    viewerReviewState: viewerReview?.state ?? null,
+    viewerReviewSha: viewerReview?.commit?.oid ?? null,
+    otherApprovals,
+    discussionWatermark: discussionWatermark(discussionNode, viewerLogin),
+    findings,
+  };
 }
 
 interface ContributionNode {
