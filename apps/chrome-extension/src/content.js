@@ -1,5 +1,4 @@
 let lastSelection;
-let lastReviewSignalAt = 0;
 
 function selectionSnapshot() {
   const selection = window.getSelection();
@@ -41,32 +40,41 @@ document.addEventListener('selectionchange', () => {
   }, 75);
 });
 
-function selectedReviewAction(form) {
-  const selected = form?.querySelector?.('[name="pull_request_review[event]"]:checked');
-  const value = selected?.value?.toLowerCase();
-  return ['approve', 'request_changes', 'comment'].includes(value) ? value : null;
-}
-
-function signalReviewSubmission(form) {
-  const reviewAction = selectedReviewAction(form);
-  const now = Date.now();
-  if (!reviewAction || now - lastReviewSignalAt < 1_000) return;
-  lastReviewSignalAt = now;
-  void chrome.runtime.sendMessage({ type: 'barbarian-review-submitted', reviewAction }).catch(() => {});
-}
-
-// GitHub's review dialog is rendered dynamically. Capture both the native
-// submit and the submit-button click so this survives its current form wiring.
-document.addEventListener('submit', (event) => {
-  signalReviewSubmission(event.target);
-}, true);
-document.addEventListener('click', (event) => {
-  const submit = event.target?.closest?.('button[type="submit"], input[type="submit"]');
-  if (submit?.form) signalReviewSubmission(submit.form);
-}, true);
-
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type !== 'barbarian-get-selection') return false;
   sendResponse(selectionSnapshot() || lastSelection || null);
   return false;
+});
+
+function isIssuePage() {
+  return /^\/[^/]+\/[^/]+\/issues\/\d+(?:\/|$)/.test(location.pathname);
+}
+
+function assigneeInteraction(event) {
+  const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+  const elements = [event.target, ...path].filter((value) => value instanceof Element);
+  return elements.some((element) => {
+    const clue = [
+      element.getAttribute('aria-label'), element.getAttribute('data-testid'),
+      element.getAttribute('title'), element.id, element.className,
+    ].filter((value) => typeof value === 'string').join(' ');
+    return /assignee|assign-yourself/i.test(clue);
+  });
+}
+
+let issueRefreshTimer;
+function signalIssueUpdate(delay = 150) {
+  clearTimeout(issueRefreshTimer);
+  issueRefreshTimer = setTimeout(() => {
+    if (!isIssuePage()) return;
+    void chrome.runtime.sendMessage({ type: 'barbarian-issue-updated', url: location.href }).catch(() => {});
+  }, delay);
+}
+
+document.addEventListener('click', (event) => {
+  if (isIssuePage() && assigneeInteraction(event)) signalIssueUpdate(250);
+}, true);
+
+document.addEventListener('turbo:submit-end', () => {
+  if (isIssuePage()) signalIssueUpdate(250);
 });

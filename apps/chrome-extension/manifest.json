@@ -3,7 +3,7 @@
   "name": "Barbarian Review Companion",
   "version": "0.3.0",
   "minimum_chrome_version": "114",
-  "description": "A native Barbarian review side panel for GitHub pull requests.",
+  "description": "A native Barbarian side panel for GitHub pull requests and issues.",
   "permissions": ["storage", "sidePanel", "tabs"],
   "host_permissions": ["http://127.0.0.1:4142/*"],
   "icons": {
@@ -25,7 +25,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://github.com/*/*/pull/*"],
+      "matches": ["https://github.com/*/*/pull/*", "https://github.com/*/*/issues/*"],
       "js": ["src/content.js"],
       "run_at": "document_idle"
     }

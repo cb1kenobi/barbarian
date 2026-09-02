@@ -77,6 +77,23 @@ describe('dashboard reviews', () => {
       VALUES ('github:Acme/storage#1','codex','code_review:new_pr','complete',
         '2026-01-02T04:00:00Z','2026-01-02T04:05:00Z')
     `).run();
+    database.connection.prepare(`
+      INSERT INTO agent_runs(review_id,provider,task,status,started_at)
+      VALUES ('github:Acme/storage#2','codex','code_review:new_pr','running','2026-01-02T05:00:00Z')
+    `).run();
+    database.connection.prepare(`
+      UPDATE review_queue SET status='agent_working', claim_owner='claim-3',
+        claimed_at='2026-01-02T05:30:00Z' WHERE number=3
+    `).run();
+    database.connection.prepare(`
+      UPDATE review_queue SET status='agent_working', claim_owner='claim-4',
+        claimed_at='2026-01-02T06:00:00Z' WHERE number=4
+    `).run();
+    database.connection.prepare(`
+      INSERT INTO agent_runs(review_id,provider,task,status,started_at,finished_at)
+      VALUES ('github:Acme/storage#4','codex','code_review:new_pr','complete',
+        '2026-01-02T06:00:01Z','2026-01-02T06:05:00Z')
+    `).run();
     const finding = database.connection.prepare(`
       INSERT INTO review_findings(
         id,review_id,remote_id,author,body,summary,url,resolved,outdated,created_at,updated_at
@@ -94,6 +111,7 @@ describe('dashboard reviews', () => {
         reviews: Array<Record<string, unknown>>;
         workQueue: Array<Record<string, unknown>>;
         repositories: Array<{ name: string; url: string }>;
+        activeReviews: Array<Record<string, unknown>>;
         metrics: { needsAttention: number; queuedIssues: number; reviewsNeedingApproval: number };
         statusDraft: { lines: string[] };
       };
@@ -110,6 +128,16 @@ describe('dashboard reviews', () => {
       expect(payload.repositories).toEqual([{
         name: 'Acme/storage', url: 'https://github.com/Acme/storage',
       }]);
+      expect(payload.activeReviews).toEqual([expect.objectContaining({
+        repository: 'Acme/storage', number: 2, agent: 'codex', model: 'CLI default',
+        started_at: '2026-01-02T05:00:00Z',
+      }), expect.objectContaining({
+        repository: 'Acme/storage', number: 3, agent: 'codex', model: 'CLI default',
+        started_at: '2026-01-02T05:30:00Z',
+      }), expect.objectContaining({
+        repository: 'Acme/storage', number: 4, agent: 'codex', model: 'CLI default',
+        started_at: '2026-01-02T06:00:01Z',
+      })]);
       expect(payload.metrics).toMatchObject({
         needsAttention: 515,
         queuedIssues: 15,
@@ -193,6 +221,58 @@ describe('browser context appearance', () => {
         },
         assessment: { label: 'Approved' },
       });
+    } finally {
+      await app.close();
+      database.close();
+    }
+  });
+});
+
+describe('browser issue context', () => {
+  it('refreshes an issue into the queue and persists its Issue Room messages', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-browser-issue-test-'));
+    directories.push(directory);
+    const database = new BarbarianDatabase(path.join(directory, 'test.db'));
+    let refreshed = 0;
+    const app = await createApp(database, new ConfigStore(config), undefined, {
+      refreshIssue: async (db, _configured, repository, number) => {
+        refreshed += 1;
+        const now = new Date().toISOString();
+        const id = `github:${repository}#${number}`;
+        db.connection.prepare(`
+          INSERT INTO work_items(
+            id, provider, repository, number, kind, title, body, simple_summary, url,
+            assignees, priority, priority_reasons, status, remote_state, payload_json,
+            first_seen_at, updated_at, last_seen_at
+          ) VALUES (?, 'github', ?, ?, 'issue', 'Prevent lost writes', 'Details',
+            'Writes can disappear after restart; this issue tracks making them safe.', ?,
+            '["cb1kenobi"]', 160, '["data integrity +150"]', 'queued', 'OPEN', '{}', ?, ?, ?)
+        `).run(id, repository, number, `https://github.com/${repository}/issues/${number}`, now, now, now);
+        return { id, tracked: true };
+      },
+    });
+    try {
+      const issueUrl = 'https://github.com/Acme/storage/issues/42';
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/browser/issue-context?url=${encodeURIComponent(issueUrl)}&refresh=1`,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(refreshed).toBe(1);
+      expect(response.json()).toMatchObject({
+        kind: 'issue', tracked: true,
+        issue: { number: 42, assignees: ['cb1kenobi'], simple_summary: expect.any(String) },
+      });
+
+      const chat = await app.inject({
+        method: 'POST',
+        url: '/api/issues/github%3AAcme%2Fstorage%2342/chat',
+        payload: { message: 'What is the risk?', author: 'GitHub extension', askAgent: false },
+      });
+      expect(chat.statusCode).toBe(200);
+      expect(database.connection.prepare(`
+        SELECT author, content FROM issue_chat_messages WHERE work_item_id='github:Acme/storage#42'
+      `).get()).toEqual({ author: 'GitHub extension', content: 'What is the risk?' });
     } finally {
       await app.close();
       database.close();

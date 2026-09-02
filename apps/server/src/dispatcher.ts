@@ -49,6 +49,7 @@ export class ReviewDispatcher {
   private pumping = false;
   private stopped = false;
   private retryTimer: NodeJS.Timeout | undefined;
+  private reviewChanged: (reviewId: string) => void = () => undefined;
 
   constructor(
     private readonly database: BarbarianDatabase,
@@ -61,6 +62,15 @@ export class ReviewDispatcher {
   }
 
   private readonly configSource: () => BarbarianConfig;
+
+  setReviewChangedListener(listener: (reviewId: string) => void): void {
+    this.reviewChanged = listener;
+  }
+
+  private publishReviewChanged(reviewId: string): void {
+    try { this.reviewChanged(reviewId); }
+    catch (error) { this.log.error(error, `could not publish review update for ${reviewId}`); }
+  }
 
   recoverInterruptedRuns(): void {
     const config = this.configSource();
@@ -142,6 +152,7 @@ export class ReviewDispatcher {
         WHERE review_id=? AND status='running'
       `).run(now, reviewId);
       this.database.connection.exec('COMMIT');
+      if (result.changes) this.publishReviewChanged(reviewId);
       return { found: Boolean(result.changes), stopped: Boolean(result.changes), cancelled };
     } catch (error) {
       this.database.connection.exec('ROLLBACK');
@@ -159,13 +170,14 @@ export class ReviewDispatcher {
       while (!this.stopped && this.runtime.availableSlots > 0) {
         const claim = this.claimNext(config);
         if (!claim) break;
+        this.publishReviewChanged(claim.reviewId);
         void this.runtime.run((signal) => this.runner(this.database, config, claim, signal), claim.reviewId)
           .catch((error) => {
             if (!(error instanceof Error && error.name === 'AbortError')) {
               this.log.error(error, `review agent failed for ${claim.reviewId}`);
             }
           })
-          .finally(() => { void this.pump(); });
+          .finally(() => { this.publishReviewChanged(claim.reviewId); void this.pump(); });
       }
     } catch (error) {
       this.log.error(error, 'review dispatcher pump failed');

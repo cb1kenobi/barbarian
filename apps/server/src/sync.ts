@@ -1,13 +1,13 @@
 import type { BarbarianDatabase } from './database.js';
 import type { BarbarianConfig, DiscoveryResult, DiscoveredIssue, DiscoveredPullRequest } from './types.js';
-import { discoverGithub, discoverGithubActivity, fetchPullRequestState } from './github.js';
+import { discoverGithub, discoverGithubActivity, fetchGithubIssueContext, fetchPullRequestState } from './github.js';
 import { recordActivity } from './activity.js';
 import { explainPullRequest, simplify, summarizePullRequest } from './summary.js';
 import { discoverLinear } from './linear.js';
 import { refreshReviewContext } from './review-context.js';
 import { viewerApprovedCurrentHead, viewerRequestedChangesCurrentHead } from './review-state.js';
 
-function issueId(issue: DiscoveredIssue): string {
+export function issueId(issue: DiscoveredIssue): string {
   return `${issue.provider}:${issue.repository}#${issue.number}`;
 }
 
@@ -19,32 +19,60 @@ function hasInProgressLabel(labels: string[]): boolean {
   return labels.some((label) => /^(?:in[ -]?progress|doing|status[: /-]*in[ -]?progress)$/i.test(label.trim()));
 }
 
-function upsertIssue(database: BarbarianDatabase, issue: DiscoveredIssue, seenAt: string): void {
+export function upsertIssue(
+  database: BarbarianDatabase,
+  issue: DiscoveredIssue,
+  seenAt: string,
+  remoteState = 'OPEN',
+): void {
   const id = issueId(issue);
-  const existed = database.connection.prepare('SELECT 1 FROM work_items WHERE id = ?').get(id);
+  const existing = database.connection.prepare('SELECT remote_state FROM work_items WHERE id = ?').get(id) as { remote_state: string } | undefined;
+  const status = remoteState === 'OPEN'
+    ? issue.fixedBy ? 'already_fixed' : issue.duplicateOf ? 'duplicate'
+      : issue.inProgressPr || hasInProgressLabel(issue.labels) ? 'in_progress' : 'queued'
+    : 'unavailable';
   database.connection.prepare(`
     INSERT INTO work_items(
       id, provider, repository, number, kind, title, body, simple_summary, url, assignees,
       priority, priority_reasons, status, milestone, duplicate_of, in_progress_pr,
       fixed_by, remote_state, payload_json, first_seen_at, updated_at, last_seen_at
-    ) VALUES (?, ?, ?, ?, 'issue', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, 'issue', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       title=excluded.title, body=excluded.body, simple_summary=excluded.simple_summary,
       url=excluded.url, assignees=excluded.assignees,
       priority=excluded.priority, priority_reasons=excluded.priority_reasons,
       milestone=excluded.milestone, duplicate_of=excluded.duplicate_of,
       in_progress_pr=excluded.in_progress_pr, fixed_by=excluded.fixed_by,
-      remote_state='OPEN', payload_json=excluded.payload_json,
+      status=CASE
+        WHEN excluded.remote_state<>'OPEN' OR work_items.remote_state<>'OPEN' THEN excluded.status
+        ELSE work_items.status END,
+      remote_state=excluded.remote_state, payload_json=excluded.payload_json,
       updated_at=excluded.updated_at, last_seen_at=excluded.last_seen_at
   `).run(
     id, issue.provider, issue.repository, issue.number, issue.title, issue.body,
     simplify(issue.title, issue.body), issue.url, JSON.stringify(issue.assignees), issue.priority, JSON.stringify(issue.priorityReasons),
-    issue.fixedBy ? 'already_fixed' : issue.duplicateOf ? 'duplicate'
-      : issue.inProgressPr || hasInProgressLabel(issue.labels) ? 'in_progress' : 'queued',
-    issue.milestone, issue.duplicateOf, issue.inProgressPr, issue.fixedBy, JSON.stringify(issue),
+    status, issue.milestone, issue.duplicateOf, issue.inProgressPr, issue.fixedBy, remoteState, JSON.stringify(issue),
     seenAt, issue.updatedAt, seenAt,
   );
-  if (!existed) recordActivity(database, 'issue_discovered', `${issue.repository}#${issue.number} added to the work queue`, id);
+  if (remoteState === 'OPEN' && existing?.remote_state !== 'OPEN') {
+    recordActivity(database, 'issue_discovered', `${issue.repository}#${issue.number} added to the work queue`, id);
+  }
+}
+
+export async function refreshGithubIssue(
+  database: BarbarianDatabase,
+  config: BarbarianConfig,
+  repositoryName: string,
+  number: number,
+): Promise<{ id: string; tracked: boolean }> {
+  const repository = config.repositories.find((candidate) => candidate.name.toLowerCase() === repositoryName.toLowerCase());
+  if (!repository?.watchIssues) throw new Error(`${repositoryName} is not configured for issue tracking`);
+  const context = await fetchGithubIssueContext(repository, number);
+  const tracked = context.state === 'OPEN' && context.assignedToViewerOrUnassigned;
+  const remoteState = tracked ? 'OPEN' : context.state === 'OPEN' ? 'UNTRACKED' : context.state;
+  const seenAt = new Date().toISOString();
+  upsertIssue(database, context.issue, seenAt, remoteState);
+  return { id: issueId(context.issue), tracked };
 }
 
 function configuredSkill(config: BarbarianConfig, repository: string): string {

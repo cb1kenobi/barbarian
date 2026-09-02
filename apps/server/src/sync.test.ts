@@ -51,6 +51,12 @@ describe('applyDiscovery', () => {
       { number: 3, status: 'already_fixed', assignees: '[]' },
       { number: 4, status: 'duplicate', assignees: '[]' },
     ]);
+    await applyDiscovery(db, config, { ...result, discoveredAt: '2026-08-31T12:01:00Z', issues: [] });
+    expect(db.connection.prepare('SELECT status, remote_state FROM work_items WHERE number=1').get())
+      .toEqual({ status: 'unavailable', remote_state: 'MISSING' });
+    await applyDiscovery(db, config, { ...result, discoveredAt: '2026-08-31T12:02:00Z' });
+    expect(db.connection.prepare('SELECT status, remote_state FROM work_items WHERE number=1').get())
+      .toEqual({ status: 'queued', remote_state: 'OPEN' });
     db.close();
   });
 

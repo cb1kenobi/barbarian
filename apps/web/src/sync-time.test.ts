@@ -18,7 +18,7 @@ describe('sync timing labels', () => {
   });
 
   it('shows active and due states without seconds', () => {
-    expect(formatNextSync(null)).toBe('Syncing now…');
+    expect(formatNextSync(null)).toBe('Next sync right now');
     expect(formatNextSync('2026-08-31T14:42:37.000Z', Date.parse('2026-08-31T14:42:38.000Z')))
       .toBe('Next sync due now');
   });

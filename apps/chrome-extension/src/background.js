@@ -1,8 +1,8 @@
-import { githubPullRequestKey, isAllowedApiMessage } from './api-policy.js';
-import { reviewActionIsVisible } from './review-events.js';
+import { githubPageContext, githubPullRequestKey, isAllowedApiMessage } from './api-policy.js';
 
 const endpoint = 'http://127.0.0.1:4142';
 const panelPath = 'src/sidepanel.html';
+const recentNavigationRefreshes = new Map();
 
 async function activeTab() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -53,27 +53,26 @@ async function activeSelection(sender) {
   catch { return null; }
 }
 
-async function refreshSubmittedReview(sender, reviewAction) {
+async function refreshLoadedPage(sender, pageUrl) {
   const tab = sender.tab;
-  const key = githubPullRequestKey(tab?.url || '');
-  if (!tab?.url || !key) return { ok: false };
-  for (const delay of [350, 1_000, 2_500, 5_000]) {
-    await new Promise((resolve) => setTimeout(resolve, delay));
-    const result = await proxyApi({
-      type: 'barbarian-api',
-      path: `/api/browser/context?url=${encodeURIComponent(tab.url)}&refresh=1`,
-    }, sender);
-    if (!result.ok) continue;
-    await chrome.runtime.sendMessage({
-      type: 'barbarian-context-updated', key, context: result.body,
-    }).catch(() => {});
-    if (reviewActionIsVisible(result.body, reviewAction)) return { ok: true };
-  }
-  return { ok: false };
+  const url = pageUrl || tab?.url || '';
+  const context = githubPageContext(url);
+  const tabContext = githubPageContext(tab?.url || '');
+  if (!tab?.url || !context || !tabContext || tabContext.kind !== context.kind || tabContext.key !== context.key) return { ok: false };
+  const endpointPath = context.kind === 'issue' ? '/api/browser/issue-context' : '/api/browser/context';
+  const result = await proxyApi({
+    type: 'barbarian-api',
+    path: `${endpointPath}?url=${encodeURIComponent(url)}&refresh=1`,
+  }, sender);
+  if (!result.ok) return result;
+  await chrome.runtime.sendMessage({
+    type: 'barbarian-context-updated', key: context.key, kind: context.kind, context: result.body,
+  }).catch(() => {});
+  return { ok: true };
 }
 
 async function configureTab(tabId, url) {
-  const enabled = Boolean(githubPullRequestKey(url || ''));
+  const enabled = Boolean(githubPageContext(url || ''));
   await chrome.sidePanel.setOptions(enabled
     ? { tabId, path: panelPath, enabled: true }
     : { tabId, enabled: false });
@@ -90,14 +89,29 @@ chrome.runtime.onInstalled.addListener(() => {
   )))).catch(() => {});
 });
 chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
-  if (change.url || change.status === 'complete') void configureTab(tabId, change.url || tab.url).catch(() => {});
+  if (!change.url && change.status !== 'complete') return;
+  const url = change.url || tab.url || '';
+  void configureTab(tabId, url).catch(() => {});
+  if (!githubPageContext(url)) return;
+  const now = Date.now();
+  const recent = recentNavigationRefreshes.get(tabId);
+  if (recent?.url === url && now - recent.at < 1_500) return;
+  recentNavigationRefreshes.set(tabId, { url, at: now });
+  void refreshLoadedPage({ tab: { ...tab, id: tabId, url } }, url).catch(() => {});
 });
+chrome.tabs.onRemoved.addListener((tabId) => recentNavigationRefreshes.delete(tabId));
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'barbarian-api') void proxyApi(message, sender).then(sendResponse);
   else if (message?.type === 'barbarian-active-selection') void activeSelection(sender).then(sendResponse);
-  else if (message?.type === 'barbarian-review-submitted') {
-    void refreshSubmittedReview(sender, message.reviewAction).then(sendResponse);
+  else if (message?.type === 'barbarian-issue-updated' && sender.tab) {
+    const page = githubPageContext(sender.tab.url || '');
+    if (page?.kind !== 'issue') { sendResponse({ ok: false }); return false; }
+    const refresh = () => refreshLoadedPage(sender, sender.tab?.url).catch(() => {});
+    refresh();
+    setTimeout(refresh, 700);
+    setTimeout(refresh, 2_000);
+    sendResponse({ ok: true });
   }
   else return false;
   return true;

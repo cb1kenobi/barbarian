@@ -152,6 +152,8 @@ agents:
       args: [-p]
 ```
 
+Add an optional `model` to a provider when its CLI arguments do not name the model explicitly. This is display metadata for active reviews in the dashboard; otherwise Barbarian reads `--model`/`-m` from `args` or displays `CLI default`.
+
 Provider API keys are optional because Barbarian launches local CLI programs. A CLI authenticated through its own login flow—such as `codex login` using ChatGPT—does not need an API key in `.env`. Put a provider key there only when that CLI is configured to use one. Barbarian inherits the environment but never returns secrets from its settings API.
 
 Automatic review is off by default for existing installations so an upgrade cannot begin spending agent usage unexpectedly. Set `agents.autoReview: true` to enable it. Barbarian runs agents only while an eligible event is being handled; a healthy idle system can therefore show zero running agents even though monitoring remains active.

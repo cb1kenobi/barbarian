@@ -5,7 +5,8 @@ import { shouldSubmitQuestion } from './chat-input.js';
 import { selectionLabel, selectionPromptContext } from './selection-context.js';
 
 let currentTab;
-let currentPrKey = '';
+let currentPageKey = '';
+let currentPageKind = '';
 let currentContext;
 let busy = false;
 let lastSelection;
@@ -14,13 +15,46 @@ const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, (character)
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;',
 })[character]);
 
-function parsePullRequest(url = '') {
+function parseGitHubPage(url = '') {
   try {
     const parsed = new URL(url);
     if (parsed.origin !== 'https://github.com') return null;
-    const match = parsed.pathname.match(/^\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/|$)/);
-    return match ? { key: `${match[1]}/${match[2]}#${match[3]}` } : null;
+    const pullRequest = parsed.pathname.match(/^\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/|$)/);
+    if (pullRequest) return { kind: 'pullRequest', key: `${pullRequest[1]}/${pullRequest[2]}#${pullRequest[3]}` };
+    const issue = parsed.pathname.match(/^\/([^/]+)\/([^/]+)\/issues\/(\d+)(?:\/|$)/);
+    return issue ? { kind: 'issue', key: `${issue[1]}/${issue[2]}#${issue[3]}` } : null;
   } catch { return null; }
+}
+
+function renderIssueContext(context) {
+  const main = document.querySelector('main');
+  if (!context.issue) {
+    main.innerHTML = context.configured === false
+      ? '<p class="empty">This repository is not configured for issue tracking in <code>config/barbarian.yaml</code>.</p>'
+      : '<p class="empty">This issue is not available in Barbarian yet.</p>';
+    return;
+  }
+  const { issue, messages = [] } = context;
+  const closed = issue.remote_state !== 'OPEN' && issue.remote_state !== 'UNTRACKED';
+  const status = closed ? 'Closed' : context.tracked ? 'In issue queue' : 'Not in issue queue';
+  const tone = context.tracked ? 'attention' : 'quiet';
+  const assignees = Array.isArray(issue.assignees) && issue.assignees.length ? issue.assignees.join(', ') : 'No one';
+  const reasons = Array.isArray(issue.priority_reasons) && issue.priority_reasons.length
+    ? issue.priority_reasons.join(' · ') : 'No priority signals';
+  main.innerHTML = `
+    <div class="status ${tone}">${escapeHtml(status)}</div>
+    <section><h2>Summary</h2><p class="summary">${escapeHtml(issue.simple_summary || issue.title)}</p></section>
+    <section><h2>Issue context</h2><dl class="issue-context"><div><dt>Assigned to</dt><dd>${escapeHtml(assignees)}</dd></div><div><dt>Priority</dt><dd>${Number(issue.priority) || 0} · ${escapeHtml(reasons)}</dd></div>${issue.milestone ? `<div><dt>Milestone</dt><dd>${escapeHtml(issue.milestone)}</dd></div>` : ''}${issue.duplicate_of ? `<div><dt>Duplicate of</dt><dd>${escapeHtml(issue.duplicate_of)}</dd></div>` : ''}${issue.in_progress_pr ? `<div><dt>Pull request</dt><dd><a href="${escapeHtml(issue.in_progress_pr)}" data-github-url>In progress</a></dd></div>` : ''}${issue.fixed_by ? `<div><dt>Fixed by</dt><dd><a href="${escapeHtml(issue.fixed_by)}" data-github-url>Merged pull request</a></dd></div>` : ''}</dl></section>
+    <section class="review-room"><h2>Issue Room</h2><div class="conversation">${renderMessages(messages)}<div class="reply"><span class="reply-label">AGENT REPLY</span><div class="reply-text"></div></div></div><textarea placeholder="Ask about the problem, likely causes, scope, or how to verify a fix…"></textarea><p class="error"></p></section>`;
+  document.querySelector('textarea')?.addEventListener('keydown', (event) => {
+    if (!shouldSubmitQuestion(event.key, event.shiftKey, event.isComposing)) return;
+    event.preventDefault();
+    void sendQuestion('issue');
+  });
+  document.querySelectorAll('[data-github-url]').forEach((link) => link.addEventListener('click', (event) => {
+    event.preventDefault();
+    if (currentTab?.id) void chrome.tabs.update(currentTab.id, { url: link.href });
+  }));
 }
 
 async function activeTab() {
@@ -92,6 +126,10 @@ function updateSelectionPreview() {
 function renderContext(context) {
   applyAppearance(context.appearance);
   currentContext = context;
+  if (context.kind === 'issue') {
+    renderIssueContext(context);
+    return;
+  }
   const main = document.querySelector('main');
   if (!context.review) {
     main.innerHTML = '<p class="empty">This pull request is not in Barbarian’s review queue. Run a sync after adding its repository to <code>config/barbarian.yaml</code>.</p>';
@@ -202,14 +240,14 @@ async function captureSelection() {
 }
 
 async function sendQuestion(kind) {
-  if (busy || !currentContext?.review) return;
+  if (busy || (!currentContext?.review && !currentContext?.issue)) return;
   const input = document.querySelector('textarea');
   const error = document.querySelector('.error');
   const reply = document.querySelector('.reply');
   const replyText = document.querySelector('.reply-text');
   const question = input?.value.trim() || '';
   if (kind === 'selection') await captureSelection();
-  if (kind === 'pr' && !question) { error.textContent = 'Write a question first.'; input?.focus(); return; }
+  if ((kind === 'pr' || kind === 'issue') && !question) { error.textContent = 'Write a question first.'; input?.focus(); return; }
   if (kind === 'selection' && !lastSelection) { error.textContent = 'Select lines on the GitHub page first.'; return; }
   const selectionContext = kind === 'selection' ? selectionPromptContext(lastSelection) : '';
   const message = `${question || 'Explain this selected code and how it relates to the pull request.'}${selectionContext}`;
@@ -218,7 +256,10 @@ async function sendQuestion(kind) {
   reply?.classList.remove('visible');
   document.querySelectorAll('button').forEach((button) => { button.disabled = true; });
   try {
-    const result = await api(`/api/reviews/${encodeURIComponent(currentContext.review.id)}/chat`, {
+    const chatPath = currentContext.issue
+      ? `/api/issues/${encodeURIComponent(currentContext.id)}/chat`
+      : `/api/reviews/${encodeURIComponent(currentContext.review.id)}/chat`;
+    const result = await api(chatPath, {
       method: 'POST', body: JSON.stringify({ message, askAgent: true, author: 'GitHub extension' }),
     });
     if (input) input.value = '';
@@ -233,43 +274,48 @@ async function sendQuestion(kind) {
   }
 }
 
-async function refresh({ quiet = false } = {}) {
+async function refresh({ quiet = false, remote = false } = {}) {
   if (busy) return;
   const tab = await activeTab();
-  const pr = parsePullRequest(tab?.url);
+  const page = parseGitHubPage(tab?.url);
   currentTab = tab;
-  if (!pr) {
-    currentPrKey = '';
+  if (!page) {
+    currentPageKey = '';
+    currentPageKind = '';
     currentContext = undefined;
-    document.querySelector('.pr-key').textContent = 'GitHub review';
-    document.querySelector('main').innerHTML = '<p class="empty">Open a tracked GitHub pull request to use Barbarian.</p>';
+    document.querySelector('.pr-key').textContent = 'GitHub';
+    document.querySelector('main').innerHTML = '<p class="empty">Open a GitHub pull request or issue to use Barbarian.</p>';
     return;
   }
-  if (pr.key !== currentPrKey) {
-    currentPrKey = pr.key;
+  if (page.key !== currentPageKey || page.kind !== currentPageKind) {
+    currentPageKey = page.key;
+    currentPageKind = page.kind;
     currentContext = undefined;
     lastSelection = undefined;
   }
-  document.querySelector('.pr-key').textContent = pr.key;
+  document.querySelector('.pr-key').textContent = page.key;
   try {
-    renderContext(await api(`/api/browser/context?url=${encodeURIComponent(tab.url)}`));
+    const refreshQuery = remote ? '&refresh=1' : '';
+    const endpoint = page.kind === 'issue' ? '/api/browser/issue-context' : '/api/browser/context';
+    renderContext(await api(`${endpoint}?url=${encodeURIComponent(tab.url)}${refreshQuery}`));
   } catch (caught) {
     if (quiet && currentContext) return;
     document.querySelector('main').innerHTML = `<p class="offline"><strong>Barbarian is offline.</strong>${escapeHtml(caught.message)}</p><p class="empty">Start the local server and this panel will reconnect automatically.</p>`;
   }
 }
 
-chrome.tabs.onActivated.addListener(() => void refresh());
+chrome.tabs.onActivated.addListener(() => void refresh({ remote: true }));
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (tabId === currentTab?.id && (change.url || change.status === 'complete')) void refresh();
 });
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === 'barbarian-context-updated' && message.key === currentPrKey && message.context) {
+  if (message?.type === 'barbarian-context-updated' && message.key === currentPageKey
+    && message.kind === currentPageKind && message.context) {
     renderContext(message.context);
-  } else if (message?.type === 'barbarian-selection-changed' && parsePullRequest(message.url)?.key === currentPrKey) {
+  } else if (message?.type === 'barbarian-selection-changed' && parseGitHubPage(message.url)?.key === currentPageKey) {
     lastSelection = message.selection?.text ? message.selection : undefined;
     updateSelectionPreview();
   }
 });
 setInterval(() => { if (!document.hidden && !busy && !document.querySelector('textarea')?.value) void refresh({ quiet: true }); }, 30_000);
-void refresh();
+void refresh({ remote: true });

@@ -8,8 +8,8 @@ import { z, ZodError } from 'zod';
 import type { BarbarianDatabase } from './database.js';
 import type { BarbarianConfig, ReviewStatus } from './types.js';
 import { ConfigConflictError, ConfigStore, projectRoot, type WritableConfig } from './config.js';
-import { synchronize } from './sync.js';
-import { askAgent } from './agents.js';
+import { refreshGithubIssue, synchronize } from './sync.js';
+import { askAgent, askIssueAgent } from './agents.js';
 import { AgentRuntime } from './agent-runtime.js';
 import { ReviewDispatcher, reviewTrigger } from './dispatcher.js';
 import { cleanupWorkspace, prepareWorkspace } from './workspaces.js';
@@ -19,6 +19,7 @@ import { buildReviewAssessment, refreshReviewContext, storedReviewFindings } fro
 import { displayReviewStatus, reviewPriorityScore } from './review-state.js';
 import { reviewCardMetadata, type ReviewCardMetadata } from './review-card-metadata.js';
 import { fixedIssueReferences } from './fixed-issues.js';
+import { configuredAgentModel } from './agent-display.js';
 import {
   askLocalBranchAgent,
   LocalBranchInputError,
@@ -223,7 +224,10 @@ export async function createApp(
     runtime?: AgentRuntime;
     dispatcher?: ReviewDispatcher;
     onConfigUpdated?: (previous: BarbarianConfig, next: BarbarianConfig) => void | Promise<void>;
+    onManualSyncStarted?: () => void;
+    onManualSyncFinished?: () => void;
     refreshReview?: typeof refreshReviewContext;
+    refreshIssue?: typeof refreshGithubIssue;
   } = {},
 ) {
   const app = Fastify({ logger: true, bodyLimit: 2 * 1024 * 1024 });
@@ -231,11 +235,17 @@ export async function createApp(
   const runtime = services.runtime || new AgentRuntime(initialConfig.agents.maxConcurrent);
   const dispatcher = services.dispatcher || new ReviewDispatcher(database, () => configStore.get(), runtime, app.log);
   const refreshReview = services.refreshReview || refreshReviewContext;
+  const refreshIssue = services.refreshIssue || refreshGithubIssue;
   const dashboardClients = new Set<ServerResponse>();
   const publishReviewUpdated = (id: string) => {
     const message = `event: review-updated\ndata: ${JSON.stringify({ id })}\n\n`;
     for (const client of dashboardClients) client.write(message);
   };
+  const publishDashboardUpdated = (id: string) => {
+    const message = `event: dashboard-updated\ndata: ${JSON.stringify({ id })}\n\n`;
+    for (const client of dashboardClients) client.write(message);
+  };
+  dispatcher.setReviewChangedListener(publishReviewUpdated);
   await app.register(cors, {
     origin(origin, callback) {
       const allowed = !origin || /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin)
@@ -284,9 +294,34 @@ export async function createApp(
     const lastSync = database.connection.prepare(`
       SELECT * FROM sync_runs WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1
     `).get();
-    const agentWorking = Number((database.connection.prepare(
-      "SELECT COUNT(*) AS total FROM agent_runs WHERE status='running'",
-    ).get() as { total: number }).total);
+    const activeReviews = (database.connection.prepare(`
+      SELECT review_queue.id, review_queue.repository, review_queue.number, review_queue.title,
+        review_queue.url, COALESCE(agent_runs.provider, ?) AS agent,
+        COALESCE(agent_runs.started_at, review_queue.claimed_at, review_queue.updated_at) AS started_at
+      FROM review_queue
+      LEFT JOIN agent_runs ON agent_runs.id=(
+        SELECT candidate.id FROM agent_runs AS candidate
+        WHERE candidate.review_id=review_queue.id AND candidate.task LIKE 'code_review:%'
+          AND (review_queue.claimed_at IS NULL OR candidate.started_at>=review_queue.claimed_at)
+        ORDER BY candidate.id DESC LIMIT 1
+      )
+      WHERE review_queue.remote_state='OPEN' AND (
+        review_queue.status='agent_working' OR review_queue.claim_owner IS NOT NULL
+        OR agent_runs.status='running'
+      )
+      ORDER BY COALESCE(agent_runs.started_at, review_queue.claimed_at, review_queue.updated_at) ASC
+    `).all(config.agents.default) as Array<{
+      id: string; repository: string; number: number; title: string; url: string;
+      agent: string; started_at: string;
+    }>).map((run) => ({
+      ...run,
+      model: configuredAgentModel(config, run.agent),
+    }));
+    const activeNonReviewAgents = Number((database.connection.prepare(`
+      SELECT COUNT(*) AS total FROM agent_runs
+      WHERE status='running' AND task NOT LIKE 'code_review:%'
+    `).get() as { total: number }).total);
+    const agentWorking = activeReviews.length + activeNonReviewAgents;
     const waiting = Number((database.connection.prepare(`
       SELECT COUNT(*) AS total FROM review_queue
       WHERE status IN ('issues_found','awaiting_feedback') AND remote_state='OPEN'
@@ -309,6 +344,7 @@ export async function createApp(
         name: repository.name,
         url: `https://github.com/${repository.name.split('/').map(encodeURIComponent).join('/')}`,
       })),
+      activeReviews,
       workQueue,
       reviews,
       metrics: { needsAttention, queuedIssues, reviewsNeedingApproval, agentWorking, waiting, previousWorkday: draft.stats },
@@ -319,10 +355,15 @@ export async function createApp(
   });
 
   app.post('/api/sync', async (_request, reply) => {
-    const config = configStore.get();
-    const result = await synchronize(database, config);
-    await dispatcher.pump();
-    return reply.send(result);
+    services.onManualSyncStarted?.();
+    try {
+      const config = configStore.get();
+      const result = await synchronize(database, config);
+      await dispatcher.pump();
+      return reply.send(result);
+    } finally {
+      services.onManualSyncFinished?.();
+    }
   });
 
   app.get('/api/work-items', async () => database.connection.prepare(`
@@ -475,6 +516,76 @@ export async function createApp(
       appearance: config.appearance,
       ...reviewContextPayload(database, config, review as Record<string, unknown>),
       messages,
+    };
+  });
+
+  app.get('/api/browser/issue-context', async (request, reply) => {
+    const config = configStore.get();
+    const query = z.object({
+      url: z.string().url(),
+      refresh: z.enum(['1', 'true']).optional(),
+    }).parse(request.query);
+    const parsed = new URL(query.url);
+    const match = parsed.hostname === 'github.com'
+      ? parsed.pathname.match(/^\/([^/]+)\/([^/]+)\/issues\/(\d+)(?:\/|$)/)
+      : null;
+    if (!match) return reply.code(400).send({ error: 'Not a GitHub issue URL' });
+    const repository = `${match[1]}/${match[2]}`;
+    const number = Number(match[3]);
+    const id = `github:${repository}#${number}`;
+    const configured = config.repositories.some((candidate) =>
+      candidate.name.toLowerCase() === repository.toLowerCase() && candidate.watchIssues,
+    );
+    if (!configured) {
+      return { kind: 'issue', id, appearance: config.appearance, configured: false, tracked: false, issue: null, messages: [] };
+    }
+    let issue = database.connection.prepare("SELECT * FROM work_items WHERE id=? AND kind='issue'").get(id);
+    if (query.refresh || !issue) {
+      await refreshIssue(database, config, repository, number);
+      issue = database.connection.prepare("SELECT * FROM work_items WHERE id=? AND kind='issue'").get(id);
+      publishDashboardUpdated(id);
+    }
+    if (!issue) return reply.code(404).send({ error: 'Issue was not found' });
+    const messages = database.connection.prepare(`
+      SELECT * FROM (
+        SELECT id, role, author, substr(content, 1, 4000) AS content, created_at
+        FROM issue_chat_messages WHERE work_item_id=? ORDER BY id DESC LIMIT 20
+      ) ORDER BY id ASC
+    `).all(id);
+    const record = issue as Record<string, unknown>;
+    return {
+      kind: 'issue', id, appearance: config.appearance, configured: true,
+      tracked: record.remote_state === 'OPEN',
+      issue: workItemView(record, []),
+      messages,
+    };
+  });
+
+  app.post('/api/issues/:id/chat', async (request, reply) => {
+    const config = configStore.get();
+    const id = decodeURIComponent((request.params as { id: string }).id);
+    const body = chatBody.parse(request.body);
+    const issue = database.connection.prepare("SELECT id FROM work_items WHERE id=? AND kind='issue'").get(id);
+    if (!issue) return reply.code(404).send({ error: 'Issue not found' });
+    const now = new Date().toISOString();
+    database.connection.prepare(`
+      INSERT INTO issue_chat_messages(work_item_id, role, author, content, created_at)
+      VALUES (?, 'user', ?, ?, ?)
+    `).run(id, body.author, body.message, now);
+    if (!body.askAgent) return { message: null };
+    const response = await runtime.run(
+      (signal) => askIssueAgent(database, config, id, body.message, body.provider, signal),
+      id,
+    );
+    const inserted = database.connection.prepare(`
+      INSERT INTO issue_chat_messages(work_item_id, role, author, content, created_at)
+      VALUES (?, 'assistant', ?, ?, ?)
+    `).run(id, body.provider || config.agents.default, response, new Date().toISOString());
+    return {
+      message: {
+        id: Number(inserted.lastInsertRowid), role: 'assistant',
+        author: body.provider || config.agents.default, content: response,
+      },
     };
   });
 

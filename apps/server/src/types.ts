@@ -21,6 +21,7 @@ export interface RepositoryConfig {
 export interface AgentProviderConfig {
   command: string;
   args: string[];
+  model?: string;
 }
 
 export interface BarbarianConfig {

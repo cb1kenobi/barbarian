@@ -13,12 +13,19 @@ export interface GithubIssueNode {
   body: string;
   url: string;
   updatedAt: string;
+  state?: string;
   assignees: { nodes: Array<{ login: string }> };
   labels: { nodes: Array<{ name: string }> };
   milestone: { title: string } | null;
   closedByPullRequestsReferences: {
     nodes: Array<{ number: number; url: string; state: string; merged: boolean }>;
   };
+}
+
+export interface GithubIssueContext {
+  issue: DiscoveredIssue;
+  state: string;
+  assignedToViewerOrUnassigned: boolean;
 }
 
 export interface GithubLatestReviewNode {
@@ -95,6 +102,20 @@ query($owner:String!, $repo:String!, $cursor:String) {
         milestone { title }
         closedByPullRequestsReferences(first:20) { nodes { number url state merged } }
       }
+    }
+  }
+}`;
+
+const issueContextQuery = `
+query($owner:String!, $repo:String!, $number:Int!) {
+  viewer { login }
+  repository(owner:$owner, name:$repo) {
+    issue(number:$number) {
+      number title body url updatedAt state
+      assignees(first:10) { nodes { login } }
+      labels(first:30) { nodes { name } }
+      milestone { title }
+      closedByPullRequestsReferences(first:20) { nodes { number url state merged } }
     }
   }
 }`;
@@ -435,6 +456,53 @@ function issueReference(body: string): string | null {
   return match?.[1] ? `#${match[1]}` : null;
 }
 
+function convertIssue(repository: RepositoryConfig, node: GithubIssueNode): DiscoveredIssue {
+  const linked = node.closedByPullRequestsReferences.nodes;
+  const openPr = linked.find((pr) => pr.state === 'OPEN');
+  const mergedPr = linked.find((pr) => pr.merged);
+  const priority = priorityFor(node, repository);
+  return {
+    provider: 'github', repository: repository.name, number: node.number,
+    title: node.title, body: node.body || '', url: node.url, updatedAt: node.updatedAt,
+    assignees: node.assignees.nodes.map((assignee) => assignee.login),
+    labels: node.labels.nodes.map((label) => label.name), milestone: node.milestone?.title ?? null,
+    duplicateOf: node.labels.nodes.some((label) => label.name.toLowerCase() === 'duplicate')
+      ? issueReference(node.body || '') || 'marked duplicate'
+      : issueReference(node.body || ''),
+    inProgressPr: openPr?.url ?? null,
+    fixedBy: mergedPr?.url ?? null,
+    priority: priority.score,
+    priorityReasons: priority.reasons,
+  };
+}
+
+export async function fetchGithubIssueContext(
+  repository: RepositoryConfig,
+  number: number,
+): Promise<GithubIssueContext> {
+  const [owner, repo] = splitRepository(repository.name);
+  const raw = await gh([
+    'api', 'graphql',
+    '-f', `query=${issueContextQuery}`,
+    '-F', `owner=${owner}`,
+    '-F', `repo=${repo}`,
+    '-F', `number=${number}`,
+  ]);
+  const result = JSON.parse(raw) as {
+    data: {
+      viewer: { login: string };
+      repository: { issue: GithubIssueNode | null } | null;
+    };
+  };
+  const node = result.data.repository?.issue;
+  if (!node) throw new Error(`${repository.name}#${number} was not found`);
+  return {
+    issue: convertIssue(repository, node),
+    state: node.state || 'OPEN',
+    assignedToViewerOrUnassigned: assignedToViewerOrUnassigned(node, result.data.viewer.login),
+  };
+}
+
 function titleTokens(title: string): Set<string> {
   return new Set(title.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((word) => word.length > 3));
 }
@@ -531,23 +599,7 @@ export async function discoverGithub(config: BarbarianConfig): Promise<Discovery
       if (repository.watchIssues) {
         for (const node of issueNodes) {
           if (!assignedToViewerOrUnassigned(node, githubLogin)) continue;
-          const linked = node.closedByPullRequestsReferences.nodes;
-          const openPr = linked.find((pr) => pr.state === 'OPEN');
-          const mergedPr = linked.find((pr) => pr.merged);
-          const priority = priorityFor(node, repository);
-          issues.push({
-            provider: 'github', repository: repository.name, number: node.number,
-            title: node.title, body: node.body || '', url: node.url, updatedAt: node.updatedAt,
-            assignees: node.assignees.nodes.map((assignee) => assignee.login),
-            labels: node.labels.nodes.map((label) => label.name), milestone: node.milestone?.title ?? null,
-            duplicateOf: node.labels.nodes.some((label) => label.name.toLowerCase() === 'duplicate')
-              ? issueReference(node.body || '') || 'marked duplicate'
-              : issueReference(node.body || ''),
-            inProgressPr: openPr?.url ?? null,
-            fixedBy: mergedPr?.url ?? null,
-            priority: priority.score,
-            priorityReasons: priority.reasons,
-          });
+          issues.push(convertIssue(repository, node));
         }
       }
     } catch (error) {

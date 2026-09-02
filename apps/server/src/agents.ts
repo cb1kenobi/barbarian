@@ -133,6 +133,66 @@ Developer: ${message}`;
   return executeAgent(database, config, reviewId, 'chat', prompt, provider, signal);
 }
 
+interface IssueRow {
+  id: string;
+  repository: string;
+  number: number;
+  title: string;
+  body: string;
+  simple_summary: string;
+  url: string;
+  assignees: string;
+  priority: number;
+  priority_reasons: string;
+  status: string;
+  milestone: string | null;
+  duplicate_of: string | null;
+  in_progress_pr: string | null;
+  fixed_by: string | null;
+  remote_state: string;
+}
+
+export async function askIssueAgent(
+  database: BarbarianDatabase,
+  config: BarbarianConfig,
+  workItemId: string,
+  message: string,
+  provider?: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const issue = database.connection.prepare(`
+    SELECT id, repository, number, title, body, simple_summary, url, assignees, priority,
+      priority_reasons, status, milestone, duplicate_of, in_progress_pr, fixed_by, remote_state
+    FROM work_items WHERE id=? AND kind='issue'
+  `).get(workItemId) as IssueRow | undefined;
+  if (!issue) throw new Error('Issue is not available in Barbarian');
+  const history = database.connection.prepare(`
+    SELECT role, author, content FROM issue_chat_messages
+    WHERE work_item_id=? ORDER BY id DESC LIMIT 20
+  `).all(workItemId).reverse() as Array<{ role: string; author: string; content: string }>;
+  const prompt = `You are helping a developer understand a GitHub issue. Be direct, concise, and use plain language. Explain and discuss only; do not change GitHub, files, assignments, labels, or queue state.
+
+Issue: ${issue.repository}#${issue.number} — ${issue.title}
+URL: ${issue.url}
+Queue state: ${issue.remote_state === 'OPEN' ? 'in the developer\'s issue queue' : 'not in the developer\'s issue queue'}
+Assignees: ${(JSON.parse(issue.assignees || '[]') as string[]).join(', ') || 'none'}
+Priority score: ${issue.priority}
+Priority reasons: ${(JSON.parse(issue.priority_reasons || '[]') as string[]).join(', ') || 'none'}
+Milestone: ${issue.milestone || 'none'}
+Duplicate of: ${issue.duplicate_of || 'none known'}
+In-progress pull request: ${issue.in_progress_pr || 'none known'}
+Fixed by: ${issue.fixed_by || 'none known'}
+Known summary: ${issue.simple_summary}
+Issue description:
+${issue.body.slice(0, 12_000)}
+
+Conversation:
+${history.map((entry) => `${entry.author}: ${entry.content}`).join('\n')}
+
+Developer: ${message}`;
+  return executeAgent(database, config, null, 'issue_chat', prompt, provider, signal);
+}
+
 export interface ParsedReviewResult {
   findings: number;
   verdict: 'ready' | 'issues';

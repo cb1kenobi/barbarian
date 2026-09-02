@@ -27,7 +27,7 @@ export function formatSyncTimestamp(value: string | null | undefined, timezone?:
 }
 
 export function formatNextSync(nextSyncAt: string | null, now = Date.now()): string {
-  if (!nextSyncAt) return 'Syncing now…';
+  if (!nextSyncAt) return 'Next sync right now';
   const remaining = new Date(nextSyncAt).getTime() - now;
   if (!Number.isFinite(remaining) || remaining <= 0) return 'Next sync due now';
   return `Next sync in ${Math.max(1, Math.ceil(remaining / 60_000))} min`;

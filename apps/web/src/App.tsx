@@ -9,6 +9,7 @@ import { shouldSubmitChat } from './chat-editor';
 import { renderMarkdown } from './markdown';
 import { repositoryBookmark, sortRepositoryBookmarks, type RepositoryBookmark } from './repository-links';
 import { sortWorkItems, type WorkSort } from './work-sort';
+import { matchesQueueSearch } from './queue-search';
 
 interface WorkItem {
   id: string; repository: string; number: number; title: string; simple_summary: string;
@@ -38,11 +39,17 @@ interface FixedIssueReference {
 
 interface ChatMessage { id: number; role: string; author: string; content: string; created_at: string }
 
+interface ActiveReview {
+  id: string; repository: string; number: number; title: string; url: string;
+  agent: string; model: string; started_at: string;
+}
+
 interface Dashboard {
   profile: { name: string; timezone: string; githubLogin: string };
   appearance: AppearanceConfig;
   monitor: { intervalMinutes: number; nextSyncAt: string | null };
   repositories?: RepositoryBookmark[];
+  activeReviews: ActiveReview[];
   workQueue: WorkItem[];
   reviews: Review[];
   metrics: {
@@ -120,6 +127,7 @@ export function App() {
   const [reviewSort, setReviewSort] = useState<ReviewSort>('priority');
   const [workSort, setWorkSort] = useState<WorkSort>('in-progress');
   const [workRepository, setWorkRepository] = useState('all');
+  const [queueSearch, setQueueSearch] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -154,6 +162,7 @@ export function App() {
   useEffect(() => {
     const events = new EventSource('/api/events');
     events.addEventListener('review-updated', () => void load());
+    events.addEventListener('dashboard-updated', () => void load());
     return () => events.close();
   }, [load]);
   useEffect(() => { const interval = window.setInterval(() => setNow(Date.now()), 15_000); return () => window.clearInterval(interval); }, []);
@@ -167,17 +176,20 @@ export function App() {
     finally { setSyncing(false); }
   };
 
-  const reviews = useMemo(() => sortReviews(dashboard?.reviews || [], reviewSort), [dashboard?.reviews, reviewSort]);
+  const reviews = useMemo(() => sortReviews(
+    (dashboard?.reviews || []).filter((review) => matchesQueueSearch(review, queueSearch)),
+    reviewSort,
+  ), [dashboard?.reviews, queueSearch, reviewSort]);
   const repositories = useMemo(() => sortRepositoryBookmarks(dashboard?.repositories || []), [dashboard?.repositories]);
-  const reviewsNeedingApproval = countReviewsNeedingApproval(reviews);
+  const visibleReviewsNeedingApproval = countReviewsNeedingApproval(reviews);
   const allWork = dashboard?.workQueue || [];
   const workRepositories = useMemo(() => [...new Set(allWork.map((item) => item.repository))].sort(), [allWork]);
   const visibleWork = useMemo(() => sortWorkItems(
-    allWork.filter((item) => workRepository === 'all' || item.repository === workRepository),
+    allWork.filter((item) => (workRepository === 'all' || item.repository === workRepository) && matchesQueueSearch(item, queueSearch)),
     workSort,
-  ), [allWork, workRepository, workSort]);
+  ), [allWork, queueSearch, workRepository, workSort]);
   const queuedIssueCount = dashboard?.metrics.queuedIssues ?? allWork.length;
-  const reviewCount = dashboard?.metrics.reviewsNeedingApproval ?? reviewsNeedingApproval;
+  const reviewCount = dashboard?.metrics.reviewsNeedingApproval ?? countReviewsNeedingApproval(dashboard?.reviews || []);
   const attentionCount = queuedIssueCount + reviewCount;
   const hasPlan = Boolean(dashboard?.statusDraft.lines.length);
   const name = dashboard?.profile.name?.split(' ')[0] || 'Developer';
@@ -186,10 +198,10 @@ export function App() {
   return (
     <div className="shell">
       <aside className="rail">
-        <a className="brand" href="#command" aria-label="Scroll to the top"><span>B</span><strong>BARBARIAN</strong></a>
+        <a className="brand" href="#command" aria-label="Scroll to the top"><span aria-hidden="true" /><strong>BARBARIAN</strong></a>
         <nav aria-label="Primary">
-          <a href="#work"><i>◫</i> Work queue <b>{allWork.length}</b></a>
           <a href="#reviews"><i>◇</i> Reviews <b>{reviews.length}</b></a>
+          <a href="#work"><i>◫</i> Work queue <b>{allWork.length}</b></a>
         </nav>
         <section className="repo-bookmarks" aria-labelledby="repo-bookmarks-label">
           <span className="rail-label" id="repo-bookmarks-label">REPOSITORIES</span>
@@ -197,33 +209,44 @@ export function App() {
             {repositories.map((repository) => <a href={repository.url} target="_blank" rel="noreferrer" title={repository.name} key={repository.name}><span>{repositoryName(repository.name)}</span><i aria-hidden="true">↗</i></a>)}
             {!repositories.length && <span className="repo-empty">{dashboard ? 'No repositories configured' : 'Waiting for server…'}</span>}
           </div>
+          <section className="active-reviews" aria-labelledby="active-reviews-label">
+            <span className="rail-label" id="active-reviews-label">ACTIVE CODE REVIEWS</span>
+            <div className="active-review-list">
+              {(dashboard?.activeReviews || []).map((review) => <a className="active-review" href={review.url} target="_blank" rel="noreferrer" title={review.title} key={review.id}>
+                <span className="active-review-head"><span><i aria-hidden="true" />{repositoryName(review.repository)} #{review.number}</span><time>{formatElapsed(review.started_at, now)}</time></span>
+                <small>{review.agent} · {review.model}</small>
+              </a>)}
+              {dashboard && !dashboard.activeReviews?.length && <span className="active-review-empty">No reviews running</span>}
+            </div>
+          </section>
         </section>
         <div className="rail-bottom">
           <div className="sync-dot"><span className={error?.connection ? 'bad' : ''} />{error?.connection ? 'Server offline' : 'Monitoring active'}</div>
           <div className="sync-schedule">
             <span title={formatSyncTimestamp(dashboard?.lastSync?.finished_at, dashboard?.profile.timezone)}>{formatLastSync(dashboard?.lastSync || null, now)}</span>
-            <span title={formatSyncTimestamp(dashboard?.monitor.nextSyncAt, dashboard?.profile.timezone)}>{dashboard ? formatNextSync(dashboard.monitor.nextSyncAt, now) : 'Waiting for monitor…'}</span>
+            <span title={syncing ? undefined : formatSyncTimestamp(dashboard?.monitor.nextSyncAt, dashboard?.profile.timezone)}>{syncing ? 'Next sync right now' : dashboard ? formatNextSync(dashboard.monitor.nextSyncAt, now) : 'Waiting for monitor…'}</span>
           </div>
-          <button className="sync rail-sync" disabled={syncing} onClick={() => void sync()}>↻ <span>{syncing ? 'Syncing…' : 'Sync now'}</span></button>
-          <button className="settings-link" onClick={() => setShowSettings(true)}>⚙ <span>Settings</span></button>
+          <div className="rail-actions">
+            <button className="sync rail-sync" disabled={syncing} onClick={() => void sync()}><span className="rail-button-icon" aria-hidden="true">↻</span><span className="rail-button-label">{syncing ? 'Syncing…' : 'Sync'}</span></button>
+            <button className="sync rail-sync" onClick={() => setShowSettings(true)}><span className="rail-button-icon settings-gear" aria-hidden="true">⚙</span><span className="rail-button-label">Settings</span></button>
+          </div>
         </div>
       </aside>
 
       <main id="command">
-        <header>
-          <div>
+        <header className="dashboard-header">
+          <div className="dashboard-welcome">
             <p className="eyebrow">{date}</p>
             <h1>Good {new Date().getHours() < 12 ? 'morning' : 'afternoon'}, {name}.</h1>
             <p className="subtitle">{dashboard ? `${queuedIssueCount} issue${queuedIssueCount === 1 ? '' : 's'} on your radar · ${reviewCount} PR${reviewCount === 1 ? '' : 's'} to review.` : 'Connecting to your local command center…'}</p>
           </div>
+          <section className="briefing">
+            <div className="brief-copy"><span className="section-label">STATUS UPDATE</span><h2>{hasPlan ? 'Your update is ready' : 'Your watch list needs attention'}</h2><p>{hasPlan ? 'Review the Slack-ready list before you publish it.' : 'Barbarian cannot prepare an update until repositories are configured and synced.'}</p></div>
+            <div className="brief-actions"><span>{dashboard?.statusDraft.lines.length || 0} items ready</span><button onClick={() => setShowStatus(true)} disabled={!dashboard}>Open status update <b>→</b></button></div>
+          </section>
         </header>
 
         {error && <div className="error-banner"><strong>{error.connection ? 'Barbarian server is not reachable.' : 'Barbarian could not complete that request.'}</strong><span>{error.message}</span></div>}
-
-        <section className="briefing">
-          <div className="brief-copy"><span className="section-label">STATUS UPDATE</span><h2>{hasPlan ? 'Your update is ready' : 'Your watch list needs attention'}</h2><p>{hasPlan ? 'Review the Slack-ready list before you publish it.' : 'Barbarian cannot prepare an update until repositories are configured and synced.'}</p></div>
-          <div className="brief-actions"><span>{dashboard?.statusDraft.lines.length || 0} items ready</span><button onClick={() => setShowStatus(true)} disabled={!dashboard}>Open status update <b>→</b></button></div>
-        </section>
 
         <div className="metrics" aria-label="Workflow totals">
           <article><strong>{dashboard ? attentionCount : '—'}</strong><span>ON YOUR RADAR</span><small>{dashboard ? `${queuedIssueCount} issues + ${reviewCount} PRs` : 'issues + reviews'}</small></article>
@@ -232,28 +255,17 @@ export function App() {
           <article><strong>{dashboard ? lastWorkdayTotal(dashboard.metrics.previousWorkday) : '—'}</strong><span>DONE LAST WORKDAY</span><small>{dashboard?.statusDraft.previousWorkday || 'not synced'}</small></article>
         </div>
 
-        <section id="work" className="panel">
-          <div className="panel-head"><div><span className="section-label">YOUR WORK</span><h2>Issue queue</h2></div><div className="queue-controls">
-            <label className="review-sort queue-repository"><span>Repo</span><select value={workRepository} onChange={(event) => setWorkRepository(event.target.value)}><option value="all">All repositories</option>{workRepositories.map((repository) => <option value={repository} key={repository}>{repositoryName(repository)}</option>)}</select></label>
-            <label className="review-sort"><span>Sort</span><select value={workSort} onChange={(event) => setWorkSort(event.target.value as WorkSort)}><option value="in-progress">In progress</option><option value="priority">Priority</option><option value="updated">Recently updated</option></select></label>
-          </div></div>
-          <div className="rows">
-            {visibleWork.map((item, index) => {
-              const assignee = issueAssignee(item, dashboard?.profile.githubLogin);
-              const progress = issueProgress(item);
-              const details = [progress, item.milestone, `Priority ${item.priority}${item.priority_reasons.length ? `: ${item.priority_reasons.join(' · ')}` : ''}`].filter(Boolean).join(' · ');
-              return <a className="work-row" href={item.url} target="_blank" key={item.id}>
-                <span className={`rank ${index === 0 ? 'hot' : index === 1 ? 'warm' : ''}`}>{String(index + 1).padStart(2, '0')}</span>
-                <span className="row-body"><span className="repo">{repositoryName(item.repository)} · #{item.number}</span><span className="work-title"><strong>{item.title}</strong><span className={`assignee-label ${assignee.mine ? 'mine' : ''}`}>{assignee.label}</span></span><small>{details}</small></span><span className="chevron">›</span>
-              </a>;
-            })}
-            {!visibleWork.length && <Empty message={allWork.length ? 'No issues match this repository filter.' : 'No assigned or unassigned issues are currently open.'} />}
-          </div>
-        </section>
+        <div className="queue-search">
+          <label htmlFor="queue-search-input">
+            <svg className="queue-search-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" /><path d="m12.5 12.5 4 4" /></svg>
+            <input id="queue-search-input" type="search" aria-label="Search code reviews and issues" value={queueSearch} onChange={(event) => setQueueSearch(event.target.value)} placeholder="Search reviews and issues by number, title, or description" />
+            {queueSearch && <button className="queue-search-clear" type="button" onClick={() => setQueueSearch('')} aria-label="Clear queue search"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg></button>}
+          </label>
+        </div>
 
         <section id="reviews" className="panel reviews">
-          <div className="panel-head"><div><span className="section-label">CODE REVIEWS</span><div className="review-heading"><h2>Review queue</h2><span className="review-count" aria-label={`${reviewCount} non-approved pull requests need your review`}>{reviewCount} to review</span><ReviewStatusInfo /></div></div><label className="review-sort"><span>Sort</span><select value={reviewSort} onChange={(event) => setReviewSort(event.target.value as ReviewSort)}><option value="priority">Priority</option><option value="oldest">Oldest</option><option value="newest">Newest</option><option value="repository">Repo name</option></select></label></div>
-          <div className="review-grid">
+          <div className="panel-head"><div><span className="section-label">CODE REVIEWS</span><div className="review-heading"><h2>Review queue</h2><span className="review-count" aria-label={`${visibleReviewsNeedingApproval} matching non-approved pull requests need your review`}>{visibleReviewsNeedingApproval} to review</span><ReviewStatusInfo /></div></div><label className="review-sort"><span>Sort</span><select value={reviewSort} onChange={(event) => setReviewSort(event.target.value as ReviewSort)}><option value="priority">Priority</option><option value="pain">Pain</option><option value="oldest">Oldest</option><option value="newest">Newest</option><option value="repository">Repo name</option></select></label></div>
+          <div className="review-grid queue-viewport review-viewport">
             {reviews.map((review) => <button className="review-card" key={review.id} onClick={() => setSelectedReview(review.id)}>
               <div className="review-card-head"><span><span className="repo">{repositoryName(review.repository)}</span><span className="pr">#{review.number}</span></span><ReviewStatusBadge status={reviewDisplayStatus(review)} /></div>
               <h3>{review.title}</h3><p>{review.simple_summary}</p>
@@ -268,7 +280,26 @@ export function App() {
                 <SeverityCounts counts={review.issue_counts} />
               </footer>
             </button>)}
-            {!reviews.length && <Empty message="No pull requests currently need your review." />}
+            {!reviews.length && <Empty message={queueSearch ? 'No code reviews match this search.' : 'No pull requests currently need your review.'} />}
+          </div>
+        </section>
+
+        <section id="work" className="panel">
+          <div className="panel-head"><div><span className="section-label">YOUR WORK</span><div className="review-heading"><h2>Issue queue</h2><span className="review-count" aria-label={`${visibleWork.length} matching issues in the queue`}>{visibleWork.length} issues</span></div></div><div className="queue-controls">
+            <label className="review-sort queue-repository"><span>Repo</span><select value={workRepository} onChange={(event) => setWorkRepository(event.target.value)}><option value="all">All repositories</option>{workRepositories.map((repository) => <option value={repository} key={repository}>{repositoryName(repository)}</option>)}</select></label>
+            <label className="review-sort"><span>Sort</span><select value={workSort} onChange={(event) => setWorkSort(event.target.value as WorkSort)}><option value="in-progress">In progress</option><option value="priority">Priority</option><option value="updated">Recently updated</option></select></label>
+          </div></div>
+          <div className="rows queue-viewport issue-viewport">
+            {visibleWork.map((item, index) => {
+              const assignee = issueAssignee(item, dashboard?.profile.githubLogin);
+              const progress = issueProgress(item);
+              const details = [progress, item.milestone, `Priority ${item.priority}${item.priority_reasons.length ? `: ${item.priority_reasons.join(' · ')}` : ''}`].filter(Boolean).join(' · ');
+              return <a className="work-row" href={item.url} target="_blank" key={item.id}>
+                <span className={`rank ${index === 0 ? 'hot' : index === 1 ? 'warm' : ''}`}>{String(index + 1).padStart(2, '0')}</span>
+                <span className="row-body"><span className="issue-key"><span className="repo">{repositoryName(item.repository)}</span><span className="issue-number">#{item.number}</span></span><span className="work-title"><strong>{item.title}</strong><span className={`assignee-label ${assignee.mine ? 'mine' : ''}`}>{assignee.label}</span></span><small>{details}</small></span><span className="chevron">›</span>
+              </a>;
+            })}
+            {!visibleWork.length && <Empty message={allWork.length ? (queueSearch ? 'No issues match this search and repository filter.' : 'No issues match this repository filter.') : 'No assigned or unassigned issues are currently open.'} />}
           </div>
         </section>
       </main>
@@ -360,7 +391,7 @@ function ReviewDrawer({ id, onClose, onChanged }: { id: string; onClose: () => v
   };
 
   return <div className="drawer-backdrop" onMouseDown={onClose}><aside className="drawer" onMouseDown={(event) => event.stopPropagation()}><button className="drawer-close" onClick={onClose}>×</button>
-    {!review ? <p>Loading review…</p> : <><div className="drawer-details"><span className="section-label">{review.repository} · #{review.number}</span><h2>{review.title}</h2><p className="plain-summary">{review.simple_summary}</p><FixedIssues review={review} />
+    {!review ? <p>Loading review…</p> : <><div className="drawer-details"><span className="section-label">{review.repository} · #{review.number} · BY {review.author.startsWith('@') ? review.author : `@${review.author}`}</span><h2>{review.title}</h2><p className="plain-summary">{review.simple_summary}</p><FixedIssues review={review} />
       <div className="drawer-status"><ReviewStatusBadge status={reviewDisplayStatus(review)} />{review.pending_reason && <span>Queued: {review.pending_reason.replaceAll('_', ' ')}</span>}<span>{review.findings_count} blocking issues</span><span>{review.review_skill}</span></div>
       <div className="drawer-actions"><button disabled={!!busy} onClick={() => void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: '{}' }))}>{busy === 'review' ? 'Starting…' : 'Send review agent'}</button><button disabled={!!busy} onClick={() => void action('workspace', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'POST', body: '{}' }))}>{busy === 'workspace' ? 'Cloning & building…' : review.workspace_path ? 'Rebuild workspace' : 'Prepare locally'}</button>{review.workspace_path && <button className="muted-button" disabled={!!busy} onClick={() => void action('cleanup', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'DELETE' }))}>Clean up</button>}<a href={review.url} target="_blank">Open GitHub ↗</a></div>
       {review.workspace_path && <code className="workspace-path">{review.workspace_path}</code>}{error && <p className="inline-error">{error}</p>}</div>

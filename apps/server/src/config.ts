@@ -35,7 +35,9 @@ const agentsSchema = z.object({
   maxAutomaticAttempts: z.number().int().min(1).max(10).default(3),
   retryBaseMinutes: z.number().int().min(1).max(120).default(5),
   maxRunsPerPullRequestPerHour: z.number().int().min(1).max(20).default(3),
-  providers: z.record(z.string(), z.object({ command: z.string(), args: z.array(z.string()).default([]) })).default({}),
+  providers: z.record(z.string(), z.object({
+    command: z.string(), args: z.array(z.string()).default([]), model: z.string().optional(),
+  })).default({}),
 });
 
 export const configSchema = z.object({

@@ -134,6 +134,34 @@ describe('ReviewDispatcher', () => {
     db.close();
   });
 
+  it('publishes dashboard updates when a review starts and finishes', async () => {
+    const db = database();
+    const id = seedReview(db, 4);
+    const runtime = new AgentRuntime(1);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const runner = async (runnerDb: BarbarianDatabase, _config: BarbarianConfig, claim: ReviewClaim) => {
+      await gate;
+      runnerDb.connection.prepare(`
+        UPDATE review_queue SET last_reviewed_sha=?, last_reviewed_watermark=?,
+          claim_owner=NULL, claimed_at=NULL, status='ready_to_merge'
+        WHERE id=? AND claim_owner=?
+      `).run(claim.headSha, claim.discussionWatermark, claim.reviewId, claim.owner);
+    };
+    const changes: string[] = [];
+    const dispatcher = new ReviewDispatcher(db, config(1), runtime, { error: () => undefined }, runner);
+    dispatcher.setReviewChangedListener((reviewId) => changes.push(reviewId));
+    await dispatcher.pump();
+    await waitFor(() => changes.length === 1);
+    expect(changes).toEqual([id]);
+    release();
+    await waitFor(() => changes.length === 2);
+    expect(changes).toEqual([id, id]);
+    dispatcher.stop();
+    await runtime.shutdown();
+    db.close();
+  });
+
   it('prevents two database connections from claiming the same PR', async () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-claim-'));
     directories.push(directory);

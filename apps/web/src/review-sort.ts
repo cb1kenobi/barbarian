@@ -1,4 +1,4 @@
-export type ReviewSort = 'priority' | 'oldest' | 'newest' | 'repository';
+export type ReviewSort = 'priority' | 'pain' | 'oldest' | 'newest' | 'repository';
 
 export interface SortableReview {
   priority_score: number;
@@ -6,6 +6,8 @@ export interface SortableReview {
   updated_at: string;
   repository: string;
   number: number;
+  additions: number;
+  deletions: number;
 }
 
 function timestamp(value: string): number {
@@ -15,6 +17,12 @@ function timestamp(value: string): number {
 
 export function sortReviews<T extends SortableReview>(reviews: T[], sort: ReviewSort): T[] {
   return [...reviews].sort((left, right) => {
+    if (sort === 'pain') {
+      return (right.additions + right.deletions) - (left.additions + left.deletions)
+        || timestamp(right.updated_at) - timestamp(left.updated_at)
+        || left.repository.localeCompare(right.repository)
+        || right.number - left.number;
+    }
     if (sort === 'oldest') {
       return timestamp(left.remote_created_at) - timestamp(right.remote_created_at)
         || left.repository.localeCompare(right.repository)

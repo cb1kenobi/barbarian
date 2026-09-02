@@ -41,13 +41,37 @@ const app = await createApp(database, configStore, monitorRuntime, {
     if (previous.monitor.intervalMinutes === next.monitor.intervalMinutes) return;
     scheduleNextMonitorTick();
   },
+  onManualSyncStarted() {
+    pauseMonitorTimer();
+  },
+  onManualSyncFinished() {
+    resumeMonitorTimer();
+  },
 });
 appLogger = app.log;
 const address = serverAddress();
 
 let timer: NodeJS.Timeout | undefined;
+let manualSyncsInProgress = 0;
+function pauseMonitorTimer(): void {
+  manualSyncsInProgress += 1;
+  if (timer) clearTimeout(timer);
+  timer = undefined;
+  monitorRuntime.nextSyncAt = null;
+}
+
+function resumeMonitorTimer(): void {
+  manualSyncsInProgress = Math.max(0, manualSyncsInProgress - 1);
+  if (manualSyncsInProgress === 0) scheduleNextMonitorTick();
+}
+
 function scheduleNextMonitorTick(): void {
   if (timer) clearTimeout(timer);
+  if (manualSyncsInProgress > 0) {
+    timer = undefined;
+    monitorRuntime.nextSyncAt = null;
+    return;
+  }
   const config = configStore.get();
   const delay = config.monitor.intervalMinutes * 60_000;
   monitorRuntime.nextSyncAt = new Date(Date.now() + delay).toISOString();

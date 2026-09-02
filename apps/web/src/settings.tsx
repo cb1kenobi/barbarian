@@ -232,11 +232,23 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
             <button type="button" className="add-button" onClick={addRepository}>＋ Add repository</button>
           </fieldset>
 
-          <fieldset className="settings-section"><legend>Review behavior</legend><div className="settings-grid three">
-            <label><span>Requested reviewer</span><input value={draft.review.requestedReviewer} onChange={(event) => setDraft({ ...draft, review: { ...draft.review, requestedReviewer: event.target.value } })} /></label>
-            <label><span>Fallback teams <small>comma-separated</small></span><input value={draft.review.fallbackTeams.join(', ')} onChange={(event) => setDraft({ ...draft, review: { ...draft.review, fallbackTeams: splitItems(event.target.value) } })} /></label>
-            <label><span>Workspace root <small>edit in YAML</small></span><code className="readonly-value">{advanced?.workspaceRoot || 'Not configured'}</code></label>
-            <label className="check-field"><input type="checkbox" checked={draft.review.autoCleanup} onChange={(event) => setDraft({ ...draft, review: { ...draft.review, autoCleanup: event.target.checked } })} /><span>Clean completed workspaces</span></label>
+          <fieldset className="settings-section"><legend>Review behavior</legend><div className="review-behavior-list">
+            <div className="review-behavior-row">
+              <label><span>Requested reviewer</span><input aria-describedby="requested-reviewer-description" value={draft.review.requestedReviewer} onChange={(event) => setDraft({ ...draft, review: { ...draft.review, requestedReviewer: event.target.value } })} /></label>
+              <p id="requested-reviewer-description">GitHub login Barbarian treats as the target reviewer. Leave blank to use your profile login.</p>
+            </div>
+            <div className="review-behavior-row">
+              <label><span>Fallback teams <small>comma-separated</small></span><input aria-describedby="fallback-teams-description" value={draft.review.fallbackTeams.join(', ')} onChange={(event) => setDraft({ ...draft, review: { ...draft.review, fallbackTeams: splitItems(event.target.value) } })} /></label>
+              <p id="fallback-teams-description">Team review requests that enter your queue when no individual reviewer is requested.</p>
+            </div>
+            <div className="review-behavior-row">
+              <label><span>Workspace root <small>edit in YAML</small></span><code className="readonly-value">{advanced?.workspaceRoot || 'Not configured'}</code></label>
+              <p>Dedicated directory for cached clones and per-PR worktrees created by Prepare locally.</p>
+            </div>
+            <div className="review-behavior-row">
+              <label className="check-field"><input type="checkbox" aria-describedby="workspace-cleanup-description" checked={draft.review.autoCleanup} onChange={(event) => setDraft({ ...draft, review: { ...draft.review, autoCleanup: event.target.checked } })} /><span>Clean completed workspaces</span></label>
+              <p id="workspace-cleanup-description">Remove prepared PR worktrees after their pull requests are merged or closed.</p>
+            </div>
           </div></fieldset>
 
           <fieldset className="settings-section"><legend>Agents</legend><div className="settings-grid four">

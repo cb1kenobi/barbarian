@@ -173,6 +173,15 @@ export class BarbarianDatabase {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS issue_chat_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        author TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS agent_runs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         review_id TEXT REFERENCES review_queue(id) ON DELETE SET NULL,
@@ -225,6 +234,7 @@ export class BarbarianDatabase {
       CREATE INDEX IF NOT EXISTS idx_local_branch_findings_branch ON local_branch_findings(branch_id, ordinal);
       CREATE INDEX IF NOT EXISTS idx_local_branch_messages_branch ON local_branch_messages(branch_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_chat_messages_review ON chat_messages(review_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_issue_chat_messages_item ON issue_chat_messages(work_item_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_events(created_at DESC);
     `);
     const activityColumns = this.connection.prepare('PRAGMA table_info(activity_events)').all() as Array<{ name: string }>;
