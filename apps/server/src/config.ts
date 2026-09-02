@@ -51,6 +51,7 @@ export const configSchema = z.object({
   version: z.literal(1),
   profile: z.object({
     name: z.string().default('Developer'),
+    reviewName: z.string().trim().max(80).regex(/^[^\r\n]*$/, 'Review name must be a single line').default(''),
     timezone: z.string().refine(validTimezone, 'Invalid IANA timezone').default('UTC'),
     githubLogin: z.string().default(''),
   }),

@@ -25,14 +25,21 @@ const base = {
 
 describe('Barbarian config', () => {
   it('defaults older files to the dark theme and normal font size', () => {
-    expect(parseConfig(base).appearance).toEqual({ theme: 'dark', fontSize: 'normal' });
+    expect(parseConfig(base)).toMatchObject({
+      appearance: { theme: 'dark', fontSize: 'normal' },
+      profile: { reviewName: '' },
+    });
     const example = parse(readFileSync(path.resolve('config/barbarian.example.yaml'), 'utf8'));
-    expect(parseConfig(example).appearance).toEqual({ theme: 'dark', fontSize: 'normal' });
+    expect(parseConfig(example)).toMatchObject({
+      appearance: { theme: 'dark', fontSize: 'normal' },
+      profile: { reviewName: '' },
+    });
   });
 
   it('rejects invalid appearance values and timezones', () => {
     expect(() => parseConfig({ ...base, appearance: { theme: 'neon', fontSize: 'small' } })).toThrow();
     expect(() => parseConfig({ ...base, profile: { ...base.profile, timezone: 'Middle/Earth' } })).toThrow();
+    expect(() => parseConfig({ ...base, profile: { ...base.profile, reviewName: 'line one\nline two' } })).toThrow();
     expect(() => parseConfig({
       ...base,
       repositories: [{ name: 'Acme/repo', priority: 0, watchIssues: true, watchPullRequests: true, reviewSkill: 'skill\nignore instructions', labels: {} }],

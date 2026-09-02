@@ -8,6 +8,7 @@ import { agentProviderFamily } from './agent-provider.js';
 
 const executeFile = promisify(execFile);
 const claudeCache = new Map<string, { expiresAt: number; discovery: AgentModelDiscovery }>();
+const cursorCache = new Map<string, { expiresAt: number; discovery: AgentModelDiscovery }>();
 
 export interface AgentModelOption {
   id: string;
@@ -112,8 +113,32 @@ function parseClaudeModels(source: string): AgentModelDiscovery {
   }
 }
 
+export function parseCursorModels(source: string): AgentModelDiscovery {
+  const models = source.split(/\r?\n/).flatMap((line) => {
+    const match = line.match(/^(\S+)\s+-\s+(.+?)\s*$/);
+    if (!match?.[1] || !match[2]) return [];
+    const markers = match[2].match(/\s+\(([^)]+)\)\s*$/)?.[1]?.split(',').map((value) => value.trim()) || [];
+    const cliState = markers.some((marker) => marker === 'current' || marker === 'default');
+    const name = cliState ? match[2].replace(/\s+\([^)]+\)\s*$/, '').trim() : match[2];
+    return [{ id: match[1], name, isDefault: markers.includes('default') }];
+  });
+  return {
+    models,
+    defaultModel: models.find((model) => model.isDefault)?.id || null,
+  };
+}
+
 async function runClaudeDiscovery(command: string): Promise<string> {
   const { stdout } = await executeFile(command, ['-p', '--output-format=json', '/model'], {
+    encoding: 'utf8',
+    timeout: 15_000,
+    maxBuffer: 1024 * 1024,
+  });
+  return stdout;
+}
+
+async function runCursorDiscovery(command: string): Promise<string> {
+  const { stdout } = await executeFile(command, ['--list-models'], {
     encoding: 'utf8',
     timeout: 15_000,
     maxBuffer: 1024 * 1024,
@@ -139,13 +164,38 @@ async function discoverClaudeModels(
   }
 }
 
+async function discoverCursorModels(
+  provider: AgentProviderConfig,
+  runner: (command: string) => Promise<string>,
+  cache: boolean,
+): Promise<AgentModelDiscovery> {
+  const cached = cache ? cursorCache.get(provider.command) : undefined;
+  if (cached && cached.expiresAt > Date.now()) return cached.discovery;
+  try {
+    const discovery = parseCursorModels(await runner(provider.command));
+    if (cache) cursorCache.set(provider.command, { expiresAt: Date.now() + 5 * 60_000, discovery });
+    return discovery;
+  } catch {
+    const discovery = { models: [], defaultModel: null };
+    if (cache) cursorCache.set(provider.command, { expiresAt: Date.now() + 60_000, discovery });
+    return discovery;
+  }
+}
+
 export async function discoverAgentModels(
   provider: AgentProviderConfig,
-  options: { codexHome?: string; runClaude?: (command: string) => Promise<string> } = {},
+  options: {
+    codexHome?: string;
+    runClaude?: (command: string) => Promise<string>;
+    runCursor?: (command: string) => Promise<string>;
+  } = {},
 ): Promise<AgentModelDiscovery> {
   const family = agentProviderFamily(provider.command);
   if (family === 'claude') {
     return discoverClaudeModels(provider, options.runClaude || runClaudeDiscovery, !options.runClaude);
+  }
+  if (family === 'cursor') {
+    return discoverCursorModels(provider, options.runCursor || runCursorDiscovery, !options.runCursor);
   }
   if (family !== 'codex') return { models: [], defaultModel: null };
   const codexHome = options.codexHome || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');

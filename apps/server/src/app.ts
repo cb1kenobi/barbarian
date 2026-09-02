@@ -155,7 +155,7 @@ function settingsView(config: BarbarianConfig): {
           name,
           supportsModel: capabilities.model,
           supportsEffort: capabilities.effort,
-          supportsModelDiscovery: ['codex', 'claude'].includes(agentProviderFamily(provider.command)),
+          supportsModelDiscovery: ['codex', 'claude', 'cursor'].includes(agentProviderFamily(provider.command)),
           models: [],
           defaultModel: null,
         };

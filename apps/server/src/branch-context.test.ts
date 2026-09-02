@@ -39,7 +39,7 @@ describe('local branch agent review', () => {
     const output = 'BARBARIAN_RESULT: {"findings":2,"verdict":"issues","summary":"The changed values need attention.","comments":[{"path":"value.ts","line":1,"side":"RIGHT","body":"**Medium: value changed**\\n\\nThis changes observable behavior; confirm callers expect 2."},{"path":"new-value.ts","line":1,"side":"RIGHT","body":"**Medium: new value is unused**\\n\\nThis file is not connected to any caller."}]}';
     const config: BarbarianConfig = {
       version: 1,
-      profile: { name: 'Test', timezone: 'UTC', githubLogin: 'test' },
+      profile: { name: 'Test', reviewName: '', timezone: 'UTC', githubLogin: 'test' },
       appearance: { theme: 'dark', fontSize: 'normal' },
       monitor: { intervalMinutes: 20, runOnStartup: false, includeDraftPullRequests: false },
       repositories: [{ name: 'Acme/storage', priority: 1, watchIssues: false, watchPullRequests: true, reviewSkill: 'cb1-code-review', labels: {} }],

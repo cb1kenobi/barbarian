@@ -2,6 +2,7 @@ version: 1
 
 profile:
   name: Developer
+  reviewName: ""
   timezone: America/Chicago
   githubLogin: ""
 
@@ -53,6 +54,9 @@ agents:
     gemini:
       command: gemini
       args: []
+    cursor:
+      command: cursor-agent
+      args: [-p, --mode, ask, --output-format, text]
 
 statusUpdate:
   enabled: true

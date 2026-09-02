@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { discoverAgentModels } from './agent-models.js';
+import { discoverAgentModels, parseCursorModels } from './agent-models.js';
 
 describe('agent model discovery', () => {
   const directories: string[] = [];
@@ -71,5 +71,29 @@ describe('agent model discovery', () => {
       { runClaude: async () => { throw new Error('unavailable'); } },
     )).resolves.toEqual({ models: [], defaultModel: null });
     await expect(discoverAgentModels({ command: 'gemini', args: [] })).resolves.toEqual({ models: [], defaultModel: null });
+  });
+
+  it('parses Cursor model IDs, names, and its reported default', async () => {
+    const output = `Available models
+
+auto - Auto (current, default)
+cursor-grok-4.6-high - Cursor Grok 4.6
+claude-opus-5-thinking-high - Claude Opus 5 1M Thinking
+claude-fable-5-high - Claude Fable 5 1M (NO ZDR)
+
+Tip: use --model <id> to switch.`;
+    expect(parseCursorModels(output)).toEqual({
+      defaultModel: 'auto',
+      models: [
+        { id: 'auto', name: 'Auto', isDefault: true },
+        { id: 'cursor-grok-4.6-high', name: 'Cursor Grok 4.6', isDefault: false },
+        { id: 'claude-opus-5-thinking-high', name: 'Claude Opus 5 1M Thinking', isDefault: false },
+        { id: 'claude-fable-5-high', name: 'Claude Fable 5 1M (NO ZDR)', isDefault: false },
+      ],
+    });
+    await expect(discoverAgentModels(
+      { command: 'cursor-agent', args: ['-p', '--mode', 'ask'] },
+      { runCursor: async () => output },
+    )).resolves.toEqual(parseCursorModels(output));
   });
 });

@@ -1,5 +1,7 @@
 # Language focus
 
+Apply the relevant checks below without assuming the repository uses any particular language or framework.
+
 ## JavaScript and TypeScript
 
 - Floating promises, async callbacks passed to `forEach`, missing cancellation, swallowed rejections.
@@ -22,3 +24,12 @@
 
 - Broken links, stale examples, invalid YAML, dangerous defaults, secret exposure, migration reversibility, missing indexes for actual queries, non-portable shell assumptions, and dependency lifecycle scripts.
 
+## APIs, schemas, and persisted data
+
+- Backward and forward compatibility, omitted versus null values, defaults, validation order, authorization, pagination, retry safety, and stable error contracts.
+- Serialization round trips, migration behavior on existing data, partial writes, idempotency, and whether readers and writers deploy independently.
+
+## Tests
+
+- Assert observable behavior and failure paths rather than implementation details.
+- Watch for fixtures that cannot reach the claimed edge case, assertions that pass before the change, leaked global state, timing races, and tests that silently skip their intended path.

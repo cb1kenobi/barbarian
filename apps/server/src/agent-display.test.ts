@@ -5,7 +5,7 @@ import { configuredAgentEffort, configuredAgentModel } from './agent-display.js'
 function config(provider: BarbarianConfig['agents']['providers'][string]): BarbarianConfig {
   return {
     version: 1,
-    profile: { name: 'Chris', timezone: 'UTC', githubLogin: 'cb1kenobi' },
+    profile: { name: 'Chris', reviewName: '', timezone: 'UTC', githubLogin: 'cb1kenobi' },
     appearance: { theme: 'dark', fontSize: 'normal' },
     monitor: { intervalMinutes: 20, runOnStartup: true, includeDraftPullRequests: false },
     repositories: [],

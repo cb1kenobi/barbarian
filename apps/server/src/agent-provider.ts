@@ -6,10 +6,11 @@ export interface AgentProviderCapabilities {
   effort: boolean;
 }
 
-export type ProviderFamily = 'codex' | 'claude' | 'gemini' | 'unknown';
+export type ProviderFamily = 'codex' | 'claude' | 'cursor' | 'gemini' | 'unknown';
 
 export function agentProviderFamily(command: string): ProviderFamily {
   const executable = path.basename(command).toLowerCase().replace(/\.(?:cmd|exe)$/i, '');
+  if (executable === 'cursor-agent') return 'cursor';
   if (executable === 'codex' || executable === 'claude' || executable === 'gemini') return executable;
   return 'unknown';
 }

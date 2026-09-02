@@ -29,7 +29,7 @@ export interface AgentProviderConfig {
 
 export interface BarbarianConfig {
   version: number;
-  profile: { name: string; timezone: string; githubLogin: string };
+  profile: { name: string; reviewName: string; timezone: string; githubLogin: string };
   appearance: { theme: 'light' | 'dark' | 'slayer'; fontSize: 'small' | 'normal' };
   monitor: { intervalMinutes: number; runOnStartup: boolean; includeDraftPullRequests: boolean };
   repositories: RepositoryConfig[];

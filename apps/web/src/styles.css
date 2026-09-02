@@ -338,12 +338,13 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
 .check-field input, .weekday-row input, .choice-card input { accent-color: var(--acid); }
 .repo-watch-fields { display: grid; gap: 6px; padding-top: 17px; }
 .repo-watch-fields .check-field { min-height: 0; padding-top: 0; }
-.review-behavior-list { display: grid; }
-.review-behavior-row { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(0, 1.2fr); align-items: center; gap: 24px; padding: 14px 0; border-bottom: 1px solid var(--line); }
-.review-behavior-row:first-child { padding-top: 2px; }
-.review-behavior-row:last-child { padding-bottom: 2px; border-bottom: 0; }
-.review-behavior-row .check-field { padding-top: 0; }
-.review-behavior-row > p { margin: 0; color: var(--muted-soft); font-size: .6875rem; line-height: 1.5; }
+.settings-description-list { display: grid; }
+.settings-description-row { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(0, 1.2fr); align-items: center; gap: 24px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.settings-description-row:first-child { padding-top: 2px; }
+.settings-description-row:last-child { padding-bottom: 2px; border-bottom: 0; }
+.settings-description-row .check-field { padding-top: 0; }
+.settings-description-row > p { margin: 0; color: var(--muted-soft); font-size: .6875rem; line-height: 1.5; }
+.settings-description-row > p code { color: var(--muted-strong); }
 .choice-groups { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
 .field-label { display: block; margin-bottom: 7px; color: var(--muted); font-size: .75rem; }
 .field-label.spaced { margin-top: 17px; }
@@ -448,7 +449,7 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
   .row-body small { grid-column: 1; }
   .work-title { align-items: flex-start; flex-direction: column; gap: 7px; }
   .repo { margin-bottom: 3px; }
-  .review-behavior-row { grid-template-columns: 1fr; gap: 8px; }
+  .settings-description-row { grid-template-columns: 1fr; gap: 8px; }
   .settings-backdrop { padding: 0; }
   .settings-modal { width: 100vw; height: 100vh; border: 0; }
   .settings-header, .settings-body, .settings-footer { padding-left: 18px; padding-right: 18px; }

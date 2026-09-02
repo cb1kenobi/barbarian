@@ -46,7 +46,7 @@ interface ActiveReview {
 }
 
 interface Dashboard {
-  profile: { name: string; timezone: string; githubLogin: string };
+  profile: { name: string; reviewName: string; timezone: string; githubLogin: string };
   appearance: AppearanceConfig;
   monitor: { intervalMinutes: number; nextSyncAt: string | null };
   repositories?: RepositoryBookmark[];

@@ -14,7 +14,7 @@ export interface RepositoryConfig {
   labels: Record<string, number>;
 }
 export interface SettingsConfig {
-  profile: { name: string; timezone: string; githubLogin: string };
+  profile: { name: string; reviewName: string; timezone: string; githubLogin: string };
   appearance: AppearanceConfig;
   monitor: { intervalMinutes: number; runOnStartup: boolean; includeDraftPullRequests: boolean };
   repositories: RepositoryConfig[];
@@ -237,10 +237,23 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
       <header className="settings-header"><div><span className="section-label">CONFIGURATION</span><h2 id="settings-title">Settings</h2><p>Changes are saved to <code>{configFile}</code>. Secrets in <code>.env</code> are never shown here.</p>{warning && <p className="settings-warning">{warning}</p>}</div></header>
       {!draft ? <div className="settings-loading">{error || 'Loading configuration…'}</div> : <form onSubmit={(event) => void submit(event)}>
         <div className="settings-body">
-          <fieldset className="settings-section"><legend>Profile</legend><div className="settings-grid three">
-            <label><span>Name</span><input required value={draft.profile.name} onChange={(event) => setDraft({ ...draft, profile: { ...draft.profile, name: event.target.value } })} /></label>
-            <label><span>GitHub login</span><input value={draft.profile.githubLogin} onChange={(event) => setDraft({ ...draft, profile: { ...draft.profile, githubLogin: event.target.value } })} /></label>
-            <label><span>Timezone</span><select value={draft.profile.timezone} onChange={(event) => setDraft({ ...draft, profile: { ...draft.profile, timezone: event.target.value } })}>{timezoneOptionNodes}</select></label>
+          <fieldset className="settings-section"><legend>Profile</legend><div className="settings-description-list">
+            <div className="settings-description-row">
+              <label><span>Your Name</span><input required aria-describedby="profile-name-description" value={draft.profile.name} onChange={(event) => setDraft({ ...draft, profile: { ...draft.profile, name: event.target.value } })} /></label>
+              <p id="profile-name-description">Display name used in the dashboard greeting and other personalized text.</p>
+            </div>
+            <div className="settings-description-row">
+              <label><span>Review Name</span><input aria-describedby="profile-review-name-description" placeholder="Optional" value={draft.profile.reviewName} onChange={(event) => setDraft({ ...draft, profile: { ...draft.profile, reviewName: event.target.value } })} /></label>
+              <p id="profile-review-name-description">Optional attribution for AI review comments, such as “CB1 reviewed a1b2c3d4.” Leave blank to use “Reviewed” without a name.</p>
+            </div>
+            <div className="settings-description-row">
+              <label><span>GitHub login</span><input aria-describedby="profile-github-description" value={draft.profile.githubLogin} onChange={(event) => setDraft({ ...draft, profile: { ...draft.profile, githubLogin: event.target.value } })} /></label>
+              <p id="profile-github-description">Identifies your assigned issues, reviews, approvals, and authored PRs. Leave blank to use the account authenticated by <code>gh</code>.</p>
+            </div>
+            <div className="settings-description-row">
+              <label><span>Timezone</span><select aria-describedby="profile-timezone-description" value={draft.profile.timezone} onChange={(event) => setDraft({ ...draft, profile: { ...draft.profile, timezone: event.target.value } })}>{timezoneOptionNodes}</select></label>
+              <p id="profile-timezone-description">Controls displayed timestamps, workday boundaries, and status-update dates.</p>
+            </div>
           </div></fieldset>
 
           <fieldset className="settings-section"><legend>Appearance</legend><div className="choice-groups">
@@ -271,20 +284,20 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
             <button type="button" className="add-button" onClick={addRepository}>＋ Add repository</button>
           </fieldset>
 
-          <fieldset className="settings-section"><legend>Review behavior</legend><div className="review-behavior-list">
-            <div className="review-behavior-row">
+          <fieldset className="settings-section"><legend>Review behavior</legend><div className="settings-description-list">
+            <div className="settings-description-row">
               <label><span>Requested reviewer</span><input aria-describedby="requested-reviewer-description" value={draft.review.requestedReviewer} onChange={(event) => setDraft({ ...draft, review: { ...draft.review, requestedReviewer: event.target.value } })} /></label>
               <p id="requested-reviewer-description">GitHub login Barbarian treats as the target reviewer. Leave blank to use your profile login.</p>
             </div>
-            <div className="review-behavior-row">
+            <div className="settings-description-row">
               <label><span>Fallback teams <small>comma-separated</small></span><input aria-describedby="fallback-teams-description" value={draft.review.fallbackTeams.join(', ')} onChange={(event) => setDraft({ ...draft, review: { ...draft.review, fallbackTeams: splitItems(event.target.value) } })} /></label>
               <p id="fallback-teams-description">Team review requests that enter your queue when no individual reviewer is requested.</p>
             </div>
-            <div className="review-behavior-row">
+            <div className="settings-description-row">
               <label><span>Workspace root <small>edit in YAML</small></span><code className="readonly-value">{advanced?.workspaceRoot || 'Not configured'}</code></label>
               <p>Dedicated directory for cached clones and per-PR worktrees created by Prepare locally.</p>
             </div>
-            <div className="review-behavior-row">
+            <div className="settings-description-row">
               <label className="check-field"><input type="checkbox" aria-describedby="workspace-cleanup-description" checked={draft.review.autoCleanup} onChange={(event) => setDraft({ ...draft, review: { ...draft.review, autoCleanup: event.target.checked } })} /><span>Clean completed workspaces</span></label>
               <p id="workspace-cleanup-description">Remove prepared PR worktrees after their pull requests are merged or closed.</p>
             </div>

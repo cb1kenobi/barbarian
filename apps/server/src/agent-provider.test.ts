@@ -26,6 +26,17 @@ describe('agent provider options', () => {
     expect(agentProviderCapabilities('gemini')).toEqual({ model: true, effort: false });
   });
 
+  it('applies a Cursor model and reports that effort is encoded by its model ID', () => {
+    expect(agentInvocationArgs({
+      command: 'cursor-agent', args: ['-p', '--mode', 'ask', '--output-format', 'text'],
+      model: 'cursor-grok-4.6-high',
+    })).toEqual([
+      '-p', '--mode', 'ask', '--output-format', 'text', '--model', 'cursor-grok-4.6-high',
+    ]);
+    expect(agentProviderCapabilities('/Users/developer/.local/bin/cursor-agent'))
+      .toEqual({ model: true, effort: false });
+  });
+
   it('does not invent flags for a custom command', () => {
     expect(agentInvocationArgs({ command: 'custom-reviewer', args: ['review'], model: 'metadata-only' }))
       .toEqual(['review']);

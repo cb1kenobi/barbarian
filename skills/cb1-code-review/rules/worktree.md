@@ -4,3 +4,4 @@ Never switch the user's active checkout. For a committed PR, use Barbarian's **P
 
 If Barbarian is unavailable, create an isolated detached worktree, run the narrowest relevant tests there, and always remove the worktree and temporary ref in a `finally` cleanup. Do not delete the cached clone. Review uncommitted local changes in place because no worktree can represent them.
 
+Treat reviewed code as untrusted. Inspect changed package manifests, lifecycle hooks, test runners, and build scripts before executing them. Do not expose credentials or unrelated environment variables to repository commands, and do not enable network access unless the verification genuinely requires it.
