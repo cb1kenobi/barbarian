@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 
 export type Theme = 'light' | 'dark' | 'slayer';
 export type FontSize = 'small' | 'normal';
+export type AgentEffort = '' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export interface AppearanceConfig { theme: Theme; fontSize: FontSize }
+interface AgentProviderSettings { model: string; effort: AgentEffort }
 export interface RepositoryConfig {
   name: string;
   priority: number;
@@ -24,13 +26,14 @@ export interface SettingsConfig {
     maxAutomaticAttempts: number;
     retryBaseMinutes: number;
     maxRunsPerPullRequestPerHour: number;
+    providers: Record<string, AgentProviderSettings>;
   };
   statusUpdate: { enabled: boolean; workdays: string[]; daysOff: string[] };
 }
 interface AdvancedSettings {
   workspaceRoot: string;
   linear: { enabled: boolean; configured: boolean };
-  providers: string[];
+  providers: Array<{ name: string; supportsModel: boolean; supportsEffort: boolean }>;
 }
 
 interface EditableRepository extends Omit<RepositoryConfig, 'labels'> { id: string; labelsText: string }
@@ -39,6 +42,7 @@ interface SettingsDraft extends Omit<SettingsConfig, 'repositories'> {
 }
 
 const weekdays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+const effortLevels: AgentEffort[] = ['', 'low', 'medium', 'high', 'xhigh', 'max'];
 let localId = 0;
 const nextId = () => `settings-${localId += 1}`;
 
@@ -170,6 +174,16 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
       reviewSkill: 'cb1-code-review', labelsText: '',
     }],
   }));
+  const updateProvider = (name: string, patch: Partial<AgentProviderSettings>) => setDraft((current) => current && ({
+    ...current,
+    agents: {
+      ...current.agents,
+      providers: {
+        ...current.agents.providers,
+        [name]: { ...(current.agents.providers[name] || { model: '', effort: '' }), ...patch },
+      },
+    },
+  }));
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!draft) return;
@@ -252,15 +266,24 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
           </div></fieldset>
 
           <fieldset className="settings-section"><legend>Agents</legend><div className="settings-grid four">
-            <label><span>Default provider</span><input list="provider-names" required value={draft.agents.default} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, default: event.target.value } })} /><datalist id="provider-names">{advanced?.providers.map((provider) => <option key={provider} value={provider} />)}</datalist></label>
+            <label><span>Default provider</span><input list="provider-names" required value={draft.agents.default} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, default: event.target.value } })} /><datalist id="provider-names">{advanced?.providers.map((provider) => <option key={provider.name} value={provider.name} />)}</datalist></label>
             <label><span>Max concurrent</span><input type="number" min="1" max="8" value={draft.agents.maxConcurrent} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, maxConcurrent: Number(event.target.value) } })} /></label>
             <label><span>Max attempts</span><input type="number" min="1" max="10" value={draft.agents.maxAutomaticAttempts} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, maxAutomaticAttempts: Number(event.target.value) } })} /></label>
             <label><span>Runs / PR / hour</span><input type="number" min="1" max="20" value={draft.agents.maxRunsPerPullRequestPerHour} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, maxRunsPerPullRequestPerHour: Number(event.target.value) } })} /></label>
             <label><span>Retry base (minutes)</span><input type="number" min="1" max="120" value={draft.agents.retryBaseMinutes} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, retryBaseMinutes: Number(event.target.value) } })} /></label>
             <label className="check-field"><input type="checkbox" checked={draft.agents.autoReview} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, autoReview: event.target.checked } })} /><span>Automatically review</span></label>
           </div>
-          <div className="settings-subhead"><strong>Configured providers</strong><small>Executable commands are never returned by the API. Edit them in YAML.</small></div>
-          <div className="provider-names">{advanced?.providers.map((provider) => <code key={provider}>{provider}</code>)}</div></fieldset>
+          <div className="settings-subhead"><strong>Provider models</strong><small>Blank values use that CLI’s defaults. Executable commands remain editable only in YAML.</small></div>
+          <div className="settings-list providers-list">{advanced?.providers.map((provider) => {
+            const values = draft.agents.providers[provider.name] || { model: '', effort: '' };
+            return <article className="settings-card provider-card" key={provider.name}>
+              <div className="settings-card-head"><strong>{provider.name}</strong>{draft.agents.default === provider.name && <small>Default provider</small>}</div>
+              <div className="settings-grid two">
+                <label><span>Model <small>{provider.supportsModel ? 'blank uses CLI default' : 'not supported'}</small></span><input disabled={!provider.supportsModel} placeholder="CLI default" value={values.model} onChange={(event) => updateProvider(provider.name, { model: event.target.value })} /></label>
+                <label><span>Effort <small>{provider.supportsEffort ? 'review depth' : 'not supported by this CLI'}</small></span><select disabled={!provider.supportsEffort} value={values.effort} onChange={(event) => updateProvider(provider.name, { effort: event.target.value as AgentEffort })}>{effortLevels.map((effort) => <option key={effort || 'default'} value={effort}>{effort || 'CLI default'}</option>)}</select></label>
+              </div>
+            </article>;
+          })}</div></fieldset>
 
           <fieldset className="settings-section"><legend>Status updates &amp; Linear</legend><div className="settings-grid two">
             <div><label className="check-field"><input type="checkbox" checked={draft.statusUpdate.enabled} onChange={(event) => setDraft({ ...draft, statusUpdate: { ...draft.statusUpdate, enabled: event.target.checked } })} /><span>Prepare daily status updates</span></label><span className="field-label spaced">Workdays</span><div className="weekday-row">{weekdays.map((day) => <label key={day}><input type="checkbox" checked={draft.statusUpdate.workdays.includes(day)} onChange={(event) => setDraft({ ...draft, statusUpdate: { ...draft.statusUpdate, workdays: event.target.checked ? [...draft.statusUpdate.workdays, day] : draft.statusUpdate.workdays.filter((candidate) => candidate !== day) } })} /><span>{day.slice(0, 3)}</span></label>)}</div><label><span>Days off <small>dates separated by commas or lines</small></span><textarea rows={2} value={draft.statusUpdate.daysOff.join('\n')} onChange={(event) => setDraft({ ...draft, statusUpdate: { ...draft.statusUpdate, daysOff: splitItems(event.target.value) } })} /></label></div>

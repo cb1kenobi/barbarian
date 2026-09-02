@@ -37,7 +37,7 @@ Default to one pass. If the user asks for deep, thorough, multipass, release, or
 
 Order findings by severity: Critical, High, Medium, Low, Nit. Every finding needs a precise file and diff line, a concrete failure mode, and the simplest viable fix. Avoid praise, style-only noise, vague suggestions, and speculative warnings.
 
-For a GitHub PR, batch confirmed inline comments into one review following [rules/github-comments.md](rules/github-comments.md). If the review is clean, post one short clean-review comment with the reviewed head SHA. Do not post anything for a read-only local review.
+For a GitHub PR, batch confirmed inline findings into one review following [rules/github-comments.md](rules/github-comments.md). A clean review updates Barbarian only and posts nothing to GitHub. Do not post anything for a read-only local review.
 
 After a tracked PR review, report the result to Barbarian:
 

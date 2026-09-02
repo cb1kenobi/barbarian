@@ -53,6 +53,16 @@ async function activeSelection(sender) {
   catch { return null; }
 }
 
+async function panelAppearance(sender) {
+  if (!isSidePanelSender(sender)) return null;
+  try {
+    const response = await fetch(`${endpoint}/api/settings`);
+    if (!response.ok) return null;
+    const body = await response.json();
+    return body?.config?.appearance ? { appearance: body.config.appearance } : null;
+  } catch { return null; }
+}
+
 async function refreshLoadedPage(sender, pageUrl) {
   const tab = sender.tab;
   const url = pageUrl || tab?.url || '';
@@ -104,6 +114,7 @@ chrome.tabs.onRemoved.addListener((tabId) => recentNavigationRefreshes.delete(ta
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'barbarian-api') void proxyApi(message, sender).then(sendResponse);
   else if (message?.type === 'barbarian-active-selection') void activeSelection(sender).then(sendResponse);
+  else if (message?.type === 'barbarian-appearance') void panelAppearance(sender).then(sendResponse);
   else if (message?.type === 'barbarian-issue-updated' && sender.tab) {
     const page = githubPageContext(sender.tab.url || '');
     if (page?.kind !== 'issue') { sendResponse({ ok: false }); return false; }

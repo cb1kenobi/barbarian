@@ -84,7 +84,9 @@ export function storedReviewFindings(database: BarbarianDatabase, reviewId: stri
 
 export async function refreshReviewContext(database: BarbarianDatabase, reviewId: string): Promise<void> {
   const review = database.connection.prepare(`
-    SELECT id, repository, number, status, last_reviewed_sha, discussion_watermark, last_reviewed_watermark,
+    SELECT id, repository, number, status, head_sha, last_reviewed_sha,
+      commit_count, last_reviewed_commit_count, approval_carryover,
+      discussion_watermark, last_reviewed_watermark,
       viewer_review_state, viewer_review_sha, other_approvals,
       attempt_head_sha, attempt_watermark
     FROM review_queue WHERE id=?
@@ -93,7 +95,11 @@ export async function refreshReviewContext(database: BarbarianDatabase, reviewId
     repository: string;
     number: number;
     status: string;
+    head_sha: string;
     last_reviewed_sha: string | null;
+    commit_count: number;
+    last_reviewed_commit_count: number | null;
+    approval_carryover: number;
     discussion_watermark: string;
     last_reviewed_watermark: string | null;
     viewer_review_state: string | null;
@@ -124,11 +130,16 @@ export async function refreshReviewContext(database: BarbarianDatabase, reviewId
     viewer_review_state: remote.viewerReviewState,
     viewer_review_sha: remote.viewerReviewSha,
   };
+  const viewerApproved = viewerApprovedCurrentHead(viewerReview);
+  const viewerRequestedChanges = viewerRequestedChangesCurrentHead(viewerReview);
+  let approvalCarryover = Boolean(review.approval_carryover || review.status === 'approved')
+    || Boolean(remote.viewerReviewState === 'APPROVED' && remote.viewerReviewSha);
+  if (viewerRequestedChanges) approvalCarryover = false;
   if (remote.state === 'MERGED') status = 'merged';
   else if (remote.state === 'CLOSED') status = 'closed';
-  else if (viewerApprovedCurrentHead(viewerReview)) status = 'approved';
-  else if (viewerRequestedChangesCurrentHead(viewerReview)) status = 'awaiting_feedback';
-  else if (status === 'approved') status = 'unreviewed';
+  else if (viewerApproved) status = 'approved';
+  else if (viewerRequestedChanges) status = 'awaiting_feedback';
+  else if (status === 'approved' && (stale || !approvalCarryover)) status = 'unreviewed';
   else if (status !== 'agent_working' && !failedOnCurrentInput) {
     if (stale) status = 'unreviewed';
     else if (openFindings > 0) status = 'issues_found';
@@ -154,13 +165,14 @@ export async function refreshReviewContext(database: BarbarianDatabase, reviewId
     }
     database.connection.prepare(`
       UPDATE review_queue SET status=?, findings_count=?, review_decision=?, remote_state=?,
-        additions=?, deletions=?,
+        additions=?, deletions=?, commit_count=?, approval_carryover=?,
         viewer_review_state=?, viewer_review_sha=?, other_approvals=?, merged_at=?, review_paused=CASE
           WHEN head_sha<>? OR ?>discussion_watermark THEN 0 ELSE review_paused END,
         head_sha=?, discussion_watermark=?,
         last_reviewed_watermark=COALESCE(last_reviewed_watermark, ?), updated_at=? WHERE id=?
     `).run(
       status, openFindings, remote.reviewDecision, remote.state, remote.additions, remote.deletions,
+      remote.commitCount, approvalCarryover ? 1 : 0,
       remote.viewerReviewState, remote.viewerReviewSha, remote.otherApprovals, remote.mergedAt,
       remote.headSha, watermark, remote.headSha, watermark, reviewedWatermark, now, reviewId,
     );

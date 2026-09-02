@@ -32,7 +32,7 @@ describe('Chrome extension API policy', () => {
   });
 
   it('allows same-PR review actions but rejects unrelated local API access', () => {
-    for (const action of ['chat', 'run-review', 'workspace']) {
+    for (const action of ['chat', 'run-review', 'workspace', 'track']) {
       expect(isAllowedApiMessage({
         type: 'barbarian-api',
         path: `/api/reviews/github%3AHarperFast%2Fharper%232430/${action}`,

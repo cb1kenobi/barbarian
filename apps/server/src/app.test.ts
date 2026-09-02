@@ -6,6 +6,7 @@ import { createApp } from './app.js';
 import type { BarbarianConfig } from './types.js';
 import { BarbarianDatabase } from './database.js';
 import { ConfigStore } from './config.js';
+import type { ReviewDispatcher } from './dispatcher.js';
 
 const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
@@ -70,7 +71,8 @@ describe('dashboard reviews', () => {
     `).run(branchSeenAt, branchSeenAt, branchSeenAt);
     database.connection.prepare(`
       UPDATE review_queue SET remote_updated_at='2026-01-02T03:04:00Z',
-        linked_issues='[12,34]', body='Fixes ENG-9' WHERE number=1
+        linked_issues='[12,34]', body='Fixes ENG-9', commit_count=7,
+        last_reviewed_sha='old-head', last_reviewed_commit_count=4 WHERE number=1
     `).run();
     database.connection.prepare(`
       INSERT INTO agent_runs(review_id,provider,task,status,started_at,finished_at)
@@ -146,6 +148,7 @@ describe('dashboard reviews', () => {
       expect(reviews.find((review) => review.number === 1)).toMatchObject({
         remote_updated_at: '2026-01-02T03:04:00Z',
         last_agent_review_at: '2026-01-02T04:05:00Z',
+        new_commit_count: 3,
         issue_counts: { high: 1, medium: 0, low: 1 },
         fixed_issues: [
           { provider: 'github', identifier: '#12', url: 'https://github.com/Acme/storage/issues/12' },
@@ -221,6 +224,48 @@ describe('browser context appearance', () => {
         },
         assessment: { label: 'Approved' },
       });
+    } finally {
+      await app.close();
+      database.close();
+    }
+  });
+
+  it('adds an untracked pull request and immediately requests an agent review', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-browser-track-test-'));
+    directories.push(directory);
+    const database = new BarbarianDatabase(path.join(directory, 'test.db'));
+    let requestedReview = '';
+    const dispatcher = {
+      setReviewChangedListener() {},
+      requestManual(id: string) { requestedReview = id; return true; },
+      async pump() {},
+      cancelReview() { return { found: false, stopped: false, cancelled: 0 }; },
+    } as unknown as ReviewDispatcher;
+    const app = await createApp(database, new ConfigStore(config), undefined, {
+      dispatcher,
+      trackReview: async (db, _configured, repository, number) => {
+        const now = new Date().toISOString();
+        const id = `github:${repository}#${number}`;
+        db.connection.prepare(`
+          INSERT INTO review_queue(
+            id, repository, number, title, url, author, head_sha, head_ref_name, base_ref_name,
+            first_seen_at, updated_at, last_seen_at
+          ) VALUES (?, ?, ?, 'Manual review', ?, 'author', 'head', 'feature', 'main', ?, ?, ?)
+        `).run(id, repository, number, `https://github.com/${repository}/pull/${number}`, now, now, now);
+        return id;
+      },
+    });
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/reviews/github%3AAcme%2Fstorage%2399/track',
+        payload: {},
+      });
+      expect(response.statusCode).toBe(202);
+      expect(response.json()).toMatchObject({ accepted: true, id: 'github:Acme/storage#99' });
+      expect(requestedReview).toBe('github:Acme/storage#99');
+      expect(database.connection.prepare('SELECT number FROM review_queue WHERE id=?').get(requestedReview))
+        .toEqual({ number: 99 });
     } finally {
       await app.close();
       database.close();
@@ -456,7 +501,11 @@ describe('settings API', () => {
       const before = await app.inject({ method: 'GET', url: '/api/settings' });
       expect(before.statusCode).toBe(200);
       expect(before.json()).toMatchObject({
-        config: { appearance: { theme: 'dark', fontSize: 'small' } },
+        config: {
+          appearance: { theme: 'dark', fontSize: 'small' },
+          agents: { providers: { codex: { model: '', effort: '' } } },
+        },
+        advanced: { providers: [{ name: 'codex', supportsModel: true, supportsEffort: true }] },
         revision: 'memory:1',
         configFile: 'config/barbarian.yaml',
       });
@@ -469,6 +518,10 @@ describe('settings API', () => {
         ...editable,
         profile: { ...current.profile, name: 'Barbarian' },
         appearance: { theme: 'slayer', fontSize: 'normal' },
+        agents: {
+          ...(editable.agents as Record<string, unknown>),
+          providers: { codex: { model: 'gpt-review', effort: 'high' } },
+        },
         repositories: [...current.repositories, {
           name: 'Acme/ui', priority: 5, watchIssues: false, watchPullRequests: true,
           reviewSkill: 'cb1-code-review', labels: { accessibility: 25 },
@@ -492,7 +545,9 @@ describe('settings API', () => {
       expect(saved.statusCode).toBe(200);
       expect(persisted).toHaveLength(1);
       expect(persisted[0]).toMatchObject(next);
-      expect(persisted[0]!.agents.providers).toEqual(current.agents.providers);
+      expect(persisted[0]!.agents.providers.codex).toEqual({
+        ...current.agents.providers.codex, model: 'gpt-review', effort: 'high',
+      });
       expect(persisted[0]!.review.workspaceRoot).toBe(current.review.workspaceRoot);
       expect(store.get()).toMatchObject({ profile: { name: 'Barbarian' }, appearance: next.appearance });
       expect((await app.inject({ method: 'GET', url: '/api/dashboard' })).statusCode).toBe(200);

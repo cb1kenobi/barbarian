@@ -18,10 +18,13 @@ export interface RepositoryConfig {
   labels: Record<string, number>;
 }
 
+export type AgentEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
 export interface AgentProviderConfig {
   command: string;
   args: string[];
   model?: string;
+  effort?: AgentEffort;
 }
 
 export interface BarbarianConfig {
@@ -77,6 +80,7 @@ export interface DiscoveredPullRequest {
   author: string;
   additions: number;
   deletions: number;
+  commitCount: number;
   headSha: string;
   headRefName: string;
   baseRefName: string;

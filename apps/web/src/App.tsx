@@ -26,6 +26,7 @@ interface Review {
   findings_count: number; review_skill: string; workspace_path: string | null; updated_at: string;
   pending_reason: string | null; display_status?: string; priority_score: number;
   remote_created_at: string; remote_updated_at: string; last_agent_review_at: string | null;
+  new_commit_count: number;
   issue_counts: { high: number; medium: number; low: number };
   linked_issues?: number[];
   fixed_issues?: FixedIssueReference[];
@@ -41,7 +42,7 @@ interface ChatMessage { id: number; role: string; author: string; content: strin
 
 interface ActiveReview {
   id: string; repository: string; number: number; title: string; url: string;
-  agent: string; model: string; started_at: string;
+  agent: string; model: string; effort: string; started_at: string;
 }
 
 interface Dashboard {
@@ -125,6 +126,7 @@ export function App() {
   const [showStatus, setShowStatus] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [reviewSort, setReviewSort] = useState<ReviewSort>('priority');
+  const [reviewRepository, setReviewRepository] = useState('all');
   const [workSort, setWorkSort] = useState<WorkSort>('in-progress');
   const [workRepository, setWorkRepository] = useState('all');
   const [queueSearch, setQueueSearch] = useState('');
@@ -176,12 +178,16 @@ export function App() {
     finally { setSyncing(false); }
   };
 
+  const allReviews = dashboard?.reviews || [];
+  const reviewRepositories = useMemo(() => [...new Set(allReviews.map((review) => review.repository))].sort(), [allReviews]);
   const reviews = useMemo(() => sortReviews(
-    (dashboard?.reviews || []).filter((review) => matchesQueueSearch(review, queueSearch)),
+    allReviews.filter((review) => (reviewRepository === 'all' || review.repository === reviewRepository)
+      && matchesQueueSearch(review, queueSearch)),
     reviewSort,
-  ), [dashboard?.reviews, queueSearch, reviewSort]);
+  ), [allReviews, queueSearch, reviewRepository, reviewSort]);
   const repositories = useMemo(() => sortRepositoryBookmarks(dashboard?.repositories || []), [dashboard?.repositories]);
   const visibleReviewsNeedingApproval = countReviewsNeedingApproval(reviews);
+  const visibleApprovedReviews = reviews.filter((review) => reviewDisplayStatus(review) === 'approved').length;
   const allWork = dashboard?.workQueue || [];
   const workRepositories = useMemo(() => [...new Set(allWork.map((item) => item.repository))].sort(), [allWork]);
   const visibleWork = useMemo(() => sortWorkItems(
@@ -214,7 +220,7 @@ export function App() {
             <div className="active-review-list">
               {(dashboard?.activeReviews || []).map((review) => <a className="active-review" href={review.url} target="_blank" rel="noreferrer" title={review.title} key={review.id}>
                 <span className="active-review-head"><span><i aria-hidden="true" />{repositoryName(review.repository)} #{review.number}</span><time>{formatElapsed(review.started_at, now)}</time></span>
-                <small>{review.agent} · {review.model}</small>
+                <small>{review.agent} · {review.model} · {review.effort === 'CLI default' ? 'default effort' : `${review.effort} effort`}</small>
               </a>)}
               {dashboard && !dashboard.activeReviews?.length && <span className="active-review-empty">No reviews running</span>}
             </div>
@@ -264,7 +270,10 @@ export function App() {
         </div>
 
         <section id="reviews" className="panel reviews">
-          <div className="panel-head"><div><span className="section-label">CODE REVIEWS</span><div className="review-heading"><h2>Review queue</h2><span className="review-count" aria-label={`${visibleReviewsNeedingApproval} matching non-approved pull requests need your review`}>{visibleReviewsNeedingApproval} to review</span><ReviewStatusInfo /></div></div><label className="review-sort"><span>Sort</span><select value={reviewSort} onChange={(event) => setReviewSort(event.target.value as ReviewSort)}><option value="priority">Priority</option><option value="pain">Pain</option><option value="oldest">Oldest</option><option value="newest">Newest</option><option value="repository">Repo name</option></select></label></div>
+          <div className="panel-head"><div><span className="section-label">CODE REVIEWS</span><div className="review-heading"><h2>Review queue</h2><span className="review-count" aria-label={`${visibleReviewsNeedingApproval} matching non-approved pull requests need your review`}>{visibleReviewsNeedingApproval} to review</span><span className="review-count approved-count" aria-label={`${visibleApprovedReviews} matching pull requests are approved`}>{visibleApprovedReviews} approved</span><ReviewStatusInfo /></div></div><div className="queue-controls">
+            <label className="review-sort queue-repository"><span>Repo</span><select value={reviewRepository} onChange={(event) => setReviewRepository(event.target.value)}><option value="all">All repositories</option>{reviewRepositories.map((repository) => <option value={repository} key={repository}>{repositoryName(repository)}</option>)}</select></label>
+            <label className="review-sort"><span>Sort</span><select value={reviewSort} onChange={(event) => setReviewSort(event.target.value as ReviewSort)}><option value="priority">Priority</option><option value="pain">Pain</option><option value="oldest">Oldest</option><option value="newest">Newest</option><option value="repository">Repo name</option></select></label>
+          </div></div>
           <div className="review-grid queue-viewport review-viewport">
             {reviews.map((review) => <button className="review-card" key={review.id} onClick={() => setSelectedReview(review.id)}>
               <div className="review-card-head"><span><span className="repo">{repositoryName(review.repository)}</span><span className="pr">#{review.number}</span></span><ReviewStatusBadge status={reviewDisplayStatus(review)} /></div>
@@ -277,10 +286,15 @@ export function App() {
                 <small className="line-counts" aria-label={`${review.additions} lines added and ${review.deletions} lines removed`}>
                   <span className="lines-added">+{review.additions}</span><span className="lines-removed">−{review.deletions}</span>
                 </small>
-                <SeverityCounts counts={review.issue_counts} />
+                <span className="review-signals">
+                  <SeverityCounts counts={review.issue_counts} />
+                  <span className="new-commits" aria-label={`${review.new_commit_count} new ${review.new_commit_count === 1 ? 'commit' : 'commits'} since the last agent review`}>
+                    <strong>{review.new_commit_count}</strong> new {review.new_commit_count === 1 ? 'commit' : 'commits'}
+                  </span>
+                </span>
               </footer>
             </button>)}
-            {!reviews.length && <Empty message={queueSearch ? 'No code reviews match this search.' : 'No pull requests currently need your review.'} />}
+            {!reviews.length && <Empty message={queueSearch || reviewRepository !== 'all' ? 'No code reviews match these filters.' : 'No pull requests currently need your review.'} />}
           </div>
         </section>
 

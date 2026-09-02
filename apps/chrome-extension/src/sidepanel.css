@@ -37,6 +37,7 @@
 }
 
 :root[data-font-size='normal'] { font-size: 18px; }
+:root[data-appearance='pending'] body { visibility: hidden; }
 
 :root[data-theme='slayer'] {
   --accent: #ff554d;
@@ -132,9 +133,13 @@ p { margin: 0; }
 .empty { padding: 13px; border: 1px dashed var(--line); color: var(--muted); }
 .offline { color: #ff9a7c; }
 .offline strong { display: block; margin-bottom: 7px; color: #ffb098; }
+.untracked-review { display: flex; align-items: flex-start; flex-direction: column; }
+.untracked-review .empty { width: 100%; }
+.track-review { display: inline-flex; align-self: flex-start; align-items: center; width: auto; margin-top: 12px; }
 .transcript { display: grid; gap: 8px; margin-bottom: 10px; }
-.review-room { display: flex; min-height: min(280px, 38vh); flex: 1 1 auto; flex-direction: column; overflow: hidden; margin: 0; }
-.conversation { min-height: 0; flex: 1 1 auto; overflow-y: auto; margin: 0 -6px 10px 0; padding-right: 6px; overscroll-behavior: contain; scrollbar-color: var(--line) transparent; scrollbar-width: thin; }
+.review-room { display: flex; min-height: 0; flex: 0 1 auto; flex-direction: column; overflow: hidden; margin: 0; }
+.conversation { min-height: 0; max-height: min(320px, 38vh); flex: 0 1 auto; overflow-y: auto; margin: 0 -6px 10px 0; padding-right: 6px; overscroll-behavior: contain; scrollbar-color: var(--line) transparent; scrollbar-width: thin; }
+.conversation:not(:has(.transcript, .reply.visible)) { display: none; }
 .message { padding: 9px 10px; border: 1px solid var(--line); background: var(--panel-soft); color: var(--ink-soft); font-size: .875rem; overflow-wrap: anywhere; }
 .message.user { margin-left: 24px; border-color: var(--user-border); background: var(--user-panel); }
 .message.assistant { margin-right: 24px; }

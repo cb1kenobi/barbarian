@@ -66,7 +66,7 @@ describe('applyDiscovery', () => {
       provider: 'github' as const, repository: 'Acme/storage', body: '', author: 'author',
       headSha: 'abc', headRefName: 'feature', baseRefName: 'main', createdAt: '2026-08-01T10:00:00Z',
       updatedAt: '2026-08-31T10:00:00Z',
-      additions: 42, deletions: 7,
+      additions: 42, deletions: 7, commitCount: 3,
       isDraft: false, reviewDecision: null, requestedTeams: [], linkedIssues: [], mergedAt: null, state: 'OPEN',
       reviewedBy: [], viewerReviewState: null, viewerReviewSha: null, otherApprovals: 0,
       discussionWatermark: '',
@@ -101,6 +101,9 @@ describe('applyDiscovery', () => {
     await applyDiscovery(db, config, discovery);
     expect(db.connection.prepare('SELECT status FROM review_queue WHERE number=10').get())
       .toEqual({ status: 'approved' });
+    db.connection.prepare(`
+      UPDATE review_queue SET last_reviewed_sha='abc', last_reviewed_commit_count=3 WHERE number=10
+    `).run();
 
     discovery.pullRequests[2] = { ...discovery.pullRequests[2]!, reviewedBy: [] };
     await applyDiscovery(db, config, discovery);
@@ -114,10 +117,13 @@ describe('applyDiscovery', () => {
     expect(db.connection.prepare('SELECT review_paused FROM review_queue WHERE number=10').get())
       .toEqual({ review_paused: 1 });
 
-    discovery.pullRequests[0] = { ...discovery.pullRequests[0]!, headSha: 'new-head' };
+    discovery.pullRequests[0] = { ...discovery.pullRequests[0]!, headSha: 'new-head', commitCount: 5 };
     await applyDiscovery(db, config, discovery);
-    expect(db.connection.prepare('SELECT review_paused FROM review_queue WHERE number=10').get())
-      .toEqual({ review_paused: 0 });
+    expect(db.connection.prepare(`
+      SELECT status, review_paused, approval_carryover, commit_count FROM review_queue WHERE number=10
+    `).get()).toEqual({
+      status: 'unreviewed', review_paused: 0, approval_carryover: 1, commit_count: 5,
+    });
     db.close();
   });
 });

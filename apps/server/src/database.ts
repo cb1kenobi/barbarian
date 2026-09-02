@@ -57,6 +57,7 @@ export class BarbarianDatabase {
         author TEXT NOT NULL,
         additions INTEGER NOT NULL DEFAULT 0,
         deletions INTEGER NOT NULL DEFAULT 0,
+        commit_count INTEGER NOT NULL DEFAULT 0,
         head_sha TEXT NOT NULL,
         head_ref_name TEXT NOT NULL,
         base_ref_name TEXT NOT NULL,
@@ -71,6 +72,8 @@ export class BarbarianDatabase {
         linked_issues TEXT NOT NULL DEFAULT '[]',
         review_skill TEXT NOT NULL DEFAULT 'cb1-code-review',
         last_reviewed_sha TEXT,
+        last_reviewed_commit_count INTEGER,
+        approval_carryover INTEGER NOT NULL DEFAULT 0,
         discussion_watermark TEXT NOT NULL DEFAULT '',
         last_reviewed_watermark TEXT,
         claim_owner TEXT,
@@ -268,6 +271,9 @@ export class BarbarianDatabase {
       ['remote_updated_at', 'TEXT'],
       ['additions', 'INTEGER NOT NULL DEFAULT 0'],
       ['deletions', 'INTEGER NOT NULL DEFAULT 0'],
+      ['commit_count', 'INTEGER NOT NULL DEFAULT 0'],
+      ['last_reviewed_commit_count', 'INTEGER'],
+      ['approval_carryover', 'INTEGER NOT NULL DEFAULT 0'],
     ];
     for (const [name, definition] of reviewAdditions) {
       if (!reviewColumns.has(name)) this.connection.exec(`ALTER TABLE review_queue ADD COLUMN ${name} ${definition}`);

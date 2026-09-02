@@ -2,7 +2,7 @@
   "name": "barbarian-vscode-extension",
   "displayName": "Barbarian Branch Review",
   "description": "Review the current git branch with Barbarian, with optional pull request context.",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "license": "UNLICENSED",
   "publisher": "local",

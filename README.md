@@ -152,7 +152,7 @@ agents:
       args: [-p]
 ```
 
-Add an optional `model` to a provider when its CLI arguments do not name the model explicitly. This is display metadata for active reviews in the dashboard; otherwise Barbarian reads `--model`/`-m` from `args` or displays `CLI default`.
+Set a provider’s model and effort in Settings. Barbarian passes the selected model to Codex, Claude, or Gemini; effort is passed to Codex and Claude, whose installed CLIs support it. Blank values retain the CLI defaults. The command and other arguments remain editable only in YAML.
 
 Provider API keys are optional because Barbarian launches local CLI programs. A CLI authenticated through its own login flow—such as `codex login` using ChatGPT—does not need an API key in `.env`. Put a provider key there only when that CLI is configured to use one. Barbarian inherits the environment but never returns secrets from its settings API.
 
@@ -247,10 +247,10 @@ Or install it from this repository in a terminal:
 
 ```bash
 # Cursor
-cursor --install-extension apps/vscode-extension/barbarian-vscode-extension-0.2.2.vsix --force
+cursor --install-extension apps/vscode-extension/barbarian-vscode-extension-0.2.3.vsix --force
 
 # VS Code
-code --install-extension apps/vscode-extension/barbarian-vscode-extension-0.2.2.vsix --force
+code --install-extension apps/vscode-extension/barbarian-vscode-extension-0.2.3.vsix --force
 ```
 
 After changing the extension, rebuild, package, reinstall with `--force`, and reload the editor window. If the `cursor` or `code` command is unavailable, use the editor UI method above.

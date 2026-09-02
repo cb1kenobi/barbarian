@@ -24,7 +24,7 @@ export const reviewStatusGuide = [
   { status: 'awaiting_feedback', description: 'Review feedback is waiting for an author response or fixes.' },
   { status: 'ready_to_merge', description: 'The agent found no blocking issues on the current head.' },
   { status: 'partially_reviewed', description: 'Another reviewer approved; your current-head approval is still pending.' },
-  { status: 'approved', description: 'You approved the current PR head.' },
+  { status: 'approved', description: 'You approved the PR, and any newer commits passed a clean agent re-review.' },
   { status: 'merged', description: 'The pull request has been merged.' },
   { status: 'closed', description: 'The pull request was closed without merging.' },
 ] as const;

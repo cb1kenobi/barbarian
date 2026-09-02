@@ -28,6 +28,12 @@ const repositorySchema = z.object({
   labels: z.record(z.string(), z.number().int()).default({}),
 }).strict();
 
+const agentEffortSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
+const writableAgentProviderSchema = z.object({
+  model: z.string().max(200).default(''),
+  effort: z.union([agentEffortSchema, z.literal('')]).default(''),
+}).strict();
+
 const agentsSchema = z.object({
   default: z.string().default('codex'),
   autoReview: z.boolean().default(false),
@@ -37,6 +43,7 @@ const agentsSchema = z.object({
   maxRunsPerPullRequestPerHour: z.number().int().min(1).max(20).default(3),
   providers: z.record(z.string(), z.object({
     command: z.string(), args: z.array(z.string()).default([]), model: z.string().optional(),
+    effort: agentEffortSchema.optional(),
   })).default({}),
 });
 
@@ -92,7 +99,7 @@ export const writableConfigSchema = z.object({
     maxAutomaticAttempts: true,
     retryBaseMinutes: true,
     maxRunsPerPullRequestPerHour: true,
-  }).strict(),
+  }).extend({ providers: z.record(z.string(), writableAgentProviderSchema).default({}) }).strict(),
   statusUpdate: configSchema.shape.statusUpdate.strict(),
 }).strict();
 
@@ -181,6 +188,15 @@ function safeUpdate(current: BarbarianConfig, submitted: WritableConfig): Barbar
       maxAutomaticAttempts: submitted.agents.maxAutomaticAttempts,
       retryBaseMinutes: submitted.agents.retryBaseMinutes,
       maxRunsPerPullRequestPerHour: submitted.agents.maxRunsPerPullRequestPerHour,
+      providers: Object.fromEntries(Object.entries(current.agents.providers).map(([name, provider]) => {
+        const update = submitted.agents.providers[name];
+        if (!update) return [name, provider];
+        return [name, {
+          ...provider,
+          model: update.model.trim() || undefined,
+          effort: update.effort || undefined,
+        }];
+      })),
     },
     statusUpdate: submitted.statusUpdate,
   });
@@ -212,6 +228,14 @@ export async function saveConfigUpdate(
   const document = parseDocument(documentSource ?? await readFile(filename, 'utf8'));
   if (document.errors.length) throw document.errors[0];
   for (const entry of writablePaths) document.setIn(entry.path, entry.value(config));
+  for (const [name, provider] of Object.entries(config.agents.providers)) {
+    const modelPath = ['agents', 'providers', name, 'model'];
+    const effortPath = ['agents', 'providers', name, 'effort'];
+    if (provider.model) document.setIn(modelPath, provider.model);
+    else document.deleteIn(modelPath);
+    if (provider.effort) document.setIn(effortPath, provider.effort);
+    else document.deleteIn(effortPath);
+  }
   return persistYaml(document.toString(), filename, expectedRevision, documentSource !== undefined);
 }
 

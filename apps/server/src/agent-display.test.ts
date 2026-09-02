@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BarbarianConfig } from './types.js';
-import { configuredAgentModel } from './agent-display.js';
+import { configuredAgentEffort, configuredAgentModel } from './agent-display.js';
 
 function config(provider: BarbarianConfig['agents']['providers'][string]): BarbarianConfig {
   return {
@@ -32,5 +32,10 @@ describe('configuredAgentModel', () => {
 
   it('labels an unspecified model honestly', () => {
     expect(configuredAgentModel(config({ command: 'codex', args: ['exec'] }), 'codex')).toBe('CLI default');
+  });
+
+  it('shows configured effort without guessing a CLI default', () => {
+    expect(configuredAgentEffort(config({ command: 'codex', args: ['exec'], effort: 'high' }), 'codex')).toBe('high');
+    expect(configuredAgentEffort(config({ command: 'codex', args: ['exec'] }), 'codex')).toBe('CLI default');
   });
 });

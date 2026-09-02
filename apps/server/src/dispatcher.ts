@@ -211,7 +211,7 @@ export class ReviewDispatcher {
       `).all(config.agents.autoReview ? 1 : 0) as unknown as CandidateRow[];
       for (const row of rows) {
         const trigger = reviewTrigger(row);
-        if (!trigger || (row.status === 'approved' && trigger !== 'manual')) continue;
+        if (!trigger || (row.status === 'approved' && trigger !== 'manual' && trigger !== 'new_commits')) continue;
         const sameAttempt = row.attempt_head_sha === row.head_sha && row.attempt_watermark === row.discussion_watermark;
         const attemptCount = sameAttempt ? row.attempt_count + 1 : 1;
         if (trigger !== 'manual') {

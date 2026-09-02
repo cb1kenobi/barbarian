@@ -68,6 +68,31 @@ describe('reviewTrigger', () => {
 });
 
 describe('ReviewDispatcher', () => {
+  it('re-reviews an approved PR when its head advances', async () => {
+    const db = database();
+    const id = seedReview(db, 11, 'new-head');
+    db.connection.prepare(`
+      UPDATE review_queue SET status='approved', last_reviewed_sha='old-head',
+        approval_carryover=1 WHERE id=?
+    `).run(id);
+    const runtime = new AgentRuntime(1);
+    let claim: ReviewClaim | undefined;
+    const runner = async (runnerDb: BarbarianDatabase, _config: BarbarianConfig, nextClaim: ReviewClaim) => {
+      claim = nextClaim;
+      runnerDb.connection.prepare(`
+        UPDATE review_queue SET status='approved', last_reviewed_sha=head_sha,
+          claim_owner=NULL, claimed_at=NULL WHERE id=? AND claim_owner=?
+      `).run(nextClaim.reviewId, nextClaim.owner);
+    };
+    const dispatcher = new ReviewDispatcher(db, config(1), runtime, { error: () => undefined }, runner);
+    await dispatcher.pump();
+    await waitFor(() => Boolean(claim));
+    expect(claim).toMatchObject({ reviewId: id, trigger: 'new_commits', headSha: 'new-head' });
+    dispatcher.stop();
+    await runtime.shutdown();
+    db.close();
+  });
+
   it('marks incomplete sync and agent records as interrupted on startup', () => {
     const db = database();
     const id = seedReview(db, 8);

@@ -1,6 +1,6 @@
 import type { BarbarianDatabase } from './database.js';
 import type { BarbarianConfig, DiscoveryResult, DiscoveredIssue, DiscoveredPullRequest } from './types.js';
-import { discoverGithub, discoverGithubActivity, fetchGithubIssueContext, fetchPullRequestState } from './github.js';
+import { discoverGithub, discoverGithubActivity, fetchGithubIssueContext, fetchGithubPullRequest, fetchPullRequestState, resolveGithubLogin } from './github.js';
 import { recordActivity } from './activity.js';
 import { explainPullRequest, simplify, summarizePullRequest } from './summary.js';
 import { discoverLinear } from './linear.js';
@@ -95,11 +95,12 @@ function shouldTrackReview(
   return Boolean(explicitlyRequested || alreadyReviewed || fallbackTeam || tracked);
 }
 
-function upsertReview(database: BarbarianDatabase, config: BarbarianConfig, pr: DiscoveredPullRequest, seenAt: string): void {
+export function upsertReview(database: BarbarianDatabase, config: BarbarianConfig, pr: DiscoveredPullRequest, seenAt: string): void {
   const id = reviewId(pr);
   const existing = database.connection.prepare(
     `SELECT head_sha, last_reviewed_sha, discussion_watermark, last_reviewed_watermark,
-      attempt_head_sha, attempt_watermark, status FROM review_queue WHERE id = ?`,
+      attempt_head_sha, attempt_watermark, status, approval_carryover
+      FROM review_queue WHERE id = ?`,
   ).get(id) as {
     head_sha: string;
     last_reviewed_sha: string | null;
@@ -108,6 +109,7 @@ function upsertReview(database: BarbarianDatabase, config: BarbarianConfig, pr: 
     attempt_head_sha: string | null;
     attempt_watermark: string | null;
     status: string;
+    approval_carryover: number;
   } | undefined;
 
   const watermark = pr.discussionWatermark > (existing?.discussion_watermark || '')
@@ -122,9 +124,16 @@ function upsertReview(database: BarbarianDatabase, config: BarbarianConfig, pr: 
     viewer_review_state: pr.viewerReviewState,
     viewer_review_sha: pr.viewerReviewSha,
   };
-  if (viewerApprovedCurrentHead(viewerReview)) status = 'approved';
-  else if (viewerRequestedChangesCurrentHead(viewerReview)) status = 'awaiting_feedback';
-  else if (status === 'approved') status = 'unreviewed';
+  const viewerApproved = viewerApprovedCurrentHead(viewerReview);
+  const viewerRequestedChanges = viewerRequestedChangesCurrentHead(viewerReview);
+  let approvalCarryover = Boolean(existing?.approval_carryover || existing?.status === 'approved')
+    || Boolean(pr.viewerReviewState === 'APPROVED' && pr.viewerReviewSha);
+  if (viewerRequestedChanges) approvalCarryover = false;
+  if (viewerApproved) status = 'approved';
+  else if (viewerRequestedChanges) status = 'awaiting_feedback';
+  else if (status === 'approved' && (
+    existing?.last_reviewed_sha !== pr.headSha || !approvalCarryover
+  )) status = 'unreviewed';
   else if (status !== 'agent_working' && !failedOnCurrentInput && (
     !existing?.last_reviewed_sha
     || existing.last_reviewed_sha !== pr.headSha
@@ -133,17 +142,17 @@ function upsertReview(database: BarbarianDatabase, config: BarbarianConfig, pr: 
 
   database.connection.prepare(`
     INSERT INTO review_queue(
-      id, repository, number, title, simple_summary, plain_summary, body, url, author, additions, deletions, head_sha,
+      id, repository, number, title, simple_summary, plain_summary, body, url, author, additions, deletions, commit_count, head_sha,
       head_ref_name, base_ref_name, status, review_decision, requested_reviewers,
       requested_teams, linked_issues, review_skill, discussion_watermark, is_draft, remote_state,
-      remote_updated_at, first_seen_at, updated_at, last_seen_at, merged_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?)
+      remote_updated_at, first_seen_at, updated_at, last_seen_at, merged_at, approval_carryover
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       title=excluded.title, simple_summary=excluded.simple_summary,
       plain_summary=CASE WHEN review_queue.plain_summary='' THEN excluded.plain_summary ELSE review_queue.plain_summary END,
       body=excluded.body,
       url=excluded.url, author=excluded.author, additions=excluded.additions,
-      deletions=excluded.deletions, head_sha=excluded.head_sha,
+      deletions=excluded.deletions, commit_count=excluded.commit_count, head_sha=excluded.head_sha,
       head_ref_name=excluded.head_ref_name, base_ref_name=excluded.base_ref_name,
       status=excluded.status, review_decision=excluded.review_decision,
       requested_reviewers=excluded.requested_reviewers, requested_teams=excluded.requested_teams,
@@ -155,13 +164,14 @@ function upsertReview(database: BarbarianDatabase, config: BarbarianConfig, pr: 
         ELSE review_queue.review_paused END,
       is_draft=excluded.is_draft, remote_state='OPEN', updated_at=excluded.updated_at,
       remote_updated_at=excluded.remote_updated_at, last_seen_at=excluded.last_seen_at,
-      merged_at=excluded.merged_at
+      merged_at=excluded.merged_at,
+      approval_carryover=excluded.approval_carryover
   `).run(
     id, pr.repository, pr.number, pr.title, summarizePullRequest(pr.title, pr.body), explainPullRequest(pr.title, pr.body), pr.body,
-    pr.url, pr.author, pr.additions, pr.deletions, pr.headSha, pr.headRefName, pr.baseRefName, status,
+    pr.url, pr.author, pr.additions, pr.deletions, pr.commitCount, pr.headSha, pr.headRefName, pr.baseRefName, status,
     pr.reviewDecision, JSON.stringify(pr.requestedReviewers), JSON.stringify(pr.requestedTeams),
     JSON.stringify(pr.linkedIssues), configuredSkill(config, pr.repository), watermark, pr.isDraft ? 1 : 0,
-    pr.updatedAt, seenAt, pr.updatedAt, seenAt, pr.mergedAt,
+    pr.updatedAt, seenAt, pr.updatedAt, seenAt, pr.mergedAt, approvalCarryover ? 1 : 0,
   );
   database.connection.prepare(`
     UPDATE review_queue SET viewer_review_state=?, viewer_review_sha=?, other_approvals=?,
@@ -175,6 +185,20 @@ function upsertReview(database: BarbarianDatabase, config: BarbarianConfig, pr: 
   `).run(id, seenAt, pr.repository, pr.headRefName);
   if (!existing) recordActivity(database, 'review_discovered', `${pr.repository}#${pr.number} added to the review queue`, id);
   else if (existing.head_sha !== pr.headSha) recordActivity(database, 'review_updated', `${pr.repository}#${pr.number} has new commits`, id);
+}
+
+export async function trackGithubPullRequest(
+  database: BarbarianDatabase,
+  config: BarbarianConfig,
+  repository: string,
+  number: number,
+): Promise<string> {
+  const target = config.review.requestedReviewer || await resolveGithubLogin(config);
+  const pullRequest = await fetchGithubPullRequest(repository, number, target);
+  if (pullRequest.state !== 'OPEN') throw new Error('Only open pull requests can be added to the review queue');
+  const seenAt = new Date().toISOString();
+  upsertReview(database, config, pullRequest, seenAt);
+  return reviewId(pullRequest);
 }
 
 async function closeMissingReviews(

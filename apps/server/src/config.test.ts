@@ -81,6 +81,7 @@ describe('Barbarian config', () => {
         maxAutomaticAttempts: initial.agents.maxAutomaticAttempts,
         retryBaseMinutes: initial.agents.retryBaseMinutes,
         maxRunsPerPullRequestPerHour: initial.agents.maxRunsPerPullRequestPerHour,
+        providers: { codex: { model: 'gpt-review', effort: 'high' as const } },
       },
       statusUpdate: initial.statusUpdate,
     };
@@ -92,7 +93,9 @@ describe('Barbarian config', () => {
     await store.update(submitted, 'memory:1');
     expect(store.get().appearance).toEqual(submitted.appearance);
     expect(store.get().review.workspaceRoot).toBe(initial.review.workspaceRoot);
-    expect(store.get().agents.providers).toEqual(initial.agents.providers);
+    expect(store.get().agents.providers.codex).toEqual({
+      ...initial.agents.providers.codex, model: 'gpt-review', effort: 'high',
+    });
     expect(Object.isFrozen(store.get().repositories)).toBe(true);
     expect(store.warning).toBeNull();
     await expect(store.update(submitted, 'memory:1')).rejects.toBeInstanceOf(ConfigConflictError);
@@ -135,6 +138,7 @@ describe('Barbarian config', () => {
         maxAutomaticAttempts: initial.agents.maxAutomaticAttempts,
         retryBaseMinutes: initial.agents.retryBaseMinutes,
         maxRunsPerPullRequestPerHour: initial.agents.maxRunsPerPullRequestPerHour,
+        providers: { codex: { model: 'gpt-review', effort: 'high' as const } },
       },
       statusUpdate: initial.statusUpdate,
     };
@@ -142,6 +146,8 @@ describe('Barbarian config', () => {
     const saved = readFileSync(filename, 'utf8');
     expect(saved).toContain('# keep this operator note');
     expect(saved).toContain('command: codex');
+    expect(saved).toContain('model: gpt-review');
+    expect(saved).toContain('effort: high');
     expect(readFileSync(`${filename}.bak`, 'utf8')).toContain('# keep this operator note');
     writeFileSync(filename, `${saved}\n# external edit\n`, { mode: 0o600 });
     await expect(store.update(submitted, store.revision)).rejects.toBeInstanceOf(ConfigConflictError);

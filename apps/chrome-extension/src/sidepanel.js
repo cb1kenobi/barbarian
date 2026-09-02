@@ -1,4 +1,6 @@
-import { applyAppearance } from './appearance.js';
+import {
+  appearanceStorageKey, applyAppearance, rememberAppearance, restoreAppearance,
+} from './appearance.js';
 import { pullRequestSummary } from './review-content.js';
 import { renderMarkdown } from './markdown.js';
 import { shouldSubmitQuestion } from './chat-input.js';
@@ -71,6 +73,18 @@ async function api(path, options) {
   return response.body;
 }
 
+function setAppearance(value) {
+  if (!value) return null;
+  const appearance = applyAppearance(value);
+  void rememberAppearance(appearance, chrome.storage.local);
+  return appearance;
+}
+
+async function syncAppearance() {
+  const result = await chrome.runtime.sendMessage({ type: 'barbarian-appearance' }).catch(() => null);
+  return setAppearance(result?.appearance);
+}
+
 function findingState(finding) {
   if (finding.resolved) return { symbol: '✓', label: 'Resolved', className: 'resolved' };
   if (finding.outdated) return { symbol: '–', label: 'Outdated', className: 'outdated' };
@@ -124,7 +138,7 @@ function updateSelectionPreview() {
 }
 
 function renderContext(context) {
-  applyAppearance(context.appearance);
+  setAppearance(context.appearance);
   currentContext = context;
   if (context.kind === 'issue') {
     renderIssueContext(context);
@@ -132,7 +146,8 @@ function renderContext(context) {
   }
   const main = document.querySelector('main');
   if (!context.review) {
-    main.innerHTML = '<p class="empty">This pull request is not in Barbarian’s review queue. Run a sync after adding its repository to <code>config/barbarian.yaml</code>.</p>';
+    main.innerHTML = `<div class="untracked-review"><p class="empty">This pull request is not in Barbarian’s review queue.</p><button class="track-review"><span class="button-icon" aria-hidden="true">▶</span><span>Add to queue &amp; review</span></button><p class="action-status"></p></div>`;
+    document.querySelector('.track-review')?.addEventListener('click', () => void trackCurrentReview());
     return;
   }
   const { review, assessment, findings = [], messages = [] } = context;
@@ -159,6 +174,31 @@ function renderContext(context) {
   }));
   updateSelectionPreview();
   void captureSelection();
+}
+
+async function trackCurrentReview() {
+  if (busy || currentContext?.review || !currentContext?.id) return;
+  const button = document.querySelector('.track-review');
+  const status = document.querySelector('.action-status');
+  busy = true;
+  button.disabled = true;
+  button.querySelector('span:last-child').textContent = 'Adding…';
+  status.textContent = 'Fetching the pull request and starting an agent review…';
+  status.classList.remove('error');
+  try {
+    await api(`/api/reviews/${encodeURIComponent(currentContext.id)}/track`, {
+      method: 'POST', body: '{}',
+    });
+    status.textContent = 'Added. The review agent is starting…';
+    await refresh({ quiet: true });
+  } catch (caught) {
+    status.textContent = caught.message;
+    status.classList.add('error');
+    button.disabled = false;
+    button.querySelector('span:last-child').textContent = 'Add to queue & review';
+  } finally {
+    busy = false;
+  }
 }
 
 async function runReviewAction(kind) {
@@ -304,7 +344,10 @@ async function refresh({ quiet = false, remote = false } = {}) {
   }
 }
 
-chrome.tabs.onActivated.addListener(() => void refresh({ remote: true }));
+chrome.tabs.onActivated.addListener(() => {
+  void syncAppearance();
+  void refresh({ remote: true });
+});
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (tabId === currentTab?.id && (change.url || change.status === 'complete')) void refresh();
 });
@@ -317,5 +360,14 @@ chrome.runtime.onMessage.addListener((message) => {
     updateSelectionPreview();
   }
 });
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  const appearance = changes[appearanceStorageKey]?.newValue;
+  if (areaName === 'local' && appearance) applyAppearance(appearance);
+});
 setInterval(() => { if (!document.hidden && !busy && !document.querySelector('textarea')?.value) void refresh({ quiet: true }); }, 30_000);
-void refresh({ remote: true });
+void (async () => {
+  const restored = await restoreAppearance(chrome.storage.local);
+  const synced = await syncAppearance();
+  if (!restored && !synced) applyAppearance(undefined);
+  await refresh({ remote: true });
+})();

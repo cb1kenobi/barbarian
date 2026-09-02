@@ -51,7 +51,7 @@ export function isAllowedApiMessage(message, senderUrl) {
     try { return decodeURIComponent(issueChat[1]) === `github:${senderContext.key}`; }
     catch { return false; }
   }
-  const actionMatch = target.pathname.match(/^\/api\/reviews\/([^/]+)\/(chat|run-review|workspace)$/);
+  const actionMatch = target.pathname.match(/^\/api\/reviews\/([^/]+)\/(chat|run-review|workspace|track)$/);
   if (!actionMatch?.[1] || !actionMatch[2]) return false;
   const allowedMethod = method === 'POST' || method === 'DELETE' && actionMatch[2] === 'run-review';
   if (!allowedMethod) return false;

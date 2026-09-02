@@ -15,3 +15,7 @@ export function configuredAgentModel(config: BarbarianConfig, providerName: stri
   }
   return 'CLI default';
 }
+
+export function configuredAgentEffort(config: BarbarianConfig, providerName: string): string {
+  return config.agents.providers[providerName]?.effort || 'CLI default';
+}

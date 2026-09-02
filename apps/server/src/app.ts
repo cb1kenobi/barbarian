@@ -8,7 +8,7 @@ import { z, ZodError } from 'zod';
 import type { BarbarianDatabase } from './database.js';
 import type { BarbarianConfig, ReviewStatus } from './types.js';
 import { ConfigConflictError, ConfigStore, projectRoot, type WritableConfig } from './config.js';
-import { refreshGithubIssue, synchronize } from './sync.js';
+import { refreshGithubIssue, synchronize, trackGithubPullRequest } from './sync.js';
 import { askAgent, askIssueAgent } from './agents.js';
 import { AgentRuntime } from './agent-runtime.js';
 import { ReviewDispatcher, reviewTrigger } from './dispatcher.js';
@@ -16,10 +16,11 @@ import { cleanupWorkspace, prepareWorkspace } from './workspaces.js';
 import { buildStatusDraft } from './status.js';
 import { recordActivity } from './activity.js';
 import { buildReviewAssessment, refreshReviewContext, storedReviewFindings } from './review-context.js';
-import { displayReviewStatus, reviewPriorityScore } from './review-state.js';
+import { completedReviewStatus, displayReviewStatus, newCommitsSinceReview, reviewPriorityScore } from './review-state.js';
 import { reviewCardMetadata, type ReviewCardMetadata } from './review-card-metadata.js';
 import { fixedIssueReferences } from './fixed-issues.js';
-import { configuredAgentModel } from './agent-display.js';
+import { configuredAgentEffort, configuredAgentModel } from './agent-display.js';
+import { agentProviderCapabilities } from './agent-provider.js';
 import {
   askLocalBranchAgent,
   LocalBranchInputError,
@@ -107,7 +108,11 @@ function workItemView(row: Record<string, unknown>, activeBranches: ActiveLocalB
 
 function settingsView(config: BarbarianConfig): {
   config: WritableConfig;
-  advanced: { workspaceRoot: string; linear: { enabled: boolean; configured: boolean }; providers: string[] };
+  advanced: {
+    workspaceRoot: string;
+    linear: { enabled: boolean; configured: boolean };
+    providers: Array<{ name: string; supportsModel: boolean; supportsEffort: boolean }>;
+  };
 } {
   return {
     config: {
@@ -127,13 +132,19 @@ function settingsView(config: BarbarianConfig): {
         maxAutomaticAttempts: config.agents.maxAutomaticAttempts,
         retryBaseMinutes: config.agents.retryBaseMinutes,
         maxRunsPerPullRequestPerHour: config.agents.maxRunsPerPullRequestPerHour,
+        providers: Object.fromEntries(Object.entries(config.agents.providers).map(([name, provider]) => [name, {
+          model: provider.model || '', effort: provider.effort || '',
+        }])),
       },
       statusUpdate: config.statusUpdate,
     },
     advanced: {
       workspaceRoot: config.review.workspaceRoot,
       linear: { enabled: config.linear.enabled, configured: config.linear.command.length > 0 },
-      providers: Object.keys(config.agents.providers),
+      providers: Object.entries(config.agents.providers).map(([name, provider]) => {
+        const capabilities = agentProviderCapabilities(provider.command);
+        return { name, supportsModel: capabilities.model, supportsEffort: capabilities.effort };
+      }),
     },
   };
 }
@@ -183,6 +194,14 @@ function rowToReview(
     priority_score: reviewPriorityScore(reviewState, repositoryPriority),
     remote_created_at: row.remote_created_at ? String(row.remote_created_at) : String(row.first_seen_at),
     remote_updated_at: row.remote_updated_at ? String(row.remote_updated_at) : String(row.updated_at),
+    new_commit_count: newCommitsSinceReview({
+      head_sha: String(row.head_sha),
+      last_reviewed_sha: row.last_reviewed_sha ? String(row.last_reviewed_sha) : null,
+      commit_count: Number(row.commit_count || 0),
+      last_reviewed_commit_count: row.last_reviewed_commit_count === null
+        ? null
+        : Number(row.last_reviewed_commit_count || 0),
+    }),
     ...cardMetadata,
   };
 }
@@ -228,6 +247,7 @@ export async function createApp(
     onManualSyncFinished?: () => void;
     refreshReview?: typeof refreshReviewContext;
     refreshIssue?: typeof refreshGithubIssue;
+    trackReview?: typeof trackGithubPullRequest;
   } = {},
 ) {
   const app = Fastify({ logger: true, bodyLimit: 2 * 1024 * 1024 });
@@ -236,6 +256,7 @@ export async function createApp(
   const dispatcher = services.dispatcher || new ReviewDispatcher(database, () => configStore.get(), runtime, app.log);
   const refreshReview = services.refreshReview || refreshReviewContext;
   const refreshIssue = services.refreshIssue || refreshGithubIssue;
+  const trackReview = services.trackReview || trackGithubPullRequest;
   const dashboardClients = new Set<ServerResponse>();
   const publishReviewUpdated = (id: string) => {
     const message = `event: review-updated\ndata: ${JSON.stringify({ id })}\n\n`;
@@ -316,6 +337,7 @@ export async function createApp(
     }>).map((run) => ({
       ...run,
       model: configuredAgentModel(config, run.agent),
+      effort: configuredAgentEffort(config, run.agent),
     }));
     const activeNonReviewAgents = Number((database.connection.prepare(`
       SELECT COUNT(*) AS total FROM agent_runs
@@ -432,6 +454,19 @@ export async function createApp(
       INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'assistant', ?, ?, ?)
     `).run(id, body.provider || config.agents.default, response, new Date().toISOString());
     return { message: { id: Number(inserted.lastInsertRowid), role: 'assistant', author: body.provider || config.agents.default, content: response } };
+  });
+
+  app.post('/api/reviews/:id/track', async (request, reply) => {
+    const config = configStore.get();
+    const id = decodeURIComponent((request.params as { id: string }).id);
+    const match = id.match(/^github:([^/]+\/[^#]+)#(\d+)$/);
+    if (!match) return reply.code(400).send({ error: 'Invalid GitHub pull request id' });
+    const trackedId = await trackReview(database, config, match[1]!, Number(match[2]));
+    if (trackedId !== id) return reply.code(409).send({ error: 'GitHub returned a different pull request' });
+    if (!dispatcher.requestManual(id)) return reply.code(500).send({ error: 'Pull request was added, but its review could not be started' });
+    publishReviewUpdated(id);
+    publishDashboardUpdated(id);
+    return reply.code(202).send({ accepted: true, id });
   });
 
   app.post('/api/reviews/:id/run-review', async (request, reply) => {
@@ -808,11 +843,15 @@ export async function createApp(
       findings: z.number().int().min(0), summary: z.string().default(''),
     }).parse(request.body);
     const id = `github:${body.repository}#${body.number}`;
-    const status = body.findings > 0 ? 'issues_found' : 'ready_to_merge';
+    const review = database.connection.prepare(
+      'SELECT approval_carryover FROM review_queue WHERE id=?',
+    ).get(id) as { approval_carryover: number } | undefined;
+    const status = completedReviewStatus(body.findings, Boolean(review?.approval_carryover));
     const result = database.connection.prepare(`
       UPDATE review_queue SET status=CASE
           WHEN head_sha<>? OR discussion_watermark>? THEN 'unreviewed' ELSE ? END,
-        findings_count=?, last_reviewed_sha=?, last_reviewed_watermark=?,
+        findings_count=?, last_reviewed_sha=?, last_reviewed_commit_count=commit_count,
+        last_reviewed_watermark=?,
         plain_summary=CASE WHEN ?='' THEN plain_summary ELSE ? END, updated_at=? WHERE id=?
     `).run(
       body.headSha, body.discussionWatermark, status, body.findings, body.headSha,
