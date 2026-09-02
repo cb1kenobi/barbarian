@@ -156,10 +156,10 @@ describe('dashboard reviews', () => {
           { provider: 'linear', identifier: 'ENG-9', url: null },
         ],
       });
-      expect(payload.statusDraft.lines).toHaveLength(7);
-      expect(payload.statusDraft.lines.slice(0, 4).every((line) => line.startsWith('* storage: Issue'))).toBe(true);
-      expect(payload.statusDraft.lines.slice(4).every((line) => line.startsWith('* storage: Reviewing #'))).toBe(true);
-      expect(payload.statusDraft.lines.every((line) => !line.includes(' - '))).toBe(true);
+      expect(payload.statusDraft.lines).toEqual([
+        '* Code reviews - 500 PRs need my review',
+        '* storage - Work on issue #15: Issue 15',
+      ]);
     } finally {
       await app.close();
       database.close();

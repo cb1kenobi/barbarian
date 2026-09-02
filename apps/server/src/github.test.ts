@@ -82,6 +82,14 @@ describe('issue discovery signals', () => {
       'repository +10', 'data integrity +150', 'milestone +30', 'P1 / high +120',
     ]);
   });
+
+  it('gets repository priority from configuration without repository-name bonuses', () => {
+    const priority = priorityFor(issue(), {
+      name: 'HarperFast/rocksdb-js', priority: 17, watchIssues: true, watchPullRequests: true,
+      reviewSkill: 'cb1-code-review', labels: {},
+    });
+    expect(priority).toEqual({ score: 17, reasons: ['repository +17'] });
+  });
 });
 
 describe('reviewableDiffLines', () => {

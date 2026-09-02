@@ -6,16 +6,16 @@ export interface AgentProviderCapabilities {
   effort: boolean;
 }
 
-type ProviderFamily = 'codex' | 'claude' | 'gemini' | 'unknown';
+export type ProviderFamily = 'codex' | 'claude' | 'gemini' | 'unknown';
 
-function providerFamily(command: string): ProviderFamily {
+export function agentProviderFamily(command: string): ProviderFamily {
   const executable = path.basename(command).toLowerCase().replace(/\.(?:cmd|exe)$/i, '');
   if (executable === 'codex' || executable === 'claude' || executable === 'gemini') return executable;
   return 'unknown';
 }
 
 export function agentProviderCapabilities(command: string): AgentProviderCapabilities {
-  const family = providerFamily(command);
+  const family = agentProviderFamily(command);
   return {
     model: family !== 'unknown',
     effort: family === 'codex' || family === 'claude',
@@ -56,7 +56,7 @@ function beforeStdinPrompt(args: string[], options: string[]): string[] {
 }
 
 export function agentInvocationArgs(provider: AgentProviderConfig): string[] {
-  const family = providerFamily(provider.command);
+  const family = agentProviderFamily(provider.command);
   let args = [...provider.args];
   const options: string[] = [];
   const model = provider.model?.trim();

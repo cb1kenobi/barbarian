@@ -20,7 +20,8 @@
     "typecheck": "tsc -p apps/server/tsconfig.json --noEmit && tsc -p apps/web/tsconfig.json --noEmit && tsc -p apps/vscode-extension/tsconfig.json --noEmit",
     "sync": "tsx scripts/sync.mts",
     "link:skills": "node scripts/link-skills.mjs",
-    "service:install": "node scripts/install-launch-agent.mjs"
+    "service:install": "node scripts/install-launch-agent.mjs",
+    "vscode:install": "node scripts/install-vscode-extension.mjs"
   },
   "dependencies": {
     "@fastify/cors": "^11.1.0",

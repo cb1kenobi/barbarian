@@ -1,4 +1,4 @@
-# Barbarian
+# <img src="assets/branding/barbarian-axe.png" alt="" width="32" height="32" align="absmiddle"> BARBARIAN
 
 Barbarian is a local-only command center for developer work. It turns assigned issues, requested pull-request reviews, AI review runs, local checkouts, and daily status notes into one durable workflow.
 
@@ -6,7 +6,7 @@ The server binds to `127.0.0.1`, stores state in SQLite, and talks to GitHub thr
 
 ## What works
 
-- A priority queue for assigned GitHub issues, with configurable repository/label weights and built-in data-integrity and `rocksdb-js` boosts.
+- A priority queue for assigned GitHub issues, with configurable repository/label weights and repository-neutral milestone, severity, and data-integrity signals.
 - Safety checks before work enters the actionable queue: duplicate labels/references, near-duplicate titles, linked open PRs, and linked merged fixes.
 - A review queue for PRs requesting you or a configured fallback team. Existing tracked reviews stay visible after the request is cleared.
 - Durable review states: needs review, agent working, issues found, waiting on feedback, ready, approved, merged, or closed.
@@ -26,10 +26,10 @@ apps/web                 React/Vite dashboard
 apps/server              Fastify API, monitor, SQLite, agent/worktree orchestration
 apps/chrome-extension    unpacked Manifest V3 GitHub companion
 apps/vscode-extension    Cursor/VS Code review companion
-skills/cb1-code-review   generic review skill and curated GitHub scripts
-scripts                  sync, configuration, skill linking, cleanup, launchd
 config                   committed example + ignored machine-local YAML
 data                     ignored SQLite database and service logs
+scripts                  sync, configuration, skill linking, cleanup, launchd
+skills/cb1-code-review   generic review skill and curated GitHub scripts
 ```
 
 SQLite is at `data/barbarian.db` and uses WAL mode. Configuration and secrets remain outside git:
@@ -76,18 +76,45 @@ pnpm service:install
 
 It runs at login, stays alive, and writes logs under `data/`. The database is the source of truth, so an overnight shutdown does not lose review SHAs, chat, queue status, or the last sweep. On launch, Barbarian immediately synchronizes and then returns to the configured interval.
 
+The service is installed as the macOS LaunchAgent `io.barbarian.local` with `KeepAlive` enabled. If you kill the server process directly, `launchd` starts it again. Stop the LaunchAgent before running Barbarian manually:
+
+```bash
+launchctl bootout gui/$(id -u)/io.barbarian.local
+```
+
+It remains installed and will load again the next time you log in. To start it again without logging out:
+
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.barbarian.local.plist
+```
+
+To restart the running service after rebuilding it:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/io.barbarian.local
+```
+
+To uninstall it completely, unload it and remove its property list:
+
+```bash
+launchctl bootout gui/$(id -u)/io.barbarian.local
+rm ~/Library/LaunchAgents/io.barbarian.local.plist
+```
+
+Service output is written to `data/barbarian.log` and errors to `data/barbarian-error.log`.
+
 ## Configure repositories and priority
 
 `config/barbarian.yaml` is deliberately generic. Add every repository Barbarian should watch:
 
 ```yaml
 profile:
-  name: Chris
+  name: Developer
   timezone: America/Chicago
-  githubLogin: cb1kenobi
+  githubLogin: your-login
 
 repositories:
-  - name: HarperFast/rocksdb-js
+  - name: your-org/important-backend
     priority: 100
     watchIssues: true
     watchPullRequests: true
@@ -96,20 +123,20 @@ repositories:
       data-loss: 150
       security: 80
 
-  - name: HarperFast/harper
+  - name: your-org/frontend
     priority: 40
     watchIssues: true
     watchPullRequests: true
-    reviewSkill: cb1-harper-code-review
+    reviewSkill: cb1-code-review
     labels:
       regression: 60
 
 review:
-  requestedReviewer: cb1kenobi
+  requestedReviewer: your-login
   fallbackTeams: [Developers, Front End]
 ```
 
-Priority is additive: repository weight + configured label weights + milestone weight + built-in data-integrity signal + a `rocksdb-js` signal. The dashboard shows the reasons so the ordering is explainable.
+Priority is additive: configured repository weight + configured label weights + milestone weight + standard severity-label weight + a repository-neutral data-integrity signal. Repository names never affect the score. The dashboard shows the reasons so the ordering is explainable.
 
 The team fallback only applies when no individual reviewer is requested. This avoids pulling every team PR into a personal queue while preserving the “team-only assignment” workflow.
 
@@ -226,7 +253,21 @@ After changing extension source, click **Reload** for Barbarian on `chrome://ext
 
 ## Cursor / VS Code extension
 
-Build and install a local VSIX:
+### One-command VS Code install
+
+Make sure the VS Code `code` command is available on your `PATH`, then run this from the repository root:
+
+```bash
+pnpm vscode:install
+```
+
+This command builds the extension, creates the versioned `.vsix` package in `apps/vscode-extension`, and installs it in VS Code with `--force`. Run **Developer: Reload Window** in VS Code after it finishes. The package filename is derived from the extension's `package.json`, so the command continues to work when the extension version changes.
+
+This command targets VS Code. To install in Cursor, build the VSIX and use the Cursor command or editor UI described below.
+
+### Manual build and installation
+
+To build a local VSIX without installing it:
 
 ```bash
 pnpm --filter barbarian-vscode-extension build

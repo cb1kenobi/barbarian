@@ -33,7 +33,14 @@ export interface SettingsConfig {
 interface AdvancedSettings {
   workspaceRoot: string;
   linear: { enabled: boolean; configured: boolean };
-  providers: Array<{ name: string; supportsModel: boolean; supportsEffort: boolean }>;
+  providers: Array<{
+    name: string;
+    supportsModel: boolean;
+    supportsEffort: boolean;
+    supportsModelDiscovery: boolean;
+    models: Array<{ id: string; name: string; isDefault: boolean }>;
+    defaultModel: string | null;
+  }>;
 }
 
 interface EditableRepository extends Omit<RepositoryConfig, 'labels'> { id: string; labelsText: string }
@@ -115,6 +122,7 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
   const [revision, setRevision] = useState('');
   const [warning, setWarning] = useState('');
   const [advanced, setAdvanced] = useState<AdvancedSettings | null>(null);
+  const [modelsLoading, setModelsLoading] = useState(true);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const originalAppearance = useRef<AppearanceConfig | null>(null);
@@ -127,6 +135,7 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
 
   useEffect(() => {
     const controller = new AbortController();
+    let active = true;
     void fetch('/api/settings', { signal: controller.signal }).then(async (response) => {
       const body = await response.json() as { config?: SettingsConfig; advanced?: AdvancedSettings; configFile?: string; revision?: string; warning?: string | null };
       if (!response.ok || !body.config) throw new Error(messageFromResponse(body, response.statusText));
@@ -136,10 +145,24 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
       setWarning(body.warning || '');
       setAdvanced(body.advanced || null);
       setDraft(toDraft(body.config));
+      setModelsLoading(true);
+      void fetch('/api/settings/agent-models', { signal: controller.signal }).then(async (modelsResponse) => {
+        const modelsBody = await modelsResponse.json() as {
+          providers?: Array<Pick<AdvancedSettings['providers'][number], 'name' | 'models' | 'defaultModel'>>;
+        };
+        if (!modelsResponse.ok) throw new Error(modelsResponse.statusText);
+        setAdvanced((current) => current ? {
+          ...current,
+          providers: current.providers.map((provider) => ({
+            ...provider,
+            ...modelsBody.providers?.find((candidate) => candidate.name === provider.name),
+          })),
+        } : current);
+      }).catch(() => undefined).finally(() => { if (active) setModelsLoading(false); });
     }).catch((caught) => {
       if ((caught as Error).name !== 'AbortError') setError(caught instanceof Error ? caught.message : String(caught));
     });
-    return () => controller.abort();
+    return () => { active = false; controller.abort(); };
   }, []);
 
   useEffect(() => {
@@ -235,11 +258,13 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
             <div className="settings-list">{draft.repositories.map((repository, index) => <article className="settings-card" key={repository.id}>
               <div className="settings-card-head"><strong>Repository {index + 1}</strong><button type="button" className="danger-text" onClick={() => removeRepository(index)}>Remove</button></div>
               <div className="settings-grid repo-fields">
-                <label className="wide"><span>Repository (owner/name)</span><input required placeholder="HarperFast/harper" value={repository.name} onChange={(event) => updateRepository(index, { name: event.target.value })} /></label>
-                <label><span>Priority</span><input type="number" value={repository.priority} onChange={(event) => updateRepository(index, { priority: Number(event.target.value) })} /></label>
+                <label className="wide"><span>GitHub Repository (owner/name)</span><input required placeholder="owner/name" value={repository.name} onChange={(event) => updateRepository(index, { name: event.target.value })} /></label>
+                <label className="repo-priority"><span>Priority</span><input type="number" value={repository.priority} onChange={(event) => updateRepository(index, { priority: Number(event.target.value) })} /></label>
                 <label><span>Review skill</span><input required value={repository.reviewSkill} onChange={(event) => updateRepository(index, { reviewSkill: event.target.value })} /></label>
-                <label className="check-field"><input type="checkbox" checked={repository.watchIssues} onChange={(event) => updateRepository(index, { watchIssues: event.target.checked })} /><span>Watch issues</span></label>
-                <label className="check-field"><input type="checkbox" checked={repository.watchPullRequests} onChange={(event) => updateRepository(index, { watchPullRequests: event.target.checked })} /><span>Watch pull requests</span></label>
+                <div className="repo-watch-fields">
+                  <label className="check-field"><input type="checkbox" checked={repository.watchIssues} onChange={(event) => updateRepository(index, { watchIssues: event.target.checked })} /><span>Watch issues</span></label>
+                  <label className="check-field"><input type="checkbox" checked={repository.watchPullRequests} onChange={(event) => updateRepository(index, { watchPullRequests: event.target.checked })} /><span>Watch pull requests</span></label>
+                </div>
                 <label className="wide"><span>Label weights <small>one “label: weight” per line</small></span><textarea rows={3} placeholder={'security: 80\nregression: 60'} value={repository.labelsText} onChange={(event) => updateRepository(index, { labelsText: event.target.value })} /></label>
               </div>
             </article>)}</div>
@@ -276,11 +301,22 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
           <div className="settings-subhead"><strong>Provider models</strong><small>Blank values use that CLI’s defaults. Executable commands remain editable only in YAML.</small></div>
           <div className="settings-list providers-list">{advanced?.providers.map((provider) => {
             const values = draft.agents.providers[provider.name] || { model: '', effort: '' };
+            const detectedModels = provider.models || [];
+            const modelDiscoveryLoading = modelsLoading && provider.supportsModelDiscovery && detectedModels.length === 0;
+            const selectedModelIsDetected = !values.model || detectedModels.some((model) => model.id === values.model);
+            const defaultName = detectedModels.find((model) => model.id === provider.defaultModel)?.name || provider.defaultModel;
             return <article className="settings-card provider-card" key={provider.name}>
               <div className="settings-card-head"><strong>{provider.name}</strong>{draft.agents.default === provider.name && <small>Default provider</small>}</div>
               <div className="settings-grid two">
-                <label><span>Model <small>{provider.supportsModel ? 'blank uses CLI default' : 'not supported'}</small></span><input disabled={!provider.supportsModel} placeholder="CLI default" value={values.model} onChange={(event) => updateProvider(provider.name, { model: event.target.value })} /></label>
-                <label><span>Effort <small>{provider.supportsEffort ? 'review depth' : 'not supported by this CLI'}</small></span><select disabled={!provider.supportsEffort} value={values.effort} onChange={(event) => updateProvider(provider.name, { effort: event.target.value as AgentEffort })}>{effortLevels.map((effort) => <option key={effort || 'default'} value={effort}>{effort || 'CLI default'}</option>)}</select></label>
+                <label><span>Model <small>{detectedModels.length ? `${detectedModels.length} detected` : modelDiscoveryLoading ? 'loading' : provider.supportsModel ? defaultName ? `CLI default: ${defaultName}` : 'blank uses CLI default' : 'not supported'}</small></span>{modelDiscoveryLoading
+                  ? <div className="model-discovery-loading" role="status"><span aria-hidden="true" />Detecting models…</div>
+                  : detectedModels.length ? <select value={values.model} onChange={(event) => updateProvider(provider.name, { model: event.target.value })}>
+                    <option value="">{defaultName ? `CLI default — ${defaultName}` : 'CLI default'}</option>
+                    {!selectedModelIsDetected && <option value={values.model}>{values.model}</option>}
+                    {detectedModels.map((model) => <option key={model.id} value={model.id}>{model.name}{model.isDefault ? ' — default' : ''}</option>)}
+                  </select>
+                  : <input disabled={!provider.supportsModel} placeholder="CLI default" value={values.model} onChange={(event) => updateProvider(provider.name, { model: event.target.value })} />}</label>
+                <label><span>Effort <small>{provider.supportsEffort ? 'review depth' : 'not supported'}</small></span><select disabled={!provider.supportsEffort} value={values.effort} onChange={(event) => updateProvider(provider.name, { effort: event.target.value as AgentEffort })}>{effortLevels.map((effort) => <option key={effort || 'default'} value={effort}>{effort || 'CLI default'}</option>)}</select></label>
               </div>
             </article>;
           })}</div></fieldset>

@@ -20,7 +20,8 @@ import { completedReviewStatus, displayReviewStatus, newCommitsSinceReview, revi
 import { reviewCardMetadata, type ReviewCardMetadata } from './review-card-metadata.js';
 import { fixedIssueReferences } from './fixed-issues.js';
 import { configuredAgentEffort, configuredAgentModel } from './agent-display.js';
-import { agentProviderCapabilities } from './agent-provider.js';
+import { agentProviderCapabilities, agentProviderFamily } from './agent-provider.js';
+import { discoverAgentModels, type AgentModelOption } from './agent-models.js';
 import {
   askLocalBranchAgent,
   LocalBranchInputError,
@@ -111,7 +112,14 @@ function settingsView(config: BarbarianConfig): {
   advanced: {
     workspaceRoot: string;
     linear: { enabled: boolean; configured: boolean };
-    providers: Array<{ name: string; supportsModel: boolean; supportsEffort: boolean }>;
+    providers: Array<{
+      name: string;
+      supportsModel: boolean;
+      supportsEffort: boolean;
+      supportsModelDiscovery: boolean;
+      models: AgentModelOption[];
+      defaultModel: string | null;
+    }>;
   };
 } {
   return {
@@ -143,7 +151,14 @@ function settingsView(config: BarbarianConfig): {
       linear: { enabled: config.linear.enabled, configured: config.linear.command.length > 0 },
       providers: Object.entries(config.agents.providers).map(([name, provider]) => {
         const capabilities = agentProviderCapabilities(provider.command);
-        return { name, supportsModel: capabilities.model, supportsEffort: capabilities.effort };
+        return {
+          name,
+          supportsModel: capabilities.model,
+          supportsEffort: capabilities.effort,
+          supportsModelDiscovery: ['codex', 'claude'].includes(agentProviderFamily(provider.command)),
+          models: [],
+          defaultModel: null,
+        };
       }),
     },
   };
@@ -808,6 +823,13 @@ export async function createApp(
   app.get('/api/settings', async () => ({
     ...settingsView(configStore.get()), revision: configStore.revision,
     warning: configStore.warning, configFile: 'config/barbarian.yaml',
+  }));
+
+  app.get('/api/settings/agent-models', async () => ({
+    providers: await Promise.all(Object.entries(configStore.get().agents.providers).map(async ([name, provider]) => ({
+      name,
+      ...await discoverAgentModels(provider),
+    }))),
   }));
 
   app.put('/api/settings', async (request, reply) => {

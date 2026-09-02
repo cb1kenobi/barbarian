@@ -425,10 +425,6 @@ export function priorityFor(issue: GithubIssueNode, repository: RepositoryConfig
     score += 150;
     reasons.push('data integrity +150');
   }
-  if (repository.name.toLowerCase().includes('rocksdb-js')) {
-    score += 100;
-    reasons.push('rocksdb-js +100');
-  }
   if (issue.milestone) {
     score += 30;
     reasons.push(`milestone +30`);
