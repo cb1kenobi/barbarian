@@ -40,7 +40,7 @@ describe('local branch agent review', () => {
     const config: BarbarianConfig = {
       version: 1,
       profile: { name: 'Test', reviewName: '', timezone: 'UTC', githubLogin: 'test' },
-      appearance: { theme: 'dark', fontSize: 'normal' },
+      appearance: { theme: 'dark', fontSize: 'normal', weapon: 'double-axe' },
       monitor: { intervalMinutes: 20, runOnStartup: false, includeDraftPullRequests: false },
       repositories: [{ name: 'Acme/storage', priority: 1, watchIssues: false, watchPullRequests: true, reviewSkill: 'cb1-code-review', labels: {} }],
       review: { requestedReviewer: '', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },

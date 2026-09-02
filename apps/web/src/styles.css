@@ -27,7 +27,16 @@
   --overlay: #0506041a;
   --shadow: #000b;
   --ember: #ff6b3d;
+  --brand-mark: url('/weapons/double-axe.svg');
 }
+
+:root[data-weapon='sword'] { --brand-mark: url('/weapons/sword.svg'); }
+:root[data-weapon='crossed-swords'] { --brand-mark: url('/weapons/crossed-swords.svg'); }
+:root[data-weapon='single-axe'] { --brand-mark: url('/weapons/single-axe.svg'); }
+:root[data-weapon='mace'] { --brand-mark: url('/weapons/mace.svg'); }
+:root[data-weapon='flail'] { --brand-mark: url('/weapons/flail.svg'); }
+:root[data-weapon='nunchucks'] { --brand-mark: url('/weapons/nunchucks.svg'); }
+:root[data-weapon='hammer'] { --brand-mark: url('/weapons/hammer.svg'); }
 
 :root[data-theme='slayer'] {
   --acid: #ff554d;
@@ -76,7 +85,7 @@ button { color: inherit; }
 .shell { min-height: 100vh; display: grid; grid-template-columns: 238px minmax(0, 1fr); }
 .rail { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; padding: 28px 18px 20px; border-right: 1px solid var(--line); background: var(--rail-bg); }
 .brand { display: flex; align-items: center; gap: 11px; padding: 0 10px 31px; color: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; text-decoration: none; }
-.brand span { width: 29px; height: 29px; flex: none; background: var(--acid); -webkit-mask: url('/barbarian-axe.svg') center / contain no-repeat; mask: url('/barbarian-axe.svg') center / contain no-repeat; }
+.brand span { width: 29px; height: 29px; flex: none; background: var(--acid); -webkit-mask: var(--brand-mark) center / contain no-repeat; mask: var(--brand-mark) center / contain no-repeat; }
 .brand strong { font-size: .9375rem; }
 nav { display: grid; gap: 4px; }
 nav a { display: grid; grid-template-columns: 25px 1fr auto; align-items: center; padding: 10px 12px; border-radius: 3px; color: var(--muted); text-decoration: none; font-size: .9375rem; }
@@ -346,6 +355,14 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
 .settings-description-row > p { margin: 0; color: var(--muted-soft); font-size: .6875rem; line-height: 1.5; }
 .settings-description-row > p code { color: var(--muted-strong); }
 .choice-groups { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.choice-card input[type='radio'] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.choice-card:has(input:focus-visible) { outline: 2px solid var(--acid); outline-offset: 2px; }
+.weapon-choice-group { grid-column: 1 / -1; }
+.weapon-choice-row { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 8px; }
+.weapon-choice { min-width: 0; flex-direction: column; justify-content: center; padding: 12px 8px; color: var(--muted-strong) !important; text-align: center; }
+.weapon-choice > span { justify-content: center !important; font-size: .6875rem; }
+.weapon-option-mark { display: block; width: 30px; height: 30px; background: currentColor; -webkit-mask: var(--weapon-option) center / contain no-repeat; mask: var(--weapon-option) center / contain no-repeat; }
+.weapon-choice:has(input:checked) { color: var(--acid) !important; }
 .field-label { display: block; margin-bottom: 7px; color: var(--muted); font-size: .75rem; }
 .field-label.spaced { margin-top: 17px; }
 .choice-row { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -395,6 +412,7 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
 
 @media (max-width: 1180px) {
   .settings-grid.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .weapon-choice-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
 @media (max-width: 900px) {
@@ -454,6 +472,7 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
   .settings-modal { width: 100vw; height: 100vh; border: 0; }
   .settings-header, .settings-body, .settings-footer { padding-left: 18px; padding-right: 18px; }
   .settings-grid.two, .settings-grid.three, .settings-grid.four, .settings-grid.repo-fields, .providers-list, .choice-groups { grid-template-columns: 1fr; }
+  .weapon-choice-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .settings-grid.repo-fields .repo-priority { width: 82px; }
   .repo-watch-fields { grid-column: 1; grid-template-columns: 1fr; }
   .settings-footer { grid-template-columns: 1fr 1fr; }

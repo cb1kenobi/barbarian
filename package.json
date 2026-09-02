@@ -10,6 +10,7 @@
     "build:extensions": "pnpm --filter @barbarian/chrome-extension build && pnpm --filter barbarian-vscode-extension build",
     "build:server": "tsc -p apps/server/tsconfig.json",
     "build:web": "vite build --config apps/web/vite.config.ts",
+    "assets:weapons": "node scripts/sync-weapon-assets.mjs",
     "clean:reviews": "tsx scripts/cleanup-review-workspaces.mts",
     "configure": "tsx scripts/init-config.mts",
     "dev": "concurrently -k -n server,web -c magenta,cyan \"pnpm dev:server\" \"pnpm dev:web\"",

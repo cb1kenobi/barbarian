@@ -19,6 +19,7 @@ export interface RepositoryConfig {
 }
 
 export type AgentEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type BrandWeapon = 'double-axe' | 'sword' | 'crossed-swords' | 'single-axe' | 'mace' | 'flail' | 'nunchucks' | 'hammer';
 
 export interface AgentProviderConfig {
   command: string;
@@ -30,7 +31,7 @@ export interface AgentProviderConfig {
 export interface BarbarianConfig {
   version: number;
   profile: { name: string; reviewName: string; timezone: string; githubLogin: string };
-  appearance: { theme: 'light' | 'dark' | 'slayer'; fontSize: 'small' | 'normal' };
+  appearance: { theme: 'light' | 'dark' | 'slayer'; fontSize: 'small' | 'normal'; weapon: BrandWeapon };
   monitor: { intervalMinutes: number; runOnStartup: boolean; includeDraftPullRequests: boolean };
   repositories: RepositoryConfig[];
   review: {

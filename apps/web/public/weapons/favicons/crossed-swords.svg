@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Barbarian crossed-swords">
+  <rect width="64" height="64" rx="8" fill="#0d0e0c"/>
+  <g color="#ff554d" transform="translate(5.76 5.76) scale(.82)"><g fill="currentColor" transform="rotate(-34 32 32)">
+    <path d="M32 2 36 9l-2 33h-4L28 9l4-7ZM20 40h24l-3 6H23l-3-6ZM29 44h6v12h-6zM32 62l-5-7h10l-5 7Z"/>
+  </g>
+  <g fill="currentColor" transform="rotate(34 32 32)">
+    <path d="M32 2 36 9l-2 33h-4L28 9l4-7ZM20 40h24l-3 6H23l-3-6ZM29 44h6v12h-6zM32 62l-5-7h10l-5 7Z"/>
+  </g></g>
+</svg>

@@ -170,7 +170,7 @@ export function App() {
   useEffect(() => { const interval = window.setInterval(() => setNow(Date.now()), 15_000); return () => window.clearInterval(interval); }, []);
   useEffect(() => {
     if (dashboard?.appearance) applyAppearance(dashboard.appearance);
-  }, [dashboard?.appearance.theme, dashboard?.appearance.fontSize]);
+  }, [dashboard?.appearance.theme, dashboard?.appearance.fontSize, dashboard?.appearance.weapon]);
   const sync = async () => {
     setSyncing(true);
     try { await api('/api/sync', { method: 'POST' }); await load(); }

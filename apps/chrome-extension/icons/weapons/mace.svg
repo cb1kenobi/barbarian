@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Mace">
+  <path fill="currentColor" d="m32 1 4 7 8-3-1 8 8 2-6 6 6 6-8 2 1 8-8-3-4 7-4-7-8 3 1-8-8-2 6-6-6-6 8-2-1-8 8 3 4-7Z"/>
+  <circle cx="32" cy="21" r="9" fill="currentColor"/>
+  <path fill="currentColor" d="M29 32h6v25h-6zM26 55h12v4H26zM32 63l-6-5h12l-6 5Z"/>
+</svg>

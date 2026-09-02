@@ -24,20 +24,21 @@ const base = {
 };
 
 describe('Barbarian config', () => {
-  it('defaults older files to the dark theme and normal font size', () => {
+  it('defaults older files to the primary axe, dark theme, and normal font size', () => {
     expect(parseConfig(base)).toMatchObject({
-      appearance: { theme: 'dark', fontSize: 'normal' },
+      appearance: { theme: 'dark', fontSize: 'normal', weapon: 'double-axe' },
       profile: { reviewName: '' },
     });
     const example = parse(readFileSync(path.resolve('config/barbarian.example.yaml'), 'utf8'));
     expect(parseConfig(example)).toMatchObject({
-      appearance: { theme: 'dark', fontSize: 'normal' },
+      appearance: { theme: 'dark', fontSize: 'normal', weapon: 'double-axe' },
       profile: { reviewName: '' },
     });
   });
 
   it('rejects invalid appearance values and timezones', () => {
-    expect(() => parseConfig({ ...base, appearance: { theme: 'neon', fontSize: 'small' } })).toThrow();
+    expect(() => parseConfig({ ...base, appearance: { theme: 'neon', fontSize: 'small', weapon: 'double-axe' } })).toThrow();
+    expect(() => parseConfig({ ...base, appearance: { theme: 'dark', fontSize: 'small', weapon: 'lightsaber' } })).toThrow();
     expect(() => parseConfig({ ...base, profile: { ...base.profile, timezone: 'Middle/Earth' } })).toThrow();
     expect(() => parseConfig({ ...base, profile: { ...base.profile, reviewName: 'line one\nline two' } })).toThrow();
     expect(() => parseConfig({
@@ -55,7 +56,7 @@ describe('Barbarian config', () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-config-test-'));
     directories.push(directory);
     const filename = path.join(directory, 'barbarian.yaml');
-    const config = parseConfig({ ...base, appearance: { theme: 'slayer', fontSize: 'normal' } });
+    const config = parseConfig({ ...base, appearance: { theme: 'slayer', fontSize: 'normal', weapon: 'flail' } });
     await saveConfig(config, filename);
     expect(statSync(filename).mode & 0o777).toBe(0o600);
     expect(parseConfig(parse(readFileSync(filename, 'utf8')))).toEqual(config);
@@ -72,7 +73,7 @@ describe('Barbarian config', () => {
       return 'memory:2';
     }, 'Config recovery warning');
     const submitted = {
-      appearance: { theme: 'slayer' as const, fontSize: 'normal' as const },
+      appearance: { theme: 'slayer' as const, fontSize: 'normal' as const, weapon: 'double-axe' as const },
       profile: initial.profile,
       monitor: initial.monitor,
       repositories: initial.repositories,
@@ -130,7 +131,7 @@ describe('Barbarian config', () => {
     const revision = store.revision;
     const submitted = {
       profile: { ...initial.profile, name: 'Updated' },
-      appearance: { theme: 'light' as const, fontSize: 'normal' as const },
+      appearance: { theme: 'light' as const, fontSize: 'normal' as const, weapon: 'sword' as const },
       monitor: initial.monitor,
       repositories: initial.repositories,
       review: {

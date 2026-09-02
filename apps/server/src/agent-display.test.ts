@@ -6,7 +6,7 @@ function config(provider: BarbarianConfig['agents']['providers'][string]): Barba
   return {
     version: 1,
     profile: { name: 'Chris', reviewName: '', timezone: 'UTC', githubLogin: 'cb1kenobi' },
-    appearance: { theme: 'dark', fontSize: 'normal' },
+    appearance: { theme: 'dark', fontSize: 'normal', weapon: 'double-axe' },
     monitor: { intervalMinutes: 20, runOnStartup: true, includeDraftPullRequests: false },
     repositories: [],
     review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '', autoCleanup: true },

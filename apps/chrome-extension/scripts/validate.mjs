@@ -15,4 +15,7 @@ for (const contentScript of manifest.content_scripts) {
   for (const source of contentScript.js || []) await readFile(new URL(`../${source}`, import.meta.url), 'utf8');
 }
 for (const icon of Object.values(manifest.icons || {})) await readFile(new URL(`../${icon}`, import.meta.url));
+for (const weapon of ['double-axe', 'sword', 'crossed-swords', 'single-axe', 'mace', 'flail', 'nunchucks', 'hammer']) {
+  await readFile(new URL(`../icons/weapons/${weapon}.svg`, import.meta.url), 'utf8');
+}
 console.log('Chrome extension manifest is valid. Load apps/chrome-extension as an unpacked extension.');

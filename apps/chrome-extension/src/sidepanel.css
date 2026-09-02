@@ -32,9 +32,18 @@
   --working-border: #526d7c;
   --working-panel: #111c22;
   --working-ink: #86d8ff;
+  --weapon-mark: url('../icons/weapons/double-axe.svg');
   background: var(--bg);
   color: var(--ink);
 }
+
+:root[data-weapon='sword'] { --weapon-mark: url('../icons/weapons/sword.svg'); }
+:root[data-weapon='crossed-swords'] { --weapon-mark: url('../icons/weapons/crossed-swords.svg'); }
+:root[data-weapon='single-axe'] { --weapon-mark: url('../icons/weapons/single-axe.svg'); }
+:root[data-weapon='mace'] { --weapon-mark: url('../icons/weapons/mace.svg'); }
+:root[data-weapon='flail'] { --weapon-mark: url('../icons/weapons/flail.svg'); }
+:root[data-weapon='nunchucks'] { --weapon-mark: url('../icons/weapons/nunchucks.svg'); }
+:root[data-weapon='hammer'] { --weapon-mark: url('../icons/weapons/hammer.svg'); }
 
 :root[data-font-size='normal'] { font-size: 18px; }
 :root[data-appearance='pending'] body { visibility: hidden; }
@@ -87,7 +96,7 @@
 html, body { height: 100%; min-height: 0; margin: 0; overflow: hidden; background: var(--bg); }
 body { display: grid; min-width: 280px; grid-template-rows: auto minmax(0, 1fr); }
 header { position: sticky; z-index: 2; top: 0; display: grid; grid-template-columns: 38px 1fr auto; align-items: center; gap: 11px; padding: 15px 16px; border-bottom: 1px solid var(--line-soft); background: var(--header); }
-.mark { width: 38px; height: 38px; background: var(--accent); -webkit-mask: url('../icons/axe.svg') center / contain no-repeat; mask: url('../icons/axe.svg') center / contain no-repeat; }
+.mark { width: 38px; height: 38px; background: var(--accent); -webkit-mask: var(--weapon-mark) center / contain no-repeat; mask: var(--weapon-mark) center / contain no-repeat; }
 .brand { color: var(--accent); font-size: .875rem; font-weight: 800; letter-spacing: .12em; }
 .pr-key { margin-top: 1px; color: var(--muted); font-size: .8125rem; }
 .dashboard { padding: 7px 8px; border: 1px solid var(--line); color: var(--ink-soft); font-size: .8125rem; text-decoration: none; }

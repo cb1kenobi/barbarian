@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Barbarian flail">
+  <rect width="64" height="64" rx="8" fill="#0d0e0c"/>
+  <g color="#ff554d" transform="translate(5.76 5.76) scale(.82)"><path fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round" d="M10 58 30 11"/>
+  <path fill="currentColor" d="m24 18 3-8 8 3-4 8-7-3ZM7 51l8 3-3 8-8-3 3-8Z"/>
+  <path fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" d="M32 10c10-2 17 6 14 15l-2 8"/>
+  <circle cx="35" cy="10" r="3" fill="none" stroke="currentColor" stroke-width="2"/>
+  <circle cx="43" cy="15" r="3" fill="none" stroke="currentColor" stroke-width="2"/>
+  <circle cx="46" cy="23" r="3" fill="none" stroke="currentColor" stroke-width="2"/>
+  <circle cx="44" cy="31" r="3" fill="none" stroke="currentColor" stroke-width="2"/>
+  <circle cx="48" cy="46" r="9" fill="currentColor"/>
+  <path fill="currentColor" d="m48 30 4 9h-8l4-9ZM64 46l-9 4v-8l9 4ZM48 62l-4-9h8l-4 9ZM32 46l9-4v8l-9-4ZM59 35l-4 10-6-6 10-4ZM59 57l-10-4 6-6 4 10ZM37 57l4-10 6 6-10 4ZM37 35l10 4-6 6-4-10Z"/></g>
+</svg>

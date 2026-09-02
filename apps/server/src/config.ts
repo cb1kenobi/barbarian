@@ -58,7 +58,8 @@ export const configSchema = z.object({
   appearance: z.object({
     theme: z.enum(['light', 'dark', 'slayer']).default('dark'),
     fontSize: z.enum(['small', 'normal']).default('normal'),
-  }).default({ theme: 'dark', fontSize: 'normal' }),
+    weapon: z.enum(['double-axe', 'sword', 'crossed-swords', 'single-axe', 'mace', 'flail', 'nunchucks', 'hammer']).default('double-axe'),
+  }).default({ theme: 'dark', fontSize: 'normal', weapon: 'double-axe' }),
   monitor: z.object({
     intervalMinutes: z.number().int().min(20).default(20),
     runOnStartup: z.boolean().default(true),

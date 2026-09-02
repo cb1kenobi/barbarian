@@ -7,4 +7,6 @@ The Barbarian mark is a vertically oriented, bilaterally symmetrical double-head
 - `barbarian-app-icon.svg` and `barbarian-app-icon.png` place the Slayer-red mark on a near-black rounded square for favicons, extensions, and launchers.
 - The primary colors are acid lime `#c6f45d`, Slayer red `#ff554d`, and near-black `#0d0e0c`.
 
+The `weapons/` directory contains themeable `currentColor` marks that users can select for the dashboard, favicon, and extension side panels. The double axe remains Barbarian's primary mark and must continue to be used for documentation and packaged Chrome and VS Code extension icons.
+
 Keep clear space around the mark equal to at least half the handle width. Do not rotate, skew, outline, or add details to the axe. Use the rounded-square application icon below 24 px or whenever the mark needs contrast against an unknown background.

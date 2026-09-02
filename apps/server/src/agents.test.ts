@@ -32,7 +32,7 @@ function setup(command: string): { database: BarbarianDatabase; config: Barbaria
   const config: BarbarianConfig = {
     version: 1,
     profile: { name: 'Chris', reviewName: '', timezone: 'UTC', githubLogin: 'cb1kenobi' },
-    appearance: { theme: 'dark', fontSize: 'small' },
+    appearance: { theme: 'dark', fontSize: 'small', weapon: 'double-axe' },
     monitor: { intervalMinutes: 20, runOnStartup: true, includeDraftPullRequests: false },
     repositories: [],
     review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },

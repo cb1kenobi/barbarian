@@ -25,7 +25,7 @@
       ]
     }
   },
-  "files": ["dist/extension.js", "media/barbarian.svg", "LICENSE"],
+  "files": ["dist/extension.js", "media/barbarian.svg", "media/weapons/*.svg", "LICENSE"],
   "scripts": {
     "build": "esbuild src/extension.ts --bundle --platform=node --external:vscode --outfile=dist/extension.js",
     "package": "vsce package --allow-missing-repository"

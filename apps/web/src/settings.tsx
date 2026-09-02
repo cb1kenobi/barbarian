@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
+import { normalizeWeapon, weaponAssetPath, weaponFaviconPath, weaponOptions, type Weapon } from './weapons';
 
 export type Theme = 'light' | 'dark' | 'slayer';
 export type FontSize = 'small' | 'normal';
 export type AgentEffort = '' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-export interface AppearanceConfig { theme: Theme; fontSize: FontSize }
+export interface AppearanceConfig { theme: Theme; fontSize: FontSize; weapon: Weapon }
 interface AgentProviderSettings { model: string; effort: AgentEffort }
 export interface RepositoryConfig {
   name: string;
@@ -54,10 +55,13 @@ let localId = 0;
 const nextId = () => `settings-${localId += 1}`;
 
 export function applyAppearance(appearance: AppearanceConfig): void {
+  const weapon = normalizeWeapon(appearance.weapon);
   document.documentElement.dataset.theme = appearance.theme;
   document.documentElement.dataset.fontSize = appearance.fontSize;
+  document.documentElement.dataset.weapon = weapon;
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', appearance.theme === 'light' ? '#f4f5f0' : '#11120f');
-  try { localStorage.setItem('barbarian.appearance', JSON.stringify(appearance)); } catch {}
+  document.querySelector<HTMLLinkElement>('link[rel~="icon"]')?.setAttribute('href', weaponFaviconPath(weapon));
+  try { localStorage.setItem('barbarian.appearance', JSON.stringify({ ...appearance, weapon })); } catch {}
 }
 
 export function timezoneOptions(current?: string): string[] {
@@ -259,6 +263,7 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
           <fieldset className="settings-section"><legend>Appearance</legend><div className="choice-groups">
             <div><span className="field-label">Theme</span><div className="choice-row">{(['light', 'dark', 'slayer'] as Theme[]).map((theme) => <label className={`choice-card theme-${theme}`} key={theme}><input type="radio" name="theme" checked={draft.appearance.theme === theme} onChange={() => setDraft({ ...draft, appearance: { ...draft.appearance, theme } })} /><span>{theme[0]!.toUpperCase() + theme.slice(1)}</span></label>)}</div></div>
             <div><span className="field-label">Font size</span><div className="choice-row">{(['small', 'normal'] as FontSize[]).map((fontSize) => <label className="choice-card" key={fontSize}><input type="radio" name="font-size" checked={draft.appearance.fontSize === fontSize} onChange={() => setDraft({ ...draft, appearance: { ...draft.appearance, fontSize } })} /><span>{fontSize[0]!.toUpperCase() + fontSize.slice(1)}</span></label>)}</div></div>
+            <div className="weapon-choice-group"><span className="field-label">Weapon</span><div className="weapon-choice-row">{weaponOptions.map((weapon) => <label className="choice-card weapon-choice" key={weapon.id} title={weapon.label}><input type="radio" name="weapon" checked={draft.appearance.weapon === weapon.id} onChange={() => setDraft({ ...draft, appearance: { ...draft.appearance, weapon: weapon.id } })} /><i className="weapon-option-mark" aria-hidden="true" style={{ '--weapon-option': `url("${weaponAssetPath(weapon.id)}")` } as CSSProperties} /><span>{weapon.label}</span></label>)}</div></div>
           </div></fieldset>
 
           <fieldset className="settings-section"><legend>Monitoring</legend><div className="settings-grid three">

@@ -12,7 +12,7 @@ afterEach(() => { for (const directory of directories.splice(0)) rmSync(director
 const config: BarbarianConfig = {
   version: 1,
   profile: { name: 'Chris', reviewName: '', timezone: 'America/Chicago', githubLogin: 'cb1kenobi' },
-  appearance: { theme: 'dark', fontSize: 'small' },
+  appearance: { theme: 'dark', fontSize: 'small', weapon: 'double-axe' },
   monitor: { intervalMinutes: 20, runOnStartup: true, includeDraftPullRequests: false },
   repositories: [{ name: 'Acme/storage', priority: 10, watchIssues: true, watchPullRequests: true, reviewSkill: 'cb1-code-review', labels: {} }],
   review: { requestedReviewer: 'cb1kenobi', fallbackTeams: ['Developers'], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },

@@ -1,17 +1,22 @@
 <!doctype html>
-<html lang="en" data-theme="dark" data-font-size="normal">
+<html lang="en" data-theme="dark" data-font-size="normal" data-weapon="double-axe">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#11120f" />
     <meta name="description" content="Barbarian — your local developer command center." />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link id="app-favicon" rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Barbarian</title>
     <script>
       try {
         const appearance = JSON.parse(localStorage.getItem('barbarian.appearance') || '{}');
         if (['light', 'dark', 'slayer'].includes(appearance.theme)) document.documentElement.dataset.theme = appearance.theme;
         if (['small', 'normal'].includes(appearance.fontSize)) document.documentElement.dataset.fontSize = appearance.fontSize;
+        const weapons = ['double-axe', 'sword', 'crossed-swords', 'single-axe', 'mace', 'flail', 'nunchucks', 'hammer'];
+        if (weapons.includes(appearance.weapon)) {
+          document.documentElement.dataset.weapon = appearance.weapon;
+          if (appearance.weapon !== 'double-axe') document.getElementById('app-favicon').href = `/weapons/favicons/${appearance.weapon}.svg`;
+        }
       } catch {}
     </script>
   </head>
