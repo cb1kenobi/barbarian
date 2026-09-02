@@ -2,6 +2,7 @@
 import { access, readFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
+import process from 'node:process';
 
 const root = path.resolve(import.meta.dirname, '..');
 const extensionDirectory = path.join(root, 'apps/vscode-extension');
@@ -18,7 +19,31 @@ function run(command, arguments_, cwd = root) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
-run('pnpm', ['run', 'build'], extensionDirectory);
-run('pnpm', ['run', 'package'], extensionDirectory);
+function runPnpm(arguments_, cwd) {
+  if (process.env.npm_execpath) run(process.execPath, [process.env.npm_execpath, ...arguments_], cwd);
+  else run('pnpm', arguments_, cwd);
+}
+
+function commandAvailable(command) {
+  const result = spawnSync(windows ? `${command}.cmd` : command, ['--version'], { stdio: 'ignore' });
+  return !result.error && result.status === 0;
+}
+
+runPnpm(['run', 'build'], extensionDirectory);
+runPnpm(['run', 'package'], extensionDirectory);
 await access(vsix);
-run('code', ['--install-extension', vsix, '--force']);
+
+const editors = process.argv.includes('--detected')
+  ? ['cursor', 'code'].filter(commandAvailable)
+  : ['code'];
+
+if (editors.length === 0) {
+  console.log(`Packaged ${vsix}`);
+  console.log('No Cursor or VS Code command was found on PATH. In the editor, run "Extensions: Install from VSIX..." and select that file.');
+} else {
+  for (const editor of editors) {
+    run(editor, ['--install-extension', vsix, '--force']);
+    console.log(`Installed ${path.basename(vsix)} in ${editor === 'cursor' ? 'Cursor' : 'VS Code'}.`);
+  }
+  console.log('Reload the editor window to activate the updated extension.');
+}

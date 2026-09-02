@@ -9,6 +9,7 @@ import { agentProviderFamily } from './agent-provider.js';
 const executeFile = promisify(execFile);
 const claudeCache = new Map<string, { expiresAt: number; discovery: AgentModelDiscovery }>();
 const cursorCache = new Map<string, { expiresAt: number; discovery: AgentModelDiscovery }>();
+const ansiPattern = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\))/g;
 
 export interface AgentModelOption {
   id: string;
@@ -19,6 +20,7 @@ export interface AgentModelOption {
 export interface AgentModelDiscovery {
   models: AgentModelOption[];
   defaultModel: string | null;
+  error?: string;
 }
 
 interface CodexModelRecord {
@@ -114,7 +116,7 @@ function parseClaudeModels(source: string): AgentModelDiscovery {
 }
 
 export function parseCursorModels(source: string): AgentModelDiscovery {
-  const models = source.split(/\r?\n/).flatMap((line) => {
+  const models = source.replace(ansiPattern, '').split(/\r?\n/).flatMap((line) => {
     const match = line.match(/^(\S+)\s+-\s+(.+?)\s*$/);
     if (!match?.[1] || !match[2]) return [];
     const markers = match[2].match(/\s+\(([^)]+)\)\s*$/)?.[1]?.split(',').map((value) => value.trim()) || [];
@@ -142,6 +144,7 @@ async function runCursorDiscovery(command: string): Promise<string> {
     encoding: 'utf8',
     timeout: 15_000,
     maxBuffer: 1024 * 1024,
+    env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1', TERM: 'dumb' },
   });
   return stdout;
 }
@@ -157,8 +160,12 @@ async function discoverClaudeModels(
     const discovery = parseClaudeModels(await runner(provider.command));
     if (cache) claudeCache.set(provider.command, { expiresAt: Date.now() + 5 * 60_000, discovery });
     return discovery;
-  } catch {
-    const discovery = { models: [], defaultModel: null };
+  } catch (error) {
+    const discovery = {
+      models: [],
+      defaultModel: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
     if (cache) claudeCache.set(provider.command, { expiresAt: Date.now() + 60_000, discovery });
     return discovery;
   }
@@ -175,8 +182,12 @@ async function discoverCursorModels(
     const discovery = parseCursorModels(await runner(provider.command));
     if (cache) cursorCache.set(provider.command, { expiresAt: Date.now() + 5 * 60_000, discovery });
     return discovery;
-  } catch {
-    const discovery = { models: [], defaultModel: null };
+  } catch (error) {
+    const discovery = {
+      models: [],
+      defaultModel: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
     if (cache) cursorCache.set(provider.command, { expiresAt: Date.now() + 60_000, discovery });
     return discovery;
   }

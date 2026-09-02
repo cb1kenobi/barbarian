@@ -4,6 +4,58 @@ export interface StatusEditorEdit {
   selectionEnd: number;
 }
 
+export interface StatusClipboardContent {
+  plain: string;
+  html: string;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+export function statusClipboardContent(value: string): StatusClipboardContent {
+  const plain = value.replace(/^(\s*)[-+*•]\s+/gm, '$1• ');
+  const html: string[] = [];
+  let listItems: string[] = [];
+  const flushList = () => {
+    if (!listItems.length) return;
+    html.push(`<ul>${listItems.map((item) => `<li>${item}</li>`).join('')}</ul>`);
+    listItems = [];
+  };
+  for (const line of value.split(/\r?\n/)) {
+    const bullet = /^\s*[-+*•]\s+(.*)$/.exec(line);
+    if (bullet) {
+      listItems.push(escapeHtml(bullet[1] || ''));
+      continue;
+    }
+    flushList();
+    html.push(line ? `<p>${escapeHtml(line)}</p>` : '<p><br></p>');
+  }
+  flushList();
+  return { plain, html: html.join('') };
+}
+
+export async function copyStatusUpdate(value: string): Promise<void> {
+  const content = statusClipboardContent(value);
+  if (typeof ClipboardItem !== 'undefined' && typeof navigator.clipboard.write === 'function') {
+    try {
+      await navigator.clipboard.write([new ClipboardItem({
+        'text/plain': new Blob([content.plain], { type: 'text/plain' }),
+        'text/html': new Blob([content.html], { type: 'text/html' }),
+      })]);
+      return;
+    } catch {
+      // Some browsers expose rich clipboard APIs but permit only plain-text writes.
+    }
+  }
+  await navigator.clipboard.writeText(content.plain);
+}
+
 function insertAtSelection(
   value: string,
   selectionStart: number,

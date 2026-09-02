@@ -69,14 +69,14 @@ describe('agent model discovery', () => {
     await expect(discoverAgentModels(
       { command: 'claude', args: ['-p'] },
       { runClaude: async () => { throw new Error('unavailable'); } },
-    )).resolves.toEqual({ models: [], defaultModel: null });
+    )).resolves.toEqual({ models: [], defaultModel: null, error: 'unavailable' });
     await expect(discoverAgentModels({ command: 'gemini', args: [] })).resolves.toEqual({ models: [], defaultModel: null });
   });
 
   it('parses Cursor model IDs, names, and its reported default', async () => {
-    const output = `Available models
+    const output = `\u001b[1mAvailable models\u001b[0m
 
-auto - Auto (current, default)
+\u001b[32mauto\u001b[0m - Auto (current, default)
 cursor-grok-4.6-high - Cursor Grok 4.6
 claude-opus-5-thinking-high - Claude Opus 5 1M Thinking
 claude-fable-5-high - Claude Fable 5 1M (NO ZDR)

@@ -51,9 +51,15 @@ Both files are created from their committed examples the first time the server o
 ```bash
 pnpm install
 pnpm configure
-# Edit config/barbarian.yaml and .env
+# Add repositories to config/barbarian.yaml and optional keys to .env
 pnpm dev
 ```
+
+`pnpm configure` creates the local files and runs an interactive setup wizard. It asks for your name, GitHub username, whether Barbarian should sync when it starts, which detected AI CLI should be the default, and whether to prepare the editor and Chrome extensions. The wizard looks for `codex`, `claude`, `gemini`, and `cursor-agent` on your `PATH`; it only offers installed CLIs and preserves existing answers when rerun. The GitHub username is also used as the requested reviewer when building your review queue.
+
+If requested, the wizard builds and packages the Cursor/VS Code extension. It installs the resulting VSIX automatically into every detected `cursor` or `code` CLI; if neither command is available, it prints the VSIX path for **Extensions: Install from VSIX...**. Chrome does not allow a local unpacked extension to install itself, so the wizard validates the extension and prints its absolute directory plus the `chrome://extensions` steps.
+
+The startup question controls the initial sync after the server launches. To launch the Barbarian server automatically when you log into macOS, build it and install the separate LaunchAgent described below.
 
 Open [http://127.0.0.1:4141](http://127.0.0.1:4141) in development.
 

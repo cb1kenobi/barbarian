@@ -41,6 +41,7 @@ interface AdvancedSettings {
     supportsModelDiscovery: boolean;
     models: Array<{ id: string; name: string; isDefault: boolean }>;
     defaultModel: string | null;
+    error?: string;
   }>;
 }
 
@@ -152,7 +153,7 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
       setModelsLoading(true);
       void fetch('/api/settings/agent-models', { signal: controller.signal }).then(async (modelsResponse) => {
         const modelsBody = await modelsResponse.json() as {
-          providers?: Array<Pick<AdvancedSettings['providers'][number], 'name' | 'models' | 'defaultModel'>>;
+          providers?: Array<Pick<AdvancedSettings['providers'][number], 'name' | 'models' | 'defaultModel' | 'error'>>;
         };
         if (!modelsResponse.ok) throw new Error(modelsResponse.statusText);
         setAdvanced((current) => current ? {
@@ -326,7 +327,7 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
             return <article className="settings-card provider-card" key={provider.name}>
               <div className="settings-card-head"><strong>{provider.name}</strong>{draft.agents.default === provider.name && <small>Default provider</small>}</div>
               <div className="settings-grid two">
-                <label><span>Model <small>{detectedModels.length ? `${detectedModels.length} detected` : modelDiscoveryLoading ? 'loading' : provider.supportsModel ? defaultName ? `CLI default: ${defaultName}` : 'blank uses CLI default' : 'not supported'}</small></span>{modelDiscoveryLoading
+                <label><span>Model <small>{detectedModels.length ? `${detectedModels.length} detected` : modelDiscoveryLoading ? 'loading' : provider.error ? 'discovery failed' : provider.supportsModel ? defaultName ? `CLI default: ${defaultName}` : 'blank uses CLI default' : 'not supported'}</small></span>{modelDiscoveryLoading
                   ? <div className="model-discovery-loading" role="status"><span aria-hidden="true" />Detecting models…</div>
                   : detectedModels.length ? <select value={values.model} onChange={(event) => updateProvider(provider.name, { model: event.target.value })}>
                     <option value="">{defaultName ? `CLI default — ${defaultName}` : 'CLI default'}</option>

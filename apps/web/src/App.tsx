@@ -4,7 +4,7 @@ import { sortReviews, type ReviewSort } from './review-sort';
 import { countReviewsNeedingApproval, reviewDisplayStatus, reviewStatusGuide, statusLabel, statusTone } from './review-display';
 import { formatElapsed } from './elapsed-time';
 import { applyAppearance, SettingsModal, type AppearanceConfig } from './settings';
-import { editStatusText } from './status-editor';
+import { copyStatusUpdate, editStatusText } from './status-editor';
 import { shouldSubmitChat } from './chat-editor';
 import { renderMarkdown } from './markdown';
 import { repositoryBookmark, sortRepositoryBookmarks, type RepositoryBookmark } from './repository-links';
@@ -419,7 +419,14 @@ function StatusDialog({ dashboard, onClose, onSaved }: { dashboard: Dashboard; o
   const initial = useMemo(() => dashboard.statusDraft.lines.join('\n'), [dashboard.statusDraft.lines]);
   const [content, setContent] = useState(initial); const [saved, setSaved] = useState(false);
   useCloseOnEscape(onClose);
-  const save = async (copy: boolean) => { await api('/api/status/today', { method: 'PUT', body: JSON.stringify({ content, personalNote: '', copied: copy }) }); if (copy) await navigator.clipboard.writeText(content); setSaved(true); await onSaved(); if (copy) window.setTimeout(onClose, 600); };
+  const save = async (copy: boolean) => {
+    const persist = api('/api/status/today', { method: 'PUT', body: JSON.stringify({ content, personalNote: '', copied: copy }) });
+    if (copy) await Promise.all([persist, copyStatusUpdate(content)]);
+    else await persist;
+    setSaved(true);
+    await onSaved();
+    if (copy) window.setTimeout(onClose, 600);
+  };
   const edit = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     const textarea = event.currentTarget;
     const result = editStatusText(content, textarea.selectionStart, textarea.selectionEnd, event.key, event.shiftKey);

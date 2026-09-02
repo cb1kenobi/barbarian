@@ -18,4 +18,6 @@ for (const icon of Object.values(manifest.icons || {})) await readFile(new URL(`
 for (const weapon of ['double-axe', 'sword', 'crossed-swords', 'single-axe', 'mace', 'flail', 'nunchucks', 'hammer']) {
   await readFile(new URL(`../icons/weapons/${weapon}.svg`, import.meta.url), 'utf8');
 }
-console.log('Chrome extension manifest is valid. Load apps/chrome-extension as an unpacked extension.');
+if (!process.argv.includes('--quiet')) {
+  console.log('Chrome extension manifest is valid. Load apps/chrome-extension as an unpacked extension.');
+}
