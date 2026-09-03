@@ -6,6 +6,7 @@ export type FontSize = 'small' | 'normal';
 export type AgentEffort = '' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export interface AppearanceConfig { theme: Theme; fontSize: FontSize; weapon: Weapon }
 interface AgentSelectionSettings { provider: string; model: string; effort: AgentEffort }
+interface CodeReviewAgentSettings { enabled: boolean; model: string; effort: AgentEffort }
 export interface RepositoryConfig {
   name: string;
   priority: number;
@@ -21,7 +22,7 @@ export interface SettingsConfig {
   repositories: RepositoryConfig[];
   review: { requestedReviewer: string; fallbackTeams: string[]; autoCleanup: boolean };
   agents: {
-    codeReview: AgentSelectionSettings;
+    codeReview: Record<string, CodeReviewAgentSettings>;
     chat: AgentSelectionSettings;
     autoReview: boolean;
     maxConcurrent: number;
@@ -149,6 +150,32 @@ function AgentPicker({
       : <input disabled={!provider?.supportsModel} placeholder="CLI default" value={selection.model} onChange={(event) => onChange({ ...selection, model: event.target.value })} />}</label>
     <label><span>Effort <small>{provider?.supportsEffort ? 'reasoning depth' : 'not supported'}</small></span><select className={!provider?.supportsEffort ? 'unsupported-field' : undefined} disabled={!provider?.supportsEffort} value={provider?.supportsEffort ? selection.effort : ''} onChange={(event) => onChange({ ...selection, effort: event.target.value as AgentEffort })}>{effortLevels.map((effort) => <option key={effort || 'default'} value={effort}>{effort || 'CLI default'}</option>)}</select></label>
   </div>;
+}
+
+function CodeReviewAgentRow({
+  provider, selection, modelsLoading, onChange,
+}: {
+  provider: AdvancedSettings['providers'][number];
+  selection: CodeReviewAgentSettings;
+  modelsLoading: boolean;
+  onChange: (selection: CodeReviewAgentSettings) => void;
+}) {
+  const detectedModels = provider.models || [];
+  const modelDiscoveryLoading = modelsLoading && provider.supportsModelDiscovery && detectedModels.length === 0;
+  const selectedModelIsDetected = !selection.model || detectedModels.some((model) => model.id === selection.model);
+  const defaultName = detectedModels.find((model) => model.id === provider.defaultModel)?.name || provider.defaultModel;
+  return <article className={`settings-card code-review-agent-row${selection.enabled ? ' enabled' : ''}`}>
+    <label className="check-field agent-enable"><input type="checkbox" checked={selection.enabled} onChange={(event) => onChange({ ...selection, enabled: event.target.checked })} /><span>{provider.name}</span></label>
+    <label><span>Model <small>{detectedModels.length ? `${detectedModels.length} detected` : modelDiscoveryLoading ? 'loading' : provider.error ? 'discovery failed' : provider.supportsModel ? defaultName ? `default: ${defaultName}` : 'CLI default' : 'not supported'}</small></span>{modelDiscoveryLoading && selection.enabled
+      ? <div className="model-discovery-loading" role="status"><span aria-hidden="true" />Detecting models…</div>
+      : detectedModels.length ? <select disabled={!selection.enabled} value={selection.model} onChange={(event) => onChange({ ...selection, model: event.target.value })}>
+        <option value="">{defaultName ? `CLI default — ${defaultName}` : 'CLI default'}</option>
+        {!selectedModelIsDetected && <option value={selection.model}>{selection.model}</option>}
+        {detectedModels.map((model) => <option key={model.id} value={model.id}>{model.name}{model.isDefault ? ' — default' : ''}</option>)}
+      </select>
+      : <input disabled={!selection.enabled || !provider.supportsModel} placeholder="CLI default" value={selection.model} onChange={(event) => onChange({ ...selection, model: event.target.value })} />}</label>
+    <label><span>Effort <small>{provider.supportsEffort ? 'reasoning depth' : 'not supported'}</small></span><select disabled={!selection.enabled || !provider.supportsEffort} value={provider.supportsEffort ? selection.effort : ''} onChange={(event) => onChange({ ...selection, effort: event.target.value as AgentEffort })}>{effortLevels.map((effort) => <option key={effort || 'default'} value={effort}>{effort || 'CLI default'}</option>)}</select></label>
+  </article>;
 }
 
 export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => Promise<void> }) {
@@ -329,9 +356,15 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
             </div>
           </div></fieldset>
 
-          <fieldset className="settings-section"><legend>Code Review Agent</legend>
-            <p className="settings-section-description">Used for automatic PR reviews, manual PR reviews, and local branch reviews.</p>
-            <AgentPicker selection={draft.agents.codeReview} providers={advanced?.providers || []} modelsLoading={modelsLoading} onChange={(codeReview) => setDraft({ ...draft, agents: { ...draft.agents, codeReview } })} />
+          <fieldset className="settings-section"><legend>Code Review Agents</legend>
+            <p className="settings-section-description">Every enabled provider reviews each automatic or manual pull request. Results are combined into one deduplicated review.</p>
+            <div className="settings-list code-review-agents">{advanced?.providers.map((provider) => {
+              const selection = draft.agents.codeReview[provider.name] || { enabled: false, model: '', effort: '' };
+              return <CodeReviewAgentRow key={provider.name} provider={provider} selection={selection} modelsLoading={modelsLoading} onChange={(next) => setDraft({
+                ...draft,
+                agents: { ...draft.agents, codeReview: { ...draft.agents.codeReview, [provider.name]: next } },
+              })} />;
+            })}</div>
           </fieldset>
 
           <fieldset className="settings-section"><legend>Chat Agent</legend>

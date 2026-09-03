@@ -22,7 +22,7 @@ const config: BarbarianConfig = {
   linear: { enabled: false, command: [] },
   agents: {
     autoReview: false, maxConcurrent: 2, maxAutomaticAttempts: 3,
-    codeReview: { provider: 'codex', model: '', effort: '' },
+    codeReview: { codex: { enabled: true, model: '', effort: '' } },
     chat: { provider: 'codex', model: '', effort: '' },
     retryBaseMinutes: 5, maxRunsPerPullRequestPerHour: 3, providers: {},
   },

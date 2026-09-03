@@ -543,12 +543,8 @@ export async function createApp(
     if (run.status !== 'running') return reply.code(409).send({ error: 'Agent is no longer running' });
 
     let cancelled = 0;
-    if (run.task.startsWith('code_review:') && run.review_id) {
-      cancelled = dispatcher.cancelReview(run.review_id).cancelled;
-    } else {
-      if (!run.runtime_key) return reply.code(409).send({ error: 'This agent run cannot be stopped' });
-      cancelled = runtime.cancel(run.runtime_key, new Error('Stopped by user'));
-    }
+    if (!run.runtime_key) return reply.code(409).send({ error: 'This agent run cannot be stopped' });
+    cancelled = runtime.cancel(run.runtime_key, new Error('Stopped by user'));
     if (!cancelled) return reply.code(409).send({ error: 'Agent is no longer running' });
 
     if (run.task === 'local_branch_review' && run.branch_id) {

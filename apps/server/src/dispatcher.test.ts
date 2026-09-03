@@ -22,7 +22,7 @@ function config(maxConcurrent = 2): BarbarianConfig {
     linear: { enabled: false, command: [] },
     agents: {
       autoReview: true, maxConcurrent, maxAutomaticAttempts: 3,
-      codeReview: { provider: 'fake', model: '', effort: '' },
+      codeReview: { fake: { enabled: true, model: '', effort: '' } },
       chat: { provider: 'fake', model: '', effort: '' },
       retryBaseMinutes: 1, maxRunsPerPullRequestPerHour: 3,
       providers: { fake: { command: process.execPath, args: [] } },

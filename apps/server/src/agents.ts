@@ -6,6 +6,7 @@ import { refreshReviewContext } from './review-context.js';
 import { agentInvocationArgs } from './agent-provider.js';
 import { completedReviewStatus } from './review-state.js';
 import { configuredAgentForTask } from './agent-config.js';
+import { enabledCodeReviewProviders } from './agent-config.js';
 import {
   fetchPullRequestReviewBundle,
   postPullRequestReview,
@@ -371,6 +372,7 @@ export interface ReviewAgentDependencies {
   fetchBundle?: (repository: string, number: number) => Promise<ReviewBundle>;
   postReview?: typeof postPullRequestReview;
   refreshContext?: typeof refreshReviewContext;
+  schedule?: <T>(task: (signal: AbortSignal) => Promise<T>, key: string) => Promise<T>;
 }
 
 function finishClaim(
@@ -430,16 +432,26 @@ export async function runReviewAgent(
   const postReview = dependencies.postReview || postPullRequestReview;
   const refreshContextAfterReview = dependencies.refreshContext || refreshReviewContext;
   const task = `code_review:${claim.trigger}`;
-  let preparedRunId: number | null = null;
+  const providers = claim.provider ? [claim.provider] : enabledCodeReviewProviders(config);
+  if (providers.length === 0) throw new Error('No code review agents are enabled');
+  const preparedRuns = new Map<string, { id: number; runtimeKey: string }>();
   try {
-    preparedRunId = createAgentRun(
-      database, config, claim.reviewId, task,
-      `Preparing review context for ${review.repository}#${review.number} at ${claim.headSha}.`,
-      claim.provider, claim,
-    );
+    for (const provider of providers) {
+      const runtimeKey = `${claim.reviewId}:code-review:${provider}`;
+      const id = createAgentRun(
+        database, config, claim.reviewId, task,
+        `Preparing review context for ${review.repository}#${review.number} at ${claim.headSha}.`,
+        provider, claim, { runtimeKey },
+      );
+      preparedRuns.set(provider, { id, runtimeKey });
+    }
     const bundle = await fetchBundle(review.repository, review.number);
     if (bundle.metadata.headRefOid !== claim.headSha) {
       throw new Error('Pull request head changed before the review bundle was captured');
+    }
+    if (!database.connection.prepare('SELECT 1 FROM review_queue WHERE id=? AND claim_owner=?')
+      .get(claim.reviewId, claim.owner)) {
+      throw new Error('Review claim was cancelled before agents started');
     }
     const prompt = `Apply the review standards of ${review.review_skill} to ${review.url} at commit ${claim.headSha}.
 This review was triggered by: ${claim.trigger.replaceAll('_', ' ')}.
@@ -452,13 +464,37 @@ BARBARIAN_RESULT: {"findings":<count>,"verdict":"ready|issues","summary":"<plain
 
 REVIEW_BUNDLE_JSON:
 ${JSON.stringify(bundle)}`;
-    const output = await executeAgent(
-      database, config, claim.reviewId, task, prompt, claim.provider, signal, claim, { runId: preparedRunId },
-    );
-    const result = parseReviewResult(output);
-    validateReviewCommentLocations(bundle.diff, result.comments);
-    const commentsToPublish = newReviewComments(bundle, result.comments);
+    const outcomes = await Promise.allSettled(providers.map(async (provider) => {
+      const prepared = preparedRuns.get(provider)!;
+      const execute = (agentSignal?: AbortSignal) => executeAgent(
+        database, config, claim.reviewId, task, prompt, provider, agentSignal || signal, claim,
+        { runId: prepared.id, runtimeKey: prepared.runtimeKey },
+      );
+      const output = dependencies.schedule
+        ? await dependencies.schedule((agentSignal) => execute(agentSignal), prepared.runtimeKey)
+        : await execute();
+      const result = parseReviewResult(output);
+      validateReviewCommentLocations(bundle.diff, result.comments);
+      return { provider, result };
+    }));
+    const successful = outcomes.flatMap((outcome) => outcome.status === 'fulfilled' ? [outcome.value] : []);
+    if (successful.length !== providers.length) {
+      const failed = outcomes.flatMap((outcome, index) => outcome.status === 'rejected' ? [providers[index]!] : []);
+      const failure = outcomes.find((outcome) => outcome.status === 'rejected') as PromiseRejectedResult | undefined;
+      throw new Error(`Code review agent${failed.length === 1 ? '' : 's'} ${failed.join(', ')} failed: ${
+        failure?.reason instanceof Error ? failure.reason.message : String(failure?.reason || 'unknown error')
+      }`);
+    }
+    const combinedComments = successful.flatMap(({ result }) => result.comments);
+    const commentsToPublish = newReviewComments(bundle, combinedComments);
+    const result = {
+      findings: commentsToPublish.length,
+      summary: successful[0]!.result.summary,
+    };
     if (signal?.aborted) throw signal.reason || new Error('Review stopped');
+    const stillClaimed = database.connection.prepare('SELECT 1 FROM review_queue WHERE id=? AND claim_owner=?')
+      .get(claim.reviewId, claim.owner);
+    if (!stillClaimed) throw new Error('Review claim was cancelled before results were published');
     if (commentsToPublish.length > 0) {
       await postReview(
         review.repository, review.number, claim.headSha, result.summary, commentsToPublish,
@@ -473,8 +509,9 @@ ${JSON.stringify(bundle)}`;
       claim.reviewId,
       {
         ...result,
+        providers: successful.map(({ provider }) => provider),
         publishedFindings: commentsToPublish.length,
-        suppressedDuplicates: result.comments.length - commentsToPublish.length,
+        suppressedDuplicates: combinedComments.length - commentsToPublish.length,
         trigger: claim.trigger,
         headSha: claim.headSha,
         discussionWatermark: claim.discussionWatermark,
@@ -483,11 +520,11 @@ ${JSON.stringify(bundle)}`;
     try { await refreshContextAfterReview(database, claim.reviewId); } catch {}
   } catch (error) {
     const message = signal?.aborted ? 'Stopped by user' : error instanceof Error ? error.message : String(error);
-    if (preparedRunId !== null) {
+    for (const { id } of preparedRuns.values()) {
       database.connection.prepare(`
         UPDATE agent_runs SET status=?, finished_at=?, error=?, prompt=''
         WHERE id=? AND status='running'
-      `).run(signal?.aborted ? 'cancelled' : 'failed', new Date().toISOString(), message, preparedRunId);
+      `).run(signal?.aborted ? 'cancelled' : 'failed', new Date().toISOString(), message, id);
     }
     if (!signal?.aborted) failClaim(database, config, claim, error);
     throw error;

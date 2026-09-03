@@ -13,7 +13,7 @@ function config(provider: BarbarianConfig['agents']['providers'][string]): Barba
     linear: { enabled: false, command: [] },
     agents: {
       autoReview: true, maxConcurrent: 2, maxAutomaticAttempts: 3,
-      codeReview: { provider: 'codex', model: provider.model || '', effort: provider.effort || '' },
+      codeReview: { codex: { enabled: true, model: provider.model || '', effort: provider.effort || '' } },
       chat: { provider: 'codex', model: provider.model || '', effort: provider.effort || '' },
       retryBaseMinutes: 5, maxRunsPerPullRequestPerHour: 3, providers: { codex: provider },
     },

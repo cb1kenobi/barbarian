@@ -48,18 +48,26 @@ export function reviewTrigger(row: Pick<
 export class ReviewDispatcher {
   readonly owner = `${process.pid}:${randomUUID()}`;
   private pumping = false;
+  private activeGroups = 0;
   private stopped = false;
   private retryTimer: NodeJS.Timeout | undefined;
   private reviewChanged: (reviewId: string) => void = () => undefined;
+  private readonly runner: ReviewRunner;
+  private readonly runnerSchedulesAgents: boolean;
 
   constructor(
     private readonly database: BarbarianDatabase,
     config: BarbarianConfig | (() => BarbarianConfig),
     private readonly runtime: AgentRuntime,
     private readonly log: DispatcherLog,
-    private readonly runner: ReviewRunner = runReviewAgent,
+    runner?: ReviewRunner,
   ) {
     this.configSource = typeof config === 'function' ? config : () => config;
+    this.runnerSchedulesAgents = !runner;
+    this.runner = runner || ((database, current, claim, signal) => runReviewAgent(
+      database, current, claim, signal,
+      { schedule: (task, key) => this.runtime.run(task, key) },
+    ));
   }
 
   private readonly configSource: () => BarbarianConfig;
@@ -139,7 +147,14 @@ export class ReviewDispatcher {
     const pending = review.status === 'agent_working' || review.claim_owner || review.manual_requested_at || running > 0;
     if (!pending) return { found: true, stopped: false, cancelled: 0 };
 
-    const cancelled = this.runtime.cancel(reviewId, new Error('Agent review stopped by user'));
+    const runtimeKeys = this.database.connection.prepare(`
+      SELECT DISTINCT runtime_key FROM agent_runs
+      WHERE review_id=? AND status='running' AND task LIKE 'code_review:%' AND runtime_key IS NOT NULL
+    `).all(reviewId) as Array<{ runtime_key: string }>;
+    const cancellationKeys = new Set([...runtimeKeys.map((row) => row.runtime_key), reviewId]);
+    const cancelled = [...cancellationKeys].reduce((total, key) => (
+      total + this.runtime.cancel(key, new Error('Agent review stopped by user'))
+    ), 0);
     const now = new Date().toISOString();
     this.database.connection.exec('BEGIN IMMEDIATE');
     try {
@@ -169,17 +184,25 @@ export class ReviewDispatcher {
     this.retryTimer = undefined;
     try {
       const config = this.configSource();
-      while (!this.stopped && this.runtime.availableSlots > 0) {
+      while (!this.stopped && this.runtime.availableSlots > 0 && this.activeGroups < config.agents.maxConcurrent) {
         const claim = this.claimNext(config);
         if (!claim) break;
         this.publishReviewChanged(claim.reviewId);
-        void this.runtime.run((signal) => this.runner(this.database, config, claim, signal), claim.reviewId)
+        if (this.runnerSchedulesAgents) this.activeGroups += 1;
+        const running = this.runnerSchedulesAgents
+          ? this.runtime.track((signal) => this.runner(this.database, config, claim, signal), claim.reviewId)
+          : this.runtime.run((signal) => this.runner(this.database, config, claim, signal), claim.reviewId);
+        void running
           .catch((error) => {
             if (!(error instanceof Error && error.name === 'AbortError')) {
               this.log.error(error, `review agent failed for ${claim.reviewId}`);
             }
           })
-          .finally(() => { this.publishReviewChanged(claim.reviewId); void this.pump(); });
+          .finally(() => {
+            if (this.runnerSchedulesAgents) this.activeGroups -= 1;
+            this.publishReviewChanged(claim.reviewId);
+            void this.pump();
+          });
       }
     } catch (error) {
       this.log.error(error, 'review dispatcher pump failed');
@@ -225,7 +248,7 @@ export class ReviewDispatcher {
           if (sameAttempt && row.retry_after && row.retry_after > now) continue;
           const since = new Date(Date.now() - 60 * 60_000).toISOString();
           const recentRuns = Number((this.database.connection.prepare(`
-            SELECT COUNT(*) AS total FROM agent_runs
+            SELECT COUNT(DISTINCT COALESCE(reviewed_head_sha, '') || ':' || COALESCE(reviewed_watermark, '')) AS total FROM agent_runs
             WHERE review_id=? AND task LIKE 'code_review:%' AND started_at>=?
           `).get(row.id, since) as { total: number }).total);
           if (recentRuns >= config.agents.maxRunsPerPullRequestPerHour) continue;

@@ -405,6 +405,9 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
 .add-button:hover { border-color: var(--acid); color: var(--acid); }
 .add-button.compact { margin: 0; padding: 5px 8px; }
 .agent-picker { align-items: start; }
+.code-review-agent-row { display: grid; grid-template-columns: 150px minmax(0, 1.4fr) minmax(145px, .6fr); align-items: start; gap: 14px; }
+.code-review-agent-row .agent-enable { padding-top: 25px; color: var(--ink); font-weight: 700; text-transform: capitalize; }
+.code-review-agent-row:not(.enabled) { opacity: .72; }
 .model-discovery-loading { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 2px; background: var(--panel-hover); color: var(--muted); font-size: .75rem; line-height: 1.4; }
 .model-discovery-loading > span { width: 12px; height: 12px; flex: none; border: 2px solid var(--line-strong); border-top-color: var(--acid); border-radius: 50%; animation: model-discovery-spin .8s linear infinite; }
 @keyframes model-discovery-spin { to { transform: rotate(360deg); } }
@@ -458,6 +461,8 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
   .review-grid { grid-template-columns: 1fr; }
   .status-guide { grid-template-columns: 1fr; width: min(440px, calc(100vw - 100px)); max-height: 70vh; overflow-y: auto; }
   .settings-grid.three, .settings-grid.repo-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .code-review-agent-row { grid-template-columns: 120px minmax(0, 1fr); }
+  .code-review-agent-row > label:last-child { grid-column: 2; }
   .settings-grid.repo-fields { grid-template-columns: 82px minmax(0, 1fr); }
   .settings-grid.repo-fields .wide { grid-column: 1 / -1; }
   .repo-watch-fields { grid-column: 1 / -1; grid-template-columns: repeat(2, max-content); padding-top: 0; }
@@ -492,6 +497,9 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
   .settings-modal { width: 100vw; height: 100vh; border: 0; }
   .settings-header, .settings-body, .settings-footer { padding-left: 18px; padding-right: 18px; }
   .settings-grid.two, .settings-grid.three, .settings-grid.four, .settings-grid.repo-fields, .choice-groups { grid-template-columns: 1fr; }
+  .code-review-agent-row { grid-template-columns: 1fr; }
+  .code-review-agent-row .agent-enable { padding-top: 0; }
+  .code-review-agent-row > label:last-child { grid-column: 1; }
   .weapon-choice-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .settings-grid.repo-fields .repo-priority { width: 82px; }
   .repo-watch-fields { grid-column: 1; grid-template-columns: 1fr; }

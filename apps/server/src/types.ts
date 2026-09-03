@@ -36,6 +36,12 @@ export interface AgentSelectionConfig {
   effort: AgentEffort | '';
 }
 
+export interface CodeReviewAgentConfig {
+  enabled: boolean;
+  model: string;
+  effort: AgentEffort | '';
+}
+
 export interface BarbarianConfig {
   version: number;
   profile: { name: string; reviewName: string; timezone: string; githubLogin: string };
@@ -50,7 +56,7 @@ export interface BarbarianConfig {
   };
   linear: { enabled: boolean; command: string[] };
   agents: {
-    codeReview: AgentSelectionConfig;
+    codeReview: Record<string, CodeReviewAgentConfig>;
     chat: AgentSelectionConfig;
     autoReview: boolean;
     maxConcurrent: number;

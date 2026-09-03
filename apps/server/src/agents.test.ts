@@ -7,7 +7,8 @@ import type { BarbarianConfig } from './types.js';
 import {
   askAgent, executeAgent, newReviewComments, parseReviewResult, runReviewAgent, type ReviewClaim,
 } from './agents.js';
-import type { ReviewBundle } from './github.js';
+import type { ReviewBundle, ReviewCommentDraft } from './github.js';
+import { AgentRuntime } from './agent-runtime.js';
 
 const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
@@ -39,7 +40,7 @@ function setup(command: string): { database: BarbarianDatabase; config: Barbaria
     linear: { enabled: false, command: [] },
     agents: {
       autoReview: true, maxConcurrent: 1, maxAutomaticAttempts: 3,
-      codeReview: { provider: 'fake', model: '', effort: '' },
+      codeReview: { fake: { enabled: true, model: '', effort: '' } },
       chat: { provider: 'fake', model: '', effort: '' },
       retryBaseMinutes: 1, maxRunsPerPullRequestPerHour: 3,
       providers: { fake: { command: process.execPath, args: ['-e', command] } },
@@ -129,6 +130,40 @@ describe('runReviewAgent', () => {
     database.close();
   });
 
+  it('runs every enabled provider separately and deduplicates their combined findings', async () => {
+    const output = 'BARBARIAN_RESULT: {"findings":1,"verdict":"issues","summary":"One issue found.","comments":[{"path":"file.ts","line":1,"side":"RIGHT","body":"**High: broken invariant**\\n\\nFailure mode and fix."}]}';
+    const script = `console.log(${JSON.stringify(output)})`;
+    const { database, config, claim } = setup(script);
+    config.agents.providers.second = { command: process.execPath, args: ['-e', script] };
+    config.agents.codeReview.second = { enabled: true, model: '', effort: '' };
+    const runtime = new AgentRuntime(2);
+    let releaseBundle!: () => void;
+    const bundleReady = new Promise<void>((resolve) => { releaseBundle = resolve; });
+    let announceFetch!: () => void;
+    const fetchStarted = new Promise<void>((resolve) => { announceFetch = resolve; });
+    const published: ReviewCommentDraft[][] = [];
+    const running = runReviewAgent(database, config, claim, undefined, {
+      fetchBundle: async () => { announceFetch(); await bundleReady; return bundle; },
+      postReview: async (_repository, _number, _headSha, _summary, comments) => { published.push(comments); },
+      refreshContext: async () => undefined,
+      schedule: (task, key) => runtime.run(task, key),
+    });
+    await fetchStarted;
+    expect(database.connection.prepare(`
+      SELECT provider, status, runtime_key FROM agent_runs ORDER BY provider
+    `).all()).toEqual([
+      { provider: 'fake', status: 'running', runtime_key: `${claim.reviewId}:code-review:fake` },
+      { provider: 'second', status: 'running', runtime_key: `${claim.reviewId}:code-review:second` },
+    ]);
+    releaseBundle();
+    await running;
+    expect(published).toHaveLength(1);
+    expect(published[0]).toHaveLength(1);
+    expect(database.connection.prepare('SELECT status, findings_count FROM review_queue WHERE id=?')
+      .get(claim.reviewId)).toEqual({ status: 'issues_found', findings_count: 1 });
+    database.close();
+  });
+
   it('does not publish anything to GitHub for a clean review', async () => {
     const script = "console.log('BARBARIAN_RESULT: {\\\"findings\\\":0,\\\"verdict\\\":\\\"ready\\\",\\\"summary\\\":\\\"Clear.\\\"}')";
     const { database, config, claim } = setup(script);
@@ -149,7 +184,7 @@ describe('runReviewAgent', () => {
     `).get() as { command: string; prompt: string; runtime_key: string };
     expect(run.command).toContain(process.execPath);
     expect(run.prompt).toBe('');
-    expect(run.runtime_key).toBe(claim.reviewId);
+    expect(run.runtime_key).toBe(`${claim.reviewId}:code-review:fake`);
     database.close();
   });
 
@@ -261,7 +296,7 @@ describe('runReviewAgent', () => {
 
   it('releases the claim when the configured provider is unavailable', async () => {
     const { database, config, claim } = setup("console.log('unused')");
-    config.agents.codeReview.provider = 'missing';
+    config.agents.codeReview = { missing: { enabled: true, model: '', effort: '' } };
     config.agents.providers = {};
     await expect(runReviewAgent(database, config, claim, undefined, dependencies))
       .rejects.toThrow('is not configured');

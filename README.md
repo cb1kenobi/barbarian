@@ -174,9 +174,14 @@ Agent commands are arrays, not shell strings. Barbarian launches them without a 
 ```yaml
 agents:
   codeReview:
-    provider: codex
-    model: ""
-    effort: ""
+    codex:
+      enabled: true
+      model: ""
+      effort: ""
+    claude:
+      enabled: true
+      model: ""
+      effort: ""
   chat:
     provider: claude
     model: ""
@@ -198,7 +203,7 @@ agents:
       args: [-p, --mode, ask, --output-format, text]
 ```
 
-Choose the provider, model, and effort independently for the Code Review Agent and Chat Agent in Settings. Code review selection applies to automatic and manual PR reviews as well as local branch reviews; chat selection applies to PR, issue, and editor conversations. Barbarian passes the selected model to Codex, Claude, Cursor, or Gemini. Effort is available for Codex and Claude; Cursor model IDs already encode their effort level. Detected model lists come from the installed CLIs, and blank values retain the selected CLI’s defaults. Provider commands and their base arguments remain editable only in YAML.
+Enable one or more providers for code review, with an independent model and effort for each, then choose a single provider, model, and effort for chat. Each enabled code review provider runs independently and appears separately in Active AI Agents; Barbarian combines their findings into one deduplicated GitHub review. Chat selection applies to PR, issue, and editor conversations. Effort is available for Codex and Claude; Cursor model IDs already encode their effort level. Detected model lists come from the installed CLIs, and blank values retain each CLI’s defaults. Provider commands and their base arguments remain editable only in YAML.
 
 Provider API keys are optional because Barbarian launches local CLI programs. A CLI authenticated through its own login flow—such as `codex login` using ChatGPT—does not need an API key in `.env`. Put a provider key there only when that CLI is configured to use one. Barbarian inherits the environment but never returns secrets from its settings API.
 

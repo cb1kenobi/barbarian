@@ -23,7 +23,7 @@ const config: BarbarianConfig = {
   linear: { enabled: false, command: [] },
   agents: {
     autoReview: false, maxConcurrent: 2, maxAutomaticAttempts: 3,
-    codeReview: { provider: 'codex', model: '', effort: '' },
+    codeReview: { codex: { enabled: true, model: '', effort: '' } },
     chat: { provider: 'codex', model: '', effort: '' },
     retryBaseMinutes: 5, maxRunsPerPullRequestPerHour: 3, providers: {},
   },
@@ -707,7 +707,7 @@ describe('settings API', () => {
         config: {
           appearance: { theme: 'dark', fontSize: 'small', weapon: 'double-axe' },
           agents: {
-            codeReview: { provider: 'codex', model: '', effort: '' },
+            codeReview: { codex: { enabled: true, model: '', effort: '' } },
             chat: { provider: 'codex', model: '', effort: '' },
           },
         },
@@ -726,7 +726,7 @@ describe('settings API', () => {
         appearance: { theme: 'slayer', fontSize: 'normal', weapon: 'double-axe' },
         agents: {
           ...(editable.agents as Record<string, unknown>),
-          codeReview: { provider: 'codex', model: 'gpt-review', effort: 'high' },
+          codeReview: { codex: { enabled: true, model: 'gpt-review', effort: 'high' } },
           chat: { provider: 'codex', model: 'gpt-chat', effort: 'medium' },
         },
         repositories: [...current.repositories, {
@@ -752,7 +752,7 @@ describe('settings API', () => {
       expect(saved.statusCode).toBe(200);
       expect(persisted).toHaveLength(1);
       expect(persisted[0]).toMatchObject(next);
-      expect(persisted[0]!.agents.codeReview).toEqual({ provider: 'codex', model: 'gpt-review', effort: 'high' });
+      expect(persisted[0]!.agents.codeReview.codex).toEqual({ enabled: true, model: 'gpt-review', effort: 'high' });
       expect(persisted[0]!.agents.chat).toEqual({ provider: 'codex', model: 'gpt-chat', effort: 'medium' });
       expect(persisted[0]!.agents.providers.codex).toEqual(current.agents.providers.codex);
       expect(persisted[0]!.review.workspaceRoot).toBe(current.review.workspaceRoot);

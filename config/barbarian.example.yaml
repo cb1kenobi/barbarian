@@ -40,9 +40,10 @@ linear:
 
 agents:
   codeReview:
-    provider: codex
-    model: ""
-    effort: ""
+    codex:
+      enabled: true
+      model: ""
+      effort: ""
   chat:
     provider: codex
     model: ""

@@ -35,8 +35,12 @@ const agentSelectionSchema = z.object({
   effort: z.union([agentEffortSchema, z.literal('')]).default(''),
 }).strict();
 
+const codeReviewAgentSchema = agentSelectionSchema.omit({ provider: true }).extend({
+  enabled: z.boolean().default(false),
+}).strict();
+
 const agentsSchema = z.object({
-  codeReview: agentSelectionSchema,
+  codeReview: z.record(z.string(), codeReviewAgentSchema),
   chat: agentSelectionSchema,
   autoReview: z.boolean().default(false),
   maxConcurrent: z.number().int().min(1).max(8).default(2),
@@ -79,10 +83,16 @@ export const configSchema = z.object({
   }),
   linear: z.object({ enabled: z.boolean().default(false), command: z.array(z.string()).default([]) }),
   agents: agentsSchema.superRefine((agents, context) => {
-    for (const [field, selection] of [['codeReview', agents.codeReview], ['chat', agents.chat]] as const) {
-      if (Object.keys(agents.providers).length > 0 && !agents.providers[selection.provider]) {
-        context.addIssue({ code: 'custom', path: [field, 'provider'], message: 'Agent must name a configured provider' });
+    if (Object.keys(agents.providers).length > 0 && !agents.providers[agents.chat.provider]) {
+      context.addIssue({ code: 'custom', path: ['chat', 'provider'], message: 'Agent must name a configured provider' });
+    }
+    for (const provider of Object.keys(agents.codeReview)) {
+      if (!agents.providers[provider]) {
+        context.addIssue({ code: 'custom', path: ['codeReview', provider], message: 'Code review agent must name a configured provider' });
       }
+    }
+    if (Object.keys(agents.providers).length > 0 && !Object.values(agents.codeReview).some((agent) => agent.enabled)) {
+      context.addIssue({ code: 'custom', path: ['codeReview'], message: 'Enable at least one code review agent' });
     }
   }),
   statusUpdate: z.object({
@@ -151,11 +161,33 @@ export function parseConfig(value: unknown): BarbarianConfig {
     model: typeof legacyProvider.model === 'string' ? legacyProvider.model : '',
     effort: typeof legacyProvider.effort === 'string' ? legacyProvider.effort : '',
   };
+  const rawCodeReview = rawAgents.codeReview && typeof rawAgents.codeReview === 'object'
+    ? rawAgents.codeReview as Record<string, unknown>
+    : null;
+  const isSingleSelection = rawCodeReview && typeof rawCodeReview.provider === 'string';
+  const codeReview = isSingleSelection || !rawCodeReview
+    ? Object.fromEntries(Object.entries(rawProviders).map(([name, provider]) => {
+      const values = provider && typeof provider === 'object' ? provider as Record<string, unknown> : {};
+      const selected = isSingleSelection && rawCodeReview ? rawCodeReview : legacySelection;
+      return [name, {
+        enabled: name === selected.provider,
+        model: name === selected.provider && typeof selected.model === 'string'
+          ? selected.model
+          : typeof values.model === 'string' ? values.model : '',
+        effort: name === selected.provider && typeof selected.effort === 'string'
+          ? selected.effort
+          : typeof values.effort === 'string' ? values.effort : '',
+      }];
+    }))
+    : Object.fromEntries(Object.keys(rawProviders).map((name) => [name, {
+      enabled: false, model: '', effort: '',
+      ...(rawCodeReview[name] && typeof rawCodeReview[name] === 'object' ? rawCodeReview[name] as object : {}),
+    }]));
   return configSchema.parse({
     ...source,
     agents: {
       ...rawAgents,
-      codeReview: rawAgents.codeReview || legacySelection,
+      codeReview,
       chat: rawAgents.chat || legacySelection,
     },
   }) as BarbarianConfig;

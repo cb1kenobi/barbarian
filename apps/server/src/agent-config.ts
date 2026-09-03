@@ -5,7 +5,15 @@ export function isCodeReviewTask(task: string): boolean {
 }
 
 export function agentSelectionForTask(config: BarbarianConfig, task: string): AgentSelectionConfig {
-  return isCodeReviewTask(task) ? config.agents.codeReview : config.agents.chat;
+  if (!isCodeReviewTask(task)) return config.agents.chat;
+  const provider = enabledCodeReviewProviders(config)[0];
+  if (!provider) throw new Error('No code review agents are enabled');
+  const selection = config.agents.codeReview[provider]!;
+  return { provider, model: selection.model, effort: selection.effort };
+}
+
+export function enabledCodeReviewProviders(config: BarbarianConfig): string[] {
+  return Object.keys(config.agents.codeReview).filter((name) => config.agents.codeReview[name]?.enabled);
 }
 
 export function configuredAgentForTask(
@@ -13,7 +21,9 @@ export function configuredAgentForTask(
   task: string,
   requestedProvider?: string,
 ): { name: string; provider: AgentProviderConfig } {
-  const selection = agentSelectionForTask(config, task);
+  const selection = isCodeReviewTask(task) && requestedProvider
+    ? { provider: requestedProvider, ...(config.agents.codeReview[requestedProvider] || { model: '', effort: '' }) }
+    : agentSelectionForTask(config, task);
   const name = requestedProvider || selection.provider;
   const provider = config.agents.providers[name];
   if (!provider) throw new Error(`Agent provider "${name}" is not configured`);

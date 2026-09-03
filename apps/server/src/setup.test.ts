@@ -11,7 +11,7 @@ const config = parseConfig({
   linear: { enabled: false, command: [] },
   agents: {
     default: 'codex', autoReview: false, maxConcurrent: 2, maxAutomaticAttempts: 3,
-    codeReview: { provider: 'codex', model: '', effort: '' },
+    codeReview: { codex: { enabled: true, model: '', effort: '' } },
     chat: { provider: 'codex', model: '', effort: '' },
     retryBaseMinutes: 5, maxRunsPerPullRequestPerHour: 3,
     providers: {
@@ -56,7 +56,11 @@ describe('configuration setup', () => {
   it('uses current values on blank answers and falls back to an installed default', async () => {
     const responses = ['', '', '', '', '', ''];
     const answers = await collectSetupAnswers(
-      { ...config, agents: { ...config.agents, codeReview: { ...config.agents.codeReview, provider: 'gemini' } } },
+      { ...config, agents: { ...config.agents, codeReview: {
+        ...config.agents.codeReview,
+        codex: { ...config.agents.codeReview.codex!, enabled: false },
+        gemini: { enabled: true, model: '', effort: '' },
+      } } },
       [{ name: 'claude', command: 'claude', executable: '/bin/claude' }],
       async () => responses.shift()!,
     );
@@ -74,7 +78,8 @@ describe('configuration setup', () => {
     expect(updated.profile).toMatchObject({ name: 'Chris Barber', githubLogin: 'cb1kenobi' });
     expect(updated.review.requestedReviewer).toBe('cb1kenobi');
     expect(updated.monitor.runOnStartup).toBe(false);
-    expect(updated.agents.codeReview.provider).toBe('cursor');
+    expect(updated.agents.codeReview.cursor?.enabled).toBe(true);
+    expect(updated.agents.codeReview.codex?.enabled).toBe(false);
     expect(updated.agents.chat.provider).toBe('cursor');
     expect(updated.agents.providers).toEqual(config.agents.providers);
   });

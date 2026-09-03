@@ -1,6 +1,7 @@
 import { resolveExecutable } from './process.js';
 import { parseConfig } from './config.js';
 import type { BarbarianConfig } from './types.js';
+import { enabledCodeReviewProviders } from './agent-config.js';
 
 export interface DetectedAgent {
   name: string;
@@ -84,7 +85,9 @@ export async function collectSetupAnswers(
   const githubLogin = (await ask(`GitHub username${current.profile.githubLogin ? ` [${current.profile.githubLogin}]` : ''}: `)).trim()
     || current.profile.githubLogin;
   const runOnStartup = await askBoolean(ask, 'Sync when Barbarian starts?', current.monitor.runOnStartup);
-  const defaultAgent = await askDefaultAgent(ask, write, installed, current.agents.codeReview.provider);
+  const defaultAgent = await askDefaultAgent(
+    ask, write, installed, enabledCodeReviewProviders(current)[0] || current.agents.chat.provider,
+  );
   const installEditorExtension = await askBoolean(ask, 'Build and install the Cursor/VS Code extension?', false);
   const installChromeExtension = await askBoolean(ask, 'Set up the Chrome extension?', false);
   return { name, githubLogin, runOnStartup, defaultAgent, installEditorExtension, installChromeExtension };
@@ -108,7 +111,9 @@ export function applySetupAnswers(current: BarbarianConfig, answers: SetupAnswer
     },
     agents: {
       ...current.agents,
-      codeReview: { ...current.agents.codeReview, provider: answers.defaultAgent },
+      codeReview: Object.fromEntries(Object.entries(current.agents.codeReview).map(([provider, selection]) => [
+        provider, { ...selection, enabled: provider === answers.defaultAgent },
+      ])),
       chat: { ...current.agents.chat, provider: answers.defaultAgent },
     },
   });

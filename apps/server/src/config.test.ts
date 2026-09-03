@@ -29,7 +29,7 @@ describe('Barbarian config', () => {
       appearance: { theme: 'dark', fontSize: 'normal', weapon: 'double-axe' },
       profile: { reviewName: '' },
       agents: {
-        codeReview: { provider: 'codex', model: '', effort: '' },
+        codeReview: { codex: { enabled: true, model: '', effort: '' } },
         chat: { provider: 'codex', model: '', effort: '' },
       },
     });
@@ -53,7 +53,7 @@ describe('Barbarian config', () => {
       },
     };
     expect(parseConfig(legacy).agents).toMatchObject({
-      codeReview: { provider: 'claude', model: 'opus', effort: 'high' },
+      codeReview: { claude: { enabled: true, model: 'opus', effort: 'high' } },
       chat: { provider: 'claude', model: 'opus', effort: 'high' },
     });
   });
@@ -73,7 +73,7 @@ describe('Barbarian config', () => {
     })).toThrow();
     expect(() => parseConfig({
       ...base,
-      agents: { ...base.agents, codeReview: { provider: 'missing', model: '', effort: '' } },
+      agents: { ...base.agents, codeReview: { missing: { enabled: true, model: '', effort: '' } } },
     })).toThrow();
   });
 
@@ -108,7 +108,7 @@ describe('Barbarian config', () => {
         autoCleanup: initial.review.autoCleanup,
       },
       agents: {
-        codeReview: { provider: 'codex', model: 'gpt-review', effort: 'high' as const },
+        codeReview: { codex: { enabled: true, model: 'gpt-review', effort: 'high' as const } },
         chat: { provider: 'codex', model: 'gpt-chat', effort: 'medium' as const },
         autoReview: initial.agents.autoReview,
         maxConcurrent: initial.agents.maxConcurrent,
@@ -126,7 +126,7 @@ describe('Barbarian config', () => {
     await store.update(submitted, 'memory:1');
     expect(store.get().appearance).toEqual(submitted.appearance);
     expect(store.get().review.workspaceRoot).toBe(initial.review.workspaceRoot);
-    expect(store.get().agents.codeReview).toEqual({ provider: 'codex', model: 'gpt-review', effort: 'high' });
+    expect(store.get().agents.codeReview.codex).toEqual({ enabled: true, model: 'gpt-review', effort: 'high' });
     expect(store.get().agents.chat).toEqual({ provider: 'codex', model: 'gpt-chat', effort: 'medium' });
     expect(store.get().agents.providers.codex).toEqual(initial.agents.providers.codex);
     expect(Object.isFrozen(store.get().repositories)).toBe(true);
@@ -165,7 +165,7 @@ describe('Barbarian config', () => {
         autoCleanup: initial.review.autoCleanup,
       },
       agents: {
-        codeReview: { provider: 'codex', model: 'gpt-review', effort: 'high' as const },
+        codeReview: { codex: { enabled: true, model: 'gpt-review', effort: 'high' as const } },
         chat: { provider: 'codex', model: 'gpt-chat', effort: 'medium' as const },
         autoReview: initial.agents.autoReview,
         maxConcurrent: initial.agents.maxConcurrent,

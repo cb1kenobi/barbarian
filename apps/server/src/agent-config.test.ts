@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { configuredAgentForTask } from './agent-config.js';
+import { configuredAgentForTask, enabledCodeReviewProviders } from './agent-config.js';
 import type { BarbarianConfig } from './types.js';
 
 const config = {
   agents: {
-    codeReview: { provider: 'codex', model: 'gpt-review', effort: 'high' },
+    codeReview: {
+      codex: { enabled: true, model: 'gpt-review', effort: 'high' },
+      gemini: { enabled: true, model: 'gemini-pro', effort: '' },
+      claude: { enabled: false, model: 'opus', effort: 'medium' },
+    },
     chat: { provider: 'claude', model: 'sonnet', effort: 'medium' },
     providers: {
       codex: { command: 'codex', args: ['exec', '-'] },
@@ -22,6 +26,10 @@ describe('task-specific agent configuration', () => {
     expect(configuredAgentForTask(config, 'local_branch_review')).toMatchObject({
       name: 'codex', provider: { model: 'gpt-review', effort: 'high' },
     });
+  });
+
+  it('lists every enabled code review provider in provider order', () => {
+    expect(enabledCodeReviewProviders(config)).toEqual(['codex', 'gemini']);
   });
 
   it('uses the chat selection for every conversation task', () => {

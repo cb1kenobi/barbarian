@@ -37,6 +37,22 @@ export class AgentRuntime {
     }
   }
 
+  async track<T>(task: (signal: AbortSignal) => Promise<T>, key?: string): Promise<T> {
+    if (this.stopping) throw new Error('Barbarian is shutting down');
+    const controller = new AbortController();
+    this.controllers.set(controller, key);
+    let finish!: () => void;
+    const completion = new Promise<void>((resolve) => { finish = resolve; });
+    this.completions.add(completion);
+    try {
+      return await task(controller.signal);
+    } finally {
+      this.controllers.delete(controller);
+      this.completions.delete(completion);
+      finish();
+    }
+  }
+
   cancel(key: string, reason = new Error('Stopped by user')): number {
     let cancelled = 0;
     for (let index = this.waiting.length - 1; index >= 0; index -= 1) {
