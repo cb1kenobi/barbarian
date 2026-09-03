@@ -6,8 +6,8 @@ describe('dashboard greeting', () => {
 
   it.each([
     [0, 'Go to bed'],
-    [3, 'Go to bed'],
-    [4, 'Good morning'],
+    [4, 'Go to bed'],
+    [5, 'Good morning'],
     [11, 'Good morning'],
     [12, 'Good afternoon'],
     [17, 'Good afternoon'],

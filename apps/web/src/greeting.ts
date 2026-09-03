@@ -6,7 +6,7 @@ export function greetingForTime(value: Date | number, timezone?: string): string
     hourCycle: 'h23',
   }).formatToParts(date).find(({ type }) => type === 'hour')?.value);
 
-  if (hour < 4) return 'Go to bed';
+  if (hour < 5) return 'Go to bed';
   if (hour < 12) return 'Good morning';
   if (hour < 18) return 'Good afternoon';
   return 'Good evening';
