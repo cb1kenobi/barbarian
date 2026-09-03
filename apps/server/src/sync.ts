@@ -6,6 +6,7 @@ import { explainPullRequest, simplify, summarizePullRequest } from './summary.js
 import { discoverLinear } from './linear.js';
 import { refreshReviewContext } from './review-context.js';
 import { viewerApprovedCurrentHead, viewerRequestedChangesCurrentHead } from './review-state.js';
+import { storeAuthenticatedGithubLogin } from './github-identity.js';
 
 export function issueId(issue: DiscoveredIssue): string {
   return `${issue.provider}:${issue.repository}#${issue.number}`;
@@ -194,7 +195,9 @@ export async function trackGithubPullRequest(
   repository: string,
   number: number,
 ): Promise<string> {
-  const target = config.review.requestedReviewer || await resolveGithubLogin(config);
+  const githubLogin = await resolveGithubLogin(config);
+  storeAuthenticatedGithubLogin(database, githubLogin);
+  const target = config.review.requestedReviewer || githubLogin;
   const pullRequest = await fetchGithubPullRequest(repository, number, target);
   if (pullRequest.state !== 'OPEN') throw new Error('Only open pull requests can be added to the review queue');
   const seenAt = new Date().toISOString();
@@ -232,6 +235,7 @@ export async function applyDiscovery(
   config: BarbarianConfig,
   discovery: DiscoveryResult,
 ): Promise<void> {
+  storeAuthenticatedGithubLogin(database, discovery.githubLogin);
   for (const issue of discovery.issues) upsertIssue(database, issue, discovery.discoveredAt);
 
   const successfulRepos = config.repositories

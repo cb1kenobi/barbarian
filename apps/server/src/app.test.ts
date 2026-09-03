@@ -48,6 +48,11 @@ describe('agent runs', () => {
     `).run(new Date().toISOString());
     const app = await createApp(database, new ConfigStore(config), undefined, { runtime });
     try {
+      const status = await app.inject({
+        method: 'GET', url: `/api/agent-runs/${Number(inserted.lastInsertRowid)}/status`,
+      });
+      expect(status.statusCode).toBe(200);
+      expect(status.json()).toEqual({ status: 'running', finished_at: null, error: null });
       const response = await app.inject({
         method: 'DELETE', url: `/api/agent-runs/${Number(inserted.lastInsertRowid)}`,
       });

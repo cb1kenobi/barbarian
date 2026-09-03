@@ -1,4 +1,5 @@
 import type { BarbarianDatabase } from './database.js';
+import { authenticatedGithubLogin } from './github-identity.js';
 
 export interface AuthoredPullRequestRow extends Record<string, unknown> {
   approved: boolean;
@@ -9,7 +10,8 @@ export function authoredPullRequestsNeedingAttention(
   database: BarbarianDatabase,
   login: string,
 ): AuthoredPullRequestRow[] {
-  if (!login.trim()) return [];
+  const viewer = authenticatedGithubLogin(database, login);
+  if (!viewer) return [];
 
   const rows = database.connection.prepare(`
     SELECT review_queue.*,
@@ -37,7 +39,7 @@ export function authoredPullRequestsNeedingAttention(
         OR discussion_watermark>COALESCE(author_seen_watermark, '')
       )
     ORDER BY updated_at DESC
-  `).all(login) as Array<Record<string, unknown>>;
+  `).all(viewer) as Array<Record<string, unknown>>;
 
   return rows.map((row) => ({
     ...row,

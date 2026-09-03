@@ -25,6 +25,7 @@ import { configuredAgentEffort, configuredAgentModel } from './agent-display.js'
 import { agentProviderCapabilities, agentProviderFamily } from './agent-provider.js';
 import { discoverAgentModels, type AgentModelOption } from './agent-models.js';
 import { authoredPullRequestsNeedingAttention } from './authored-pull-requests.js';
+import { authenticatedGithubLogin } from './github-identity.js';
 import {
   askLocalBranchAgent,
   LocalBranchInputError,
@@ -39,6 +40,13 @@ const chatBody = z.object({
   provider: z.string().optional(),
   askAgent: z.boolean().default(true),
   author: z.string().default('Developer'),
+  selection: z.object({
+    text: z.string().max(16_000),
+    path: z.string().max(2_000).optional(),
+    line: z.number().int().positive().optional(),
+    endLine: z.number().int().positive().optional(),
+    url: z.string().url().max(4_000).optional(),
+  }).optional(),
 });
 
 const localBranchBody = z.object({
@@ -244,7 +252,10 @@ function markAuthoredFeedbackSeen(
   config: BarbarianConfig,
   row: Record<string, unknown>,
 ): void {
-  const login = (config.profile.githubLogin || config.review.requestedReviewer).trim().toLowerCase();
+  const login = authenticatedGithubLogin(
+    database,
+    config.profile.githubLogin || config.review.requestedReviewer,
+  ).toLowerCase();
   if (!login || String(row.author).toLowerCase() !== login) return;
   database.connection.prepare(`
     UPDATE review_queue SET author_seen_watermark=discussion_watermark
@@ -493,6 +504,17 @@ export async function createApp(
     };
   });
 
+  app.get('/api/agent-runs/:id/status', async (request, reply) => {
+    if (!dashboardApiAllowed(request.headers.origin, request.headers.host)) return reply.code(403).send({ error: 'Dashboard access required' });
+    const id = z.coerce.number().int().positive().safeParse((request.params as { id: string }).id);
+    if (!id.success) return reply.code(400).send({ error: 'Invalid agent run id' });
+    const row = database.connection.prepare(`
+      SELECT status, finished_at, error FROM agent_runs WHERE id=?
+    `).get(id.data) as { status: string; finished_at: string | null; error: string | null } | undefined;
+    if (!row) return reply.code(404).send({ error: 'Agent run not found' });
+    return row;
+  });
+
   app.get('/api/agent-runs/:id', async (request, reply) => {
     if (!dashboardApiAllowed(request.headers.origin, request.headers.host)) return reply.code(403).send({ error: 'Dashboard access required' });
     const id = z.coerce.number().int().positive().safeParse((request.params as { id: string }).id);
@@ -623,7 +645,10 @@ export async function createApp(
     if (!body.askAgent) return { message: null };
     const runtimeKey = `agent-run:${randomUUID()}`;
     const response = await runtime.run(
-      (signal) => askAgent(database, config, id, body.message, body.provider, signal, { runtimeKey }),
+      (signal) => askAgent(database, config, id, body.message, body.provider, signal, {
+        runtimeKey,
+        ...(body.selection ? { untrustedSelection: body.selection } : {}),
+      }),
       runtimeKey,
     );
     const inserted = database.connection.prepare(`
@@ -787,7 +812,9 @@ export async function createApp(
     if (!body.askAgent) return { message: null };
     const runtimeKey = `agent-run:${randomUUID()}`;
     const response = await runtime.run(
-      (signal) => askIssueAgent(database, config, id, body.message, body.provider, signal, runtimeKey),
+      (signal) => askIssueAgent(
+        database, config, id, body.message, body.provider, signal, runtimeKey, body.selection,
+      ),
       runtimeKey,
     );
     const inserted = database.connection.prepare(`
@@ -971,6 +998,7 @@ export async function createApp(
           cwd: branch.workspace_path,
           workspaceWrite: true,
           runtimeKey,
+          ...(body.selection ? { untrustedSelection: body.selection } : {}),
         }),
         runtimeKey,
       );
@@ -985,7 +1013,9 @@ export async function createApp(
     if (!body.askAgent) return { message: null };
     const runtimeKey = `agent-run:${randomUUID()}`;
     const response = await runtime.run(
-      (signal) => askLocalBranchAgent(database, config, id, body.message, body.provider, signal, runtimeKey),
+      (signal) => askLocalBranchAgent(
+        database, config, id, body.message, body.provider, signal, runtimeKey, body.selection,
+      ),
       runtimeKey,
     );
     const inserted = database.connection.prepare(`

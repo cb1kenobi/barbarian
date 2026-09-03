@@ -58,6 +58,12 @@ interface AgentRunDetail extends ActiveAgent {
   error: string | null;
 }
 
+interface AgentRunStatus {
+  status: string;
+  finished_at: string | null;
+  error: string | null;
+}
+
 interface Dashboard {
   profile: { name: string; reviewName: string; timezone: string; githubLogin: string };
   appearance: AppearanceConfig;
@@ -459,16 +465,25 @@ function AgentRunDrawer({ id, now, onClose, onStopped }: { id: number; now: numb
   useCloseOnEscape(onClose);
   useEffect(() => {
     let active = true;
+    let hasDetail = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const loadRun = async () => {
       try {
-        const value = await api<AgentRunDetail>(`/api/agent-runs/${id}`);
+        const value = hasDetail
+          ? await api<AgentRunStatus>(`/api/agent-runs/${id}/status`)
+          : await api<AgentRunDetail>(`/api/agent-runs/${id}`);
         if (!active) return;
-        setRun(value);
+        if (hasDetail) setRun((current) => current ? { ...current, ...value } : current);
+        else {
+          setRun(value as AgentRunDetail);
+          hasDetail = true;
+        }
         setError('');
         if (value.status === 'running') timer = setTimeout(() => void loadRun(), 1_000);
       } catch (caught) {
-        if (active) setError(caught instanceof Error ? caught.message : String(caught));
+        if (!active) return;
+        setError(caught instanceof Error ? caught.message : String(caught));
+        timer = setTimeout(() => void loadRun(), 3_000);
       }
     };
     void loadRun();

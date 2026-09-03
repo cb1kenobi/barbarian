@@ -4,7 +4,7 @@ import {
 import { pullRequestSummary } from './review-content.js';
 import { renderMarkdown } from './markdown.js';
 import { shouldSubmitQuestion } from './chat-input.js';
-import { selectionLabel, selectionPromptContext } from './selection-context.js';
+import { selectionLabel } from './selection-context.js';
 
 let currentTab;
 let currentPageKey = '';
@@ -304,8 +304,14 @@ async function sendQuestion(kind) {
   if (kind === 'selection') await captureSelection();
   if ((kind === 'pr' || kind === 'issue') && !question) { error.textContent = 'Write a question first.'; input?.focus(); return; }
   if (kind === 'selection' && !lastSelection) { error.textContent = 'Select lines on the GitHub page first.'; return; }
-  const selectionContext = kind === 'selection' ? selectionPromptContext(lastSelection) : '';
-  const message = `${question || 'Explain this selected code and how it relates to the pull request.'}${selectionContext}`;
+  const message = question || 'Explain this selected code and how it relates to the pull request.';
+  const selection = kind === 'selection' ? {
+    text: String(lastSelection.text).slice(0, 16_000),
+    ...(lastSelection.path ? { path: lastSelection.path } : {}),
+    ...(lastSelection.line ? { line: lastSelection.line } : {}),
+    ...(lastSelection.endLine ? { endLine: lastSelection.endLine } : {}),
+    ...(lastSelection.url ? { url: lastSelection.url } : {}),
+  } : undefined;
   if (input) input.value = '';
   appendConversationMessage({ role: 'user', author: 'GitHub extension', content: message });
   busy = true;
@@ -316,7 +322,7 @@ async function sendQuestion(kind) {
       ? `/api/issues/${encodeURIComponent(currentContext.id)}/chat`
       : `/api/reviews/${encodeURIComponent(currentContext.review.id)}/chat`;
     const result = await api(chatPath, {
-      method: 'POST', body: JSON.stringify({ message, askAgent: true, author: 'GitHub extension' }),
+      method: 'POST', body: JSON.stringify({ message, selection, askAgent: true, author: 'GitHub extension' }),
     });
     appendConversationMessage(result.message || {
       role: 'assistant', author: 'Agent', content: 'The response was saved in Barbarian.',

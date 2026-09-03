@@ -4,6 +4,7 @@ import type { BarbarianConfig } from './types.js';
 import type { ReviewClaim } from './agents.js';
 import { runReviewAgent } from './agents.js';
 import type { AgentRuntime } from './agent-runtime.js';
+import { authenticatedGithubLogin } from './github-identity.js';
 
 interface CandidateRow {
   id: string;
@@ -197,7 +198,10 @@ export class ReviewDispatcher {
 
   private claimNext(config: BarbarianConfig): ReviewClaim | null {
     const now = new Date().toISOString();
-    const reviewer = (config.profile.githubLogin || config.review.requestedReviewer).trim().toLowerCase();
+    const reviewer = authenticatedGithubLogin(
+      this.database,
+      config.profile.githubLogin || config.review.requestedReviewer,
+    ).toLowerCase();
     this.database.connection.exec('BEGIN IMMEDIATE');
     try {
       const rows = this.database.connection.prepare(`
@@ -207,10 +211,10 @@ export class ReviewDispatcher {
         FROM review_queue
         WHERE remote_state='OPEN' AND is_draft=0 AND claim_owner IS NULL
           AND status NOT IN ('merged','closed')
-          AND (manual_requested_at IS NOT NULL OR (?=1 AND review_paused=0 AND lower(author)<>?))
+          AND (manual_requested_at IS NOT NULL OR (?=1 AND ?<>'' AND review_paused=0 AND lower(author)<>?))
         ORDER BY manual_requested_at IS NULL, updated_at ASC
         LIMIT 50
-      `).all(config.agents.autoReview ? 1 : 0, reviewer) as unknown as CandidateRow[];
+      `).all(config.agents.autoReview ? 1 : 0, reviewer, reviewer) as unknown as CandidateRow[];
       for (const row of rows) {
         const trigger = reviewTrigger(row);
         if (!trigger || (row.status === 'approved' && trigger !== 'manual' && trigger !== 'new_commits')) continue;

@@ -1,6 +1,7 @@
 import type { BarbarianDatabase } from './database.js';
 import type { BarbarianConfig } from './types.js';
 import { authoredPullRequestsNeedingAttention } from './authored-pull-requests.js';
+import { authenticatedGithubLogin } from './github-identity.js';
 
 interface StatusReview {
   repository: string;
@@ -108,7 +109,10 @@ export function buildStatusDraft(database: BarbarianDatabase, config: BarbarianC
 } {
   const workday = localDate(now, config.profile.timezone);
   const previous = previousWorkday(now, config);
-  const login = (config.profile.githubLogin || config.review.requestedReviewer).toLowerCase();
+  const login = authenticatedGithubLogin(
+    database,
+    config.profile.githubLogin || config.review.requestedReviewer,
+  ).toLowerCase();
   const needsReview = Number((database.connection.prepare(`
     SELECT COUNT(*) AS total FROM review_queue
     WHERE remote_state='OPEN' AND is_draft=0 AND lower(author)<>?

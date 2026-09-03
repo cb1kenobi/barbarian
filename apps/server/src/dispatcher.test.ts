@@ -85,6 +85,29 @@ describe('ReviewDispatcher', () => {
     db.close();
   });
 
+  it('uses the authenticated GitHub login when login settings are blank', async () => {
+    const db = database();
+    const id = seedReview(db, 9);
+    db.connection.prepare("UPDATE review_queue SET author='cb1kenobi' WHERE id=?").run(id);
+    db.connection.prepare(`
+      INSERT INTO app_metadata(key, value) VALUES ('authenticated_github_login', 'cb1kenobi')
+    `).run();
+    const current = config(1);
+    current.profile.githubLogin = '';
+    current.review.requestedReviewer = '';
+    let claimed = false;
+    const dispatcher = new ReviewDispatcher(
+      db, current, new AgentRuntime(1), { error: () => undefined },
+      async () => { claimed = true; },
+    );
+    await dispatcher.pump();
+    expect(claimed).toBe(false);
+    expect(db.connection.prepare('SELECT status, claim_owner FROM review_queue WHERE id=?').get(id))
+      .toEqual({ status: 'unreviewed', claim_owner: null });
+    dispatcher.stop();
+    db.close();
+  });
+
   it('re-reviews an approved PR when its head advances', async () => {
     const db = database();
     const id = seedReview(db, 11, 'new-head');

@@ -44,6 +44,8 @@ describe('applyDiscovery', () => {
       ],
     };
     await applyDiscovery(db, config, result);
+    expect(db.connection.prepare("SELECT value FROM app_metadata WHERE key='authenticated_github_login'").get())
+      .toEqual({ value: 'cb1kenobi' });
     const rows = db.connection.prepare('SELECT number, status, assignees FROM work_items ORDER BY number').all();
     expect(rows).toEqual([
       { number: 1, status: 'queued', assignees: '["cb1kenobi"]' },
