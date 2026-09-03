@@ -8,7 +8,12 @@ function cleanMarkdown(value: string): string {
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
     .replace(/^\s*[-*+]\s+/gm, '')
     .replace(/^\s*\d+[.)]\s+/gm, '')
-    .replace(/[>*_`|]/g, '')
+    .replace(/^\s*>\s?/gm, '')
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/__([^_\n]+)__/g, '$1')
+    .replace(/(^|[\s(])\*([^*\n]+)\*(?=$|[\s).,!?:;])/g, '$1$2')
+    .replace(/(^|[\s(])_([^_\n]+)_(?=$|[\s).,!?:;])/g, '$1$2')
+    .replace(/\|/g, ' ')
     .replace(/\r/g, '')
     .trim();
 }
@@ -34,28 +39,11 @@ function sentenceCandidates(value: string): string[] {
   return value
     .split(/(?<=[.!?])\s+/)
     .map((sentence) => sentence.replace(/\s+/g, ' ').trim())
-    .filter((sentence) => sentence.length >= 20 && !/^https?:\/\/\S+$/i.test(sentence))
-    .map((sentence) => truncateAtWord(sentence, 300));
+    .filter((sentence) => sentence.length >= 20 && !/^https?:\/\/\S+$/i.test(sentence));
 }
 
-function truncateAtWord(value: string, limit: number): string {
-  if (value.length <= limit) return value;
-  const shortened = value.slice(0, limit - 1).replace(/\s+\S*$/, '').trimEnd();
-  return `${shortened || value.slice(0, limit - 1).trimEnd()}…`;
-}
-
-function joinCompleteSentences(sentences: string[], limit = 680): string {
-  const selected: string[] = [];
-  for (const sentence of sentences) {
-    const candidate = [...selected, sentence].join(' ');
-    if (candidate.length <= limit) {
-      selected.push(sentence);
-      continue;
-    }
-    if (!selected.length) selected.push(truncateAtWord(sentence, limit));
-    break;
-  }
-  return selected.join(' ');
+function joinCompleteSentences(sentences: string[]): string {
+  return sentences.join(' ');
 }
 
 function markdownSections(body: string): Array<{ heading: string; body: string }> {
@@ -69,7 +57,7 @@ export function simplify(title: string, body = ''): string {
   const firstSentence = body
     .replace(/<!--[^]*?-->/g, '')
     .replace(/```[^]*?```/g, '')
-    .replace(/[#>*_`\[\]]/g, '')
+    .replace(/[#>*\[\]]/g, '')
     .split(/(?<=[.!?])\s|\n{2,}/)
     .map((part) => part.trim())
     .find((part) => part.length >= 20 && part.length <= 180);
@@ -101,7 +89,7 @@ export function summarizePullRequest(title: string, body = ''): string {
     const normalizedSource = normalizedText(source);
     if (!normalizedSource || seenSources.has(normalizedSource)) continue;
     seenSources.add(normalizedSource);
-    const desiredFromSource = sources.length === 1 || index === sources.length - 1 ? 2 : 1;
+    const desiredFromSource = sources.length === 1 ? 4 : index === sources.length - 1 ? 2 : 1;
     const sourceLimit = Math.min(desiredFromSource, 4 - sentences.length);
     let selectedFromSource = 0;
     for (const sentence of sentenceCandidates(source)) {

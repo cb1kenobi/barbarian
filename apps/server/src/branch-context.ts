@@ -327,6 +327,7 @@ export async function askLocalBranchAgent(
   message: string,
   provider?: string,
   signal?: AbortSignal,
+  runtimeKey?: string,
 ): Promise<string> {
   const branch = database.connection.prepare('SELECT * FROM local_branches WHERE id=?').get(id) as unknown as LocalBranchRow | undefined;
   if (!branch) throw new Error('Local branch is not tracked');
@@ -341,7 +342,7 @@ Base: ${branch.base_branch}
 Commit: ${branch.head_sha}
 Known review summary: ${branch.summary || 'No agent review has completed yet.'}
 
-You are running read-only in ${branch.workspace_path}. Inspect the branch and repository when needed. Do not edit files or perform external actions.
+Your working directory is ${branch.workspace_path}. Inspect the branch and repository as needed. You may modify files or local git state when the developer asks you to. Do not perform external actions unless the developer explicitly requests them.
 
 Conversation:
 ${history.map((entry) => `${entry.author}: ${entry.content}`).join('\n')}
@@ -349,6 +350,6 @@ ${history.map((entry) => `${entry.author}: ${entry.content}`).join('\n')}
 Developer: ${message}`;
   return executeAgent(
     database, config, null, 'local_branch_chat', prompt, provider, signal, undefined,
-    { branchId: id, cwd: tmpdir() },
+    { branchId: id, cwd: branch.workspace_path, ...(runtimeKey ? { runtimeKey } : {}) },
   );
 }

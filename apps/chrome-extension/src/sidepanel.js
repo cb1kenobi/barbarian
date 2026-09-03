@@ -45,7 +45,7 @@ function renderIssueContext(context) {
     ? issue.priority_reasons.join(' · ') : 'No priority signals';
   main.innerHTML = `
     <div class="status ${tone}">${escapeHtml(status)}</div>
-    <section><h2>Summary</h2><p class="summary">${escapeHtml(issue.simple_summary || issue.title)}</p></section>
+    <section><h2>Summary</h2><div class="summary markdown">${renderMarkdown(issue.simple_summary || issue.title)}</div></section>
     <section><h2>Issue context</h2><dl class="issue-context"><div><dt>Assigned to</dt><dd>${escapeHtml(assignees)}</dd></div><div><dt>Priority</dt><dd>${Number(issue.priority) || 0} · ${escapeHtml(reasons)}</dd></div>${issue.milestone ? `<div><dt>Milestone</dt><dd>${escapeHtml(issue.milestone)}</dd></div>` : ''}${issue.duplicate_of ? `<div><dt>Duplicate of</dt><dd>${escapeHtml(issue.duplicate_of)}</dd></div>` : ''}${issue.in_progress_pr ? `<div><dt>Pull request</dt><dd><a href="${escapeHtml(issue.in_progress_pr)}" data-github-url>In progress</a></dd></div>` : ''}${issue.fixed_by ? `<div><dt>Fixed by</dt><dd><a href="${escapeHtml(issue.fixed_by)}" data-github-url>Merged pull request</a></dd></div>` : ''}</dl></section>
     <section class="review-room"><h2>Issue Room</h2><div class="conversation">${renderMessages(messages)}<div class="reply"><span class="reply-label">AGENT REPLY</span><div class="reply-text"></div></div></div><textarea placeholder="Ask about the problem, likely causes, scope, or how to verify a fix…"></textarea><p class="error"></p></section>`;
   document.querySelector('textarea')?.addEventListener('keydown', (event) => {
@@ -100,9 +100,26 @@ function renderFindings(findings) {
   }).join('')}</div>`;
 }
 
+function renderMessage(message) {
+  return `<div class="message ${message.role === 'user' ? 'user' : 'assistant'}"><span class="message-author">${escapeHtml(message.author)}</span><div class="markdown">${renderMarkdown(message.content)}</div></div>`;
+}
+
 function renderMessages(messages = []) {
   if (!messages.length) return '';
-  return `<div class="transcript">${messages.map((message) => `<div class="message ${message.role === 'user' ? 'user' : 'assistant'}"><span class="message-author">${escapeHtml(message.author)}</span><div class="markdown">${renderMarkdown(message.content)}</div></div>`).join('')}</div>`;
+  return `<div class="transcript">${messages.map(renderMessage).join('')}</div>`;
+}
+
+function appendConversationMessage(message) {
+  const conversation = document.querySelector('.conversation');
+  if (!conversation) return;
+  let transcript = conversation.querySelector('.transcript');
+  if (!transcript) {
+    transcript = document.createElement('div');
+    transcript.className = 'transcript';
+    conversation.prepend(transcript);
+  }
+  transcript.insertAdjacentHTML('beforeend', renderMessage(message));
+  conversation.scrollTop = conversation.scrollHeight;
 }
 
 function fixedIssuesForReview(review) {
@@ -157,7 +174,7 @@ function renderContext(context) {
   main.innerHTML = `
     <div class="status ${escapeHtml(assessment?.tone || 'attention')}">${escapeHtml(assessment?.label || 'Needs Review')}</div>
     <section class="review-actions"><h2>Review actions</h2><div class="actions"><button class="agent-review${reviewRunning ? ' running' : ''}" data-running="${reviewRunning}"><span class="button-icon" aria-hidden="true">${reviewRunning ? '■' : '▶'}</span><span>${reviewRunning ? 'Stop agent review' : 'Agent review'}</span></button><button class="secondary test-locally">Test locally</button></div><p class="action-status"></p>${review.workspace_path ? `<code class="workspace-path">${escapeHtml(review.workspace_path)}</code>` : ''}</section>
-    <section><h2>Summary</h2><p class="summary">${escapeHtml(summary)}</p>${renderFixedIssues(review)}</section>
+    <section><h2>Summary</h2><div class="summary markdown">${renderMarkdown(summary)}</div>${renderFixedIssues(review)}</section>
     <section class="findings-panel"><h2>Findings</h2><div class="assessment"><p class="assessment-message">${escapeHtml(assessment?.message || 'Waiting for an AI review.')}</p>${assessment?.stale ? '<p class="stale">⚠ This assessment is older than the latest commit.</p>' : ''}<div class="counts"><div class="count"><strong>${Number(counts.open) || 0}</strong><span>Open</span></div><div class="count"><strong>${Number(counts.resolved) || 0}</strong><span>Resolved</span></div><div class="count"><strong>${Number(counts.outdated) || 0}</strong><span>Outdated</span></div><div class="count"><strong>${Number(counts.total) || 0}</strong><span>Total</span></div></div></div>${renderFindings(findings)}</section>
     <section class="review-room"><h2>Review Room</h2><div class="conversation">${renderMessages(messages)}<div class="reply"><span class="reply-label">AGENT REPLY</span><div class="reply-text"></div></div></div><p class="selection"></p><textarea placeholder="Ask what changed, why it works, what could break, or how to test it…"></textarea><div class="actions"><button class="secondary ask-selection" disabled>Ask about selection</button></div><p class="error"></p></section>`;
   document.querySelector('.ask-selection')?.addEventListener('click', () => void sendQuestion('selection'));
@@ -291,6 +308,8 @@ async function sendQuestion(kind) {
   if (kind === 'selection' && !lastSelection) { error.textContent = 'Select lines on the GitHub page first.'; return; }
   const selectionContext = kind === 'selection' ? selectionPromptContext(lastSelection) : '';
   const message = `${question || 'Explain this selected code and how it relates to the pull request.'}${selectionContext}`;
+  if (input) input.value = '';
+  appendConversationMessage({ role: 'user', author: 'GitHub extension', content: message });
   busy = true;
   error.textContent = 'Agent is thinking…';
   reply?.classList.remove('visible');
@@ -302,9 +321,10 @@ async function sendQuestion(kind) {
     const result = await api(chatPath, {
       method: 'POST', body: JSON.stringify({ message, askAgent: true, author: 'GitHub extension' }),
     });
-    if (input) input.value = '';
     if (replyText) replyText.innerHTML = renderMarkdown(result.message?.content || 'The response was saved in Barbarian.');
     reply?.classList.add('visible');
+    const conversation = document.querySelector('.conversation');
+    if (conversation) conversation.scrollTop = conversation.scrollHeight;
     error.textContent = '';
   } catch (caught) { error.textContent = caught.message; }
   finally {

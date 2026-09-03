@@ -115,6 +115,12 @@ describe('runReviewAgent', () => {
       status: 'ready_to_merge', last_reviewed_sha: 'old-head',
       last_reviewed_watermark: 'old-watermark', claim_owner: null,
     });
+    const run = database.connection.prepare(`
+      SELECT command, prompt, runtime_key FROM agent_runs ORDER BY id DESC LIMIT 1
+    `).get() as { command: string; prompt: string; runtime_key: string };
+    expect(run.command).toContain(process.execPath);
+    expect(run.prompt).toContain('Apply the review standards of cb1-code-review');
+    expect(run.runtime_key).toBe(claim.reviewId);
     database.close();
   });
 

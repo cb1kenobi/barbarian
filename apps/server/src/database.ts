@@ -195,6 +195,9 @@ export class BarbarianDatabase {
         finished_at TEXT,
         output TEXT NOT NULL DEFAULT '',
         error TEXT,
+        command TEXT NOT NULL DEFAULT '',
+        prompt TEXT NOT NULL DEFAULT '',
+        runtime_key TEXT,
         owner TEXT,
         reviewed_head_sha TEXT,
         reviewed_watermark TEXT
@@ -282,6 +285,8 @@ export class BarbarianDatabase {
     const runColumns = new Set((this.connection.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>).map((column) => column.name));
     const runAdditions: Array<[string, string]> = [
       ['owner', 'TEXT'], ['reviewed_head_sha', 'TEXT'], ['reviewed_watermark', 'TEXT'],
+      ['command', "TEXT NOT NULL DEFAULT ''"], ['prompt', "TEXT NOT NULL DEFAULT ''"],
+      ['runtime_key', 'TEXT'],
     ];
     for (const [name, definition] of runAdditions) {
       if (!runColumns.has(name)) this.connection.exec(`ALTER TABLE agent_runs ADD COLUMN ${name} ${definition}`);

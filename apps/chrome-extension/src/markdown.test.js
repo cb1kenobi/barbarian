@@ -25,4 +25,10 @@ describe('chat markdown rendering', () => {
     expect(html).toContain('<blockquote>');
     expect(html).toContain('href="https://example.com"');
   });
+
+  it('preserves underscores and styles inline identifiers as code', () => {
+    const html = renderMarkdown('Calls `delete_audit_logs_before` from `ResourceBridge.ts`.');
+    expect(html).toContain('<code>delete_audit_logs_before</code>');
+    expect(html).toContain('<code>ResourceBridge.ts</code>');
+  });
 });

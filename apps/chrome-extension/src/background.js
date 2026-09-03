@@ -115,13 +115,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'barbarian-api') void proxyApi(message, sender).then(sendResponse);
   else if (message?.type === 'barbarian-active-selection') void activeSelection(sender).then(sendResponse);
   else if (message?.type === 'barbarian-appearance') void panelAppearance(sender).then(sendResponse);
-  else if (message?.type === 'barbarian-issue-updated' && sender.tab) {
+  else if ((message?.type === 'barbarian-issue-updated' || message?.type === 'barbarian-pull-request-updated') && sender.tab) {
     const page = githubPageContext(sender.tab.url || '');
-    if (page?.kind !== 'issue') { sendResponse({ ok: false }); return false; }
+    const expectedKind = message.type === 'barbarian-issue-updated' ? 'issue' : 'pullRequest';
+    if (page?.kind !== expectedKind) { sendResponse({ ok: false }); return false; }
     const refresh = () => refreshLoadedPage(sender, sender.tab?.url).catch(() => {});
     refresh();
     setTimeout(refresh, 700);
     setTimeout(refresh, 2_000);
+    if (expectedKind === 'pullRequest') setTimeout(refresh, 5_000);
     sendResponse({ ok: true });
   }
   else return false;

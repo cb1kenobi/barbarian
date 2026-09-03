@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BarbarianDatabase } from './database.js';
-import { localBranchFindings, runLocalBranchReview, upsertLocalBranch } from './branch-context.js';
+import { askLocalBranchAgent, localBranchFindings, runLocalBranchReview, upsertLocalBranch } from './branch-context.js';
 import type { BarbarianConfig } from './types.js';
 
 const directories: string[] = [];
@@ -72,6 +72,10 @@ describe('local branch agent review', () => {
         { path: 'value.ts', line: 1, side: 'RIGHT', summary: 'Medium: value changed' },
         { path: 'new-value.ts', line: 1, side: 'RIGHT', summary: 'Medium: new value is unused' },
       ]);
+      const chatConfig = structuredClone(config);
+      chatConfig.agents.providers.fake!.args = ['-e', 'console.log(process.cwd())'];
+      expect(await askLocalBranchAgent(database, chatConfig, branch.id, 'Where are you running?'))
+        .toBe(realpathSync(directory));
     } finally {
       database.close();
     }

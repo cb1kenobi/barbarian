@@ -51,6 +51,12 @@ function agentEnvironment(): NodeJS.ProcessEnv {
   return environment;
 }
 
+function commandText(command: string, args: string[]): string {
+  return [command, ...args].map((argument) => /^[\w./:@%+=,-]+$/.test(argument)
+    ? argument
+    : `'${argument.replaceAll("'", "'\\''")}'`).join(' ');
+}
+
 export async function executeAgent(
   database: BarbarianDatabase,
   config: BarbarianConfig,
@@ -60,23 +66,28 @@ export async function executeAgent(
   requestedProvider?: string,
   signal?: AbortSignal,
   claim?: ReviewClaim,
-  options: { branchId?: string; cwd?: string } = {},
+  options: { branchId?: string; cwd?: string; runtimeKey?: string } = {},
 ): Promise<string> {
   const { name, provider } = providerFor(config, requestedProvider);
   const startedAt = new Date().toISOString();
+  const args = agentInvocationArgs(provider);
   const inserted = database.connection.prepare(`
     INSERT INTO agent_runs(
-      review_id, branch_id, provider, task, status, started_at, owner, reviewed_head_sha, reviewed_watermark
-    ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?)
+      review_id, branch_id, provider, task, status, started_at, command, prompt, runtime_key,
+      owner, reviewed_head_sha, reviewed_watermark
+    ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)
   `).run(
     reviewId, options.branchId || null, name, task, startedAt,
+    commandText(provider.command, args), prompt, options.runtimeKey || reviewId || options.branchId || null,
     claim?.owner || null, claim?.headSha || null, claim?.discussionWatermark || null,
   );
   const runId = Number(inserted.lastInsertRowid);
   try {
     const command = await resolveExecutable(provider.command);
     if (!command) throw new Error(`Agent command "${provider.command}" was not found on PATH`);
-    const result = await runProcess(command, agentInvocationArgs(provider), {
+    database.connection.prepare('UPDATE agent_runs SET command=? WHERE id=?')
+      .run(commandText(command, args), runId);
+    const result = await runProcess(command, args, {
       input: prompt,
       timeoutMs: 30 * 60_000,
       maxOutputCharacters: 512_000,
@@ -115,6 +126,7 @@ export async function askAgent(
   message: string,
   provider?: string,
   signal?: AbortSignal,
+  options: { branchId?: string; cwd?: string; runtimeKey?: string } = {},
 ): Promise<string> {
   const review = getReview(database, reviewId);
   const history = database.connection.prepare(`
@@ -132,7 +144,7 @@ Conversation:
 ${history.map((entry) => `${entry.author}: ${entry.content}`).join('\n')}
 
 Developer: ${message}`;
-  return executeAgent(database, config, reviewId, 'chat', prompt, provider, signal);
+  return executeAgent(database, config, reviewId, 'chat', prompt, provider, signal, undefined, options);
 }
 
 interface IssueRow {
@@ -161,6 +173,7 @@ export async function askIssueAgent(
   message: string,
   provider?: string,
   signal?: AbortSignal,
+  runtimeKey?: string,
 ): Promise<string> {
   const issue = database.connection.prepare(`
     SELECT id, repository, number, title, body, simple_summary, url, assignees, priority,
@@ -192,7 +205,9 @@ Conversation:
 ${history.map((entry) => `${entry.author}: ${entry.content}`).join('\n')}
 
 Developer: ${message}`;
-  return executeAgent(database, config, null, 'issue_chat', prompt, provider, signal);
+  return executeAgent(database, config, null, 'issue_chat', prompt, provider, signal, undefined, {
+    runtimeKey: runtimeKey || workItemId,
+  });
 }
 
 export interface ParsedReviewResult {

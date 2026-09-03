@@ -1,5 +1,6 @@
 import type { BarbarianDatabase } from './database.js';
 import type { BarbarianConfig } from './types.js';
+import { authoredPullRequestsNeedingAttention } from './authored-pull-requests.js';
 
 interface StatusReview {
   repository: string;
@@ -114,34 +115,15 @@ export function buildStatusDraft(database: BarbarianDatabase, config: BarbarianC
       AND status<>'approved'
       AND NOT (COALESCE(viewer_review_state, '')='APPROVED' AND viewer_review_sha=head_sha)
   `).get(login) as { total: number }).total);
-  const feedback = sortReviews(database.connection.prepare(`
-    SELECT repository, number, title, updated_at FROM review_queue
-    WHERE remote_state='OPEN' AND is_draft=0 AND lower(author)=?
-      AND (
-        status='issues_found'
-        OR review_decision='CHANGES_REQUESTED'
-        OR EXISTS (
-          SELECT 1 FROM review_findings
-          WHERE review_findings.review_id=review_queue.id
-            AND review_findings.resolved=0 AND review_findings.outdated=0
-        )
-        OR (
-          COALESCE(review_decision, '')<>'APPROVED'
-          AND discussion_watermark>COALESCE(last_reviewed_watermark, '')
-        )
-      )
-  `).all(login) as unknown as StatusReview[], config);
-  const approved = sortReviews(database.connection.prepare(`
-    SELECT repository, number, title, updated_at FROM review_queue
-    WHERE remote_state='OPEN' AND is_draft=0 AND lower(author)=?
-      AND review_decision='APPROVED'
-      AND status<>'issues_found'
-      AND NOT EXISTS (
-        SELECT 1 FROM review_findings
-        WHERE review_findings.review_id=review_queue.id
-          AND review_findings.resolved=0 AND review_findings.outdated=0
-      )
-  `).all(login) as unknown as StatusReview[], config);
+  const authoredPullRequests = authoredPullRequestsNeedingAttention(database, login);
+  const feedback = sortReviews(
+    authoredPullRequests.filter((review) => review.has_new_feedback) as unknown as StatusReview[],
+    config,
+  );
+  const approved = sortReviews(
+    authoredPullRequests.filter((review) => review.approved && !review.has_new_feedback) as unknown as StatusReview[],
+    config,
+  );
   const work = selectWorkItem(database, config, previous);
   const lines = [
     `* Code reviews - ${needsReview} ${needsReview === 1 ? 'PR needs' : 'PRs need'} my review`,

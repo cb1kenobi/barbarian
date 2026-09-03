@@ -32,6 +32,11 @@ interface Review {
   fixed_issues?: FixedIssueReference[];
 }
 
+interface FeedbackReview extends Review {
+  approved: boolean;
+  has_new_feedback: boolean;
+}
+
 interface FixedIssueReference {
   provider: 'github' | 'linear';
   identifier: string;
@@ -40,9 +45,17 @@ interface FixedIssueReference {
 
 interface ChatMessage { id: number; role: string; author: string; content: string; created_at: string }
 
-interface ActiveReview {
-  id: string; repository: string; number: number; title: string; url: string;
-  agent: string; model: string; effort: string; started_at: string;
+interface ActiveAgent {
+  id: number; review_id: string | null; branch_id: string | null;
+  repository: string | null; number: number | null; title: string; url: string | null;
+  branch_name: string | null; agent: string; model: string; effort: string;
+  task: string; status: string; started_at: string; finished_at: string | null;
+}
+
+interface AgentRunDetail extends ActiveAgent {
+  command: string;
+  prompt: string;
+  error: string | null;
 }
 
 interface Dashboard {
@@ -50,8 +63,9 @@ interface Dashboard {
   appearance: AppearanceConfig;
   monitor: { intervalMinutes: number; nextSyncAt: string | null };
   repositories?: RepositoryBookmark[];
-  activeReviews: ActiveReview[];
+  activeAgents: ActiveAgent[];
   workQueue: WorkItem[];
+  feedback?: FeedbackReview[];
   reviews: Review[];
   metrics: {
     needsAttention: number; queuedIssues?: number; reviewsNeedingApproval?: number;
@@ -86,6 +100,18 @@ function appError(caught: unknown): AppError {
 }
 
 function repositoryName(repository: string): string { return repository.split('/').at(-1) || repository; }
+function agentTaskLabel(task: string): string {
+  if (task.startsWith('code_review:')) return 'Code review';
+  return ({
+    chat: 'Review Room', issue_chat: 'Issue Room',
+    local_branch_review: 'Local branch review', local_branch_chat: 'Local branch room',
+  } as Record<string, string>)[task] || task.replaceAll('_', ' ');
+}
+function agentTarget(agent: ActiveAgent): string {
+  if (agent.repository && agent.number) return `${repositoryName(agent.repository)} #${agent.number}`;
+  if (agent.repository && agent.branch_name) return `${repositoryName(agent.repository)} · ${agent.branch_name}`;
+  return agent.title || agentTaskLabel(agent.task);
+}
 function issueAssignee(item: WorkItem, githubLogin: string | undefined): { label: string; mine: boolean } {
   if (!item.assignees.length) return { label: 'Unassigned', mine: false };
   const mine = Boolean(githubLogin && item.assignees.some((login) => login.toLowerCase() === githubLogin.toLowerCase()));
@@ -123,6 +149,7 @@ export function App() {
   const [syncing, setSyncing] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [selectedReview, setSelectedReview] = useState<string | null>(null);
+  const [selectedAgent, setSelectedAgent] = useState<number | null>(null);
   const [showStatus, setShowStatus] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [reviewSort, setReviewSort] = useState<ReviewSort>('priority');
@@ -139,7 +166,7 @@ export function App() {
           const settings = await api<{ config: { repositories: Array<{ name: string }> } }>('/api/settings');
           next.repositories = settings.config.repositories.map(({ name }) => repositoryBookmark(name));
         } catch {
-          const names = new Set([...next.workQueue, ...next.reviews].map(({ repository }) => repository));
+          const names = new Set([...next.workQueue, ...next.reviews, ...(next.feedback || [])].map(({ repository }) => repository));
           next.repositories = [...names].map(repositoryBookmark);
         }
       }
@@ -179,6 +206,11 @@ export function App() {
   };
 
   const allReviews = dashboard?.reviews || [];
+  const allFeedback = dashboard?.feedback || [];
+  const feedback = useMemo(
+    () => allFeedback.filter((review) => matchesQueueSearch(review, queueSearch)),
+    [allFeedback, queueSearch],
+  );
   const reviewRepositories = useMemo(() => [...new Set(allReviews.map((review) => review.repository))].sort(), [allReviews]);
   const reviews = useMemo(() => sortReviews(
     allReviews.filter((review) => (reviewRepository === 'all' || review.repository === reviewRepository)
@@ -206,6 +238,7 @@ export function App() {
       <aside className="rail">
         <a className="brand" href="#command" aria-label="Scroll to the top"><span aria-hidden="true" /><strong>BARBARIAN</strong></a>
         <nav aria-label="Primary">
+          <a href="#feedback"><i>↩</i> Feedback <b>{feedback.length}</b></a>
           <a href="#reviews"><i>◇</i> Reviews <b>{reviews.length}</b></a>
           <a href="#work"><i>◫</i> Work queue <b>{allWork.length}</b></a>
         </nav>
@@ -215,14 +248,14 @@ export function App() {
             {repositories.map((repository) => <a href={repository.url} target="_blank" rel="noreferrer" title={repository.name} key={repository.name}><span>{repositoryName(repository.name)}</span><i aria-hidden="true">↗</i></a>)}
             {!repositories.length && <span className="repo-empty">{dashboard ? 'No repositories configured' : 'Waiting for server…'}</span>}
           </div>
-          <section className="active-reviews" aria-labelledby="active-reviews-label">
-            <span className="rail-label" id="active-reviews-label">ACTIVE CODE REVIEWS</span>
-            <div className="active-review-list">
-              {(dashboard?.activeReviews || []).map((review) => <a className="active-review" href={review.url} target="_blank" rel="noreferrer" title={review.title} key={review.id}>
-                <span className="active-review-head"><span><i aria-hidden="true" />{repositoryName(review.repository)} #{review.number}</span><time>{formatElapsed(review.started_at, now)}</time></span>
-                <small>{review.agent} · {review.model} · {review.effort === 'CLI default' ? 'default effort' : `${review.effort} effort`}</small>
-              </a>)}
-              {dashboard && !dashboard.activeReviews?.length && <span className="active-review-empty">No reviews running</span>}
+          <section className="active-agents" aria-labelledby="active-agents-label">
+            <span className="rail-label" id="active-agents-label">ACTIVE AI AGENTS</span>
+            <div className="active-agent-list">
+              {(dashboard?.activeAgents || []).map((agent) => <button className="active-agent" type="button" onClick={() => setSelectedAgent(agent.id)} title={`View ${agentTaskLabel(agent.task)} invocation`} key={agent.id}>
+                <span className="active-agent-head"><span><i aria-hidden="true" />{agentTarget(agent)}</span><time>{formatElapsed(agent.started_at, now)}</time></span>
+                <small>{agentTaskLabel(agent.task)} · {agent.agent} · {agent.model}</small>
+              </button>)}
+              {dashboard && !dashboard.activeAgents?.length && <span className="active-agent-empty">No agents running</span>}
             </div>
           </section>
         </section>
@@ -264,10 +297,27 @@ export function App() {
         <div className="queue-search">
           <label htmlFor="queue-search-input">
             <svg className="queue-search-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" /><path d="m12.5 12.5 4 4" /></svg>
-            <input id="queue-search-input" type="search" aria-label="Search code reviews and issues" value={queueSearch} onChange={(event) => setQueueSearch(event.target.value)} placeholder="Search reviews and issues by number, title, or description" />
+            <input id="queue-search-input" type="search" aria-label="Search feedback, code reviews, and issues" value={queueSearch} onChange={(event) => setQueueSearch(event.target.value)} placeholder="Search feedback, reviews, and issues by number, title, or description" />
             {queueSearch && <button className="queue-search-clear" type="button" onClick={() => setQueueSearch('')} aria-label="Clear queue search"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg></button>}
           </label>
         </div>
+
+        <section id="feedback" className="panel feedback-panel">
+          <div className="panel-head"><div><span className="section-label">YOUR PULL REQUESTS</span><div className="review-heading"><h2>Feedback</h2><span className="review-count" aria-label={`${feedback.length} matching pull requests have feedback or approval`}>{feedback.length} PR{feedback.length === 1 ? '' : 's'}</span></div></div></div>
+          <div className="review-grid queue-viewport feedback-viewport">
+            {feedback.map((review) => <button className="review-card feedback-card" key={review.id} onClick={() => setSelectedReview(review.id)}>
+              <div className="review-card-head"><span><span className="repo">{repositoryName(review.repository)}</span><span className="pr">#{review.number}</span></span><FeedbackBadges review={review} /></div>
+              <h3>{review.title}</h3><p>{review.simple_summary}</p>
+              <footer className="feedback-card-footer">
+                <small className="feedback-updated" title={formatSyncTimestamp(review.remote_updated_at, dashboard?.profile.timezone)}>Updated: {formatElapsed(review.remote_updated_at, now)}</small>
+                <small className="line-counts" aria-label={`${review.additions} lines added and ${review.deletions} lines removed`}>
+                  <span className="lines-added">+{review.additions}</span><span className="lines-removed">−{review.deletions}</span>
+                </small>
+              </footer>
+            </button>)}
+            {!feedback.length && <Empty message={queueSearch && allFeedback.length ? 'No feedback matches this search.' : 'No pull requests currently have new feedback or approval.'} />}
+          </div>
+        </section>
 
         <section id="reviews" className="panel reviews">
           <div className="panel-head"><div><span className="section-label">CODE REVIEWS</span><div className="review-heading"><h2>Review queue</h2><span className="review-count" aria-label={`${visibleReviewsNeedingApproval} matching non-approved pull requests need your review`}>{visibleReviewsNeedingApproval} to review</span><span className="review-count approved-count" aria-label={`${visibleApprovedReviews} matching pull requests are approved`}>{visibleApprovedReviews} approved</span><ReviewStatusInfo /></div></div><div className="queue-controls">
@@ -319,6 +369,7 @@ export function App() {
       </main>
 
       {selectedReview && <ReviewDrawer id={selectedReview} onClose={() => setSelectedReview(null)} onChanged={load} />}
+      {selectedAgent && <AgentRunDrawer id={selectedAgent} now={now} onClose={() => setSelectedAgent(null)} onStopped={load} />}
       {showStatus && dashboard && <StatusDialog dashboard={dashboard} onClose={() => setShowStatus(false)} onSaved={load} />}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} onSaved={load} />}
     </div>
@@ -326,6 +377,13 @@ export function App() {
 }
 
 function Empty({ message }: { message: string }) { return <div className="empty"><span>∅</span><p>{message}</p></div>; }
+
+function FeedbackBadges({ review }: { review: FeedbackReview }) {
+  return <span className="feedback-badges">
+    {review.has_new_feedback && <span className="tag feedback">New feedback</span>}
+    {review.approved && <ReviewStatusBadge status="approved" />}
+  </span>;
+}
 
 function ReviewStatusInfo() {
   return <span className="status-info" tabIndex={0} aria-label="PR status definitions" aria-describedby="review-status-guide">
@@ -385,6 +443,48 @@ function FixedIssues({ review }: { review: Review }) {
   return <p className="fixed-issues"><strong>Fixes </strong>{issues.map((issue, index) => <span key={`${issue.provider}:${issue.identifier}`}>
     {index > 0 && ', '}{issue.url ? <a href={issue.url} target="_blank" rel="noreferrer">{issue.identifier}</a> : issue.identifier}
   </span>)}</p>;
+}
+
+function AgentRunDrawer({ id, now, onClose, onStopped }: { id: number; now: number; onClose: () => void; onStopped: () => Promise<void> }) {
+  const [run, setRun] = useState<AgentRunDetail | null>(null);
+  const [error, setError] = useState('');
+  const [stopping, setStopping] = useState(false);
+  useCloseOnEscape(onClose);
+  useEffect(() => {
+    let active = true;
+    void api<AgentRunDetail>(`/api/agent-runs/${id}`)
+      .then((value) => { if (active) setRun(value); })
+      .catch((caught) => { if (active) setError(caught instanceof Error ? caught.message : String(caught)); });
+    return () => { active = false; };
+  }, [id]);
+  const stop = async () => {
+    if (stopping) return;
+    setStopping(true);
+    setError('');
+    try {
+      await api(`/api/agent-runs/${id}`, { method: 'DELETE' });
+      await onStopped();
+      onClose();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setStopping(false);
+    }
+  };
+
+  return <div className="drawer-backdrop" onMouseDown={onClose}><aside className="drawer agent-run-drawer" onMouseDown={(event) => event.stopPropagation()}>
+    <button className="drawer-close" onClick={onClose}>×</button>
+    {!run && !error && <p>Loading agent invocation…</p>}
+    {error && <p className="inline-error">{error}</p>}
+    {run && <div className="agent-run-content">
+      <span className="section-label">AI AGENT · {run.status.toUpperCase()}</span>
+      <h2>{agentTarget(run)}</h2>
+      <div className="drawer-status"><span>{agentTaskLabel(run.task)}</span><span>{run.agent}</span><span>{run.model}</span><span>{run.effort === 'CLI default' ? 'default effort' : `${run.effort} effort`}</span><span>{formatElapsed(run.started_at, now)}</span></div>
+      {run.status === 'running' && <div className="agent-run-actions"><button type="button" className="kill-agent" disabled={stopping} onClick={() => void stop()}>{stopping ? 'Stopping…' : 'Kill agent'}</button></div>}
+      <section className="agent-invocation"><h3>Command</h3><pre><code>{run.command || 'Invocation details were not recorded for this run.'}</code></pre></section>
+      <section className="agent-invocation prompt"><h3>Prompt</h3><pre><code>{run.prompt || 'Prompt details were not recorded for this run.'}</code></pre></section>
+      {run.error && <p className="inline-error">{run.error}</p>}
+    </div>}
+  </aside></div>;
 }
 
 function ReviewDrawer({ id, onClose, onChanged }: { id: string; onClose: () => void; onChanged: () => Promise<void> }) {

@@ -161,8 +161,10 @@ textarea::placeholder { color: var(--muted-soft); }
 .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 9px; }
 .review-room > .actions { grid-template-columns: 1fr; }
 button { min-height: 39px; padding: 8px 10px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); font-size: .8125rem; font-weight: 800; cursor: pointer; }
+button.agent-review:not(.running) { background: transparent; color: var(--accent); }
+button.agent-review:not(.running):hover { background: var(--accent-panel); }
 button.secondary { border-color: var(--line); background: transparent; color: var(--ink-soft); }
-button.agent-review.running { border-color: #ff987a; background: #ff987a; color: #1b100d; }
+button.agent-review.running { border-color: #ff987a; background: transparent; color: #ff987a; }
 .button-icon { display: inline-block; width: 1em; margin-right: 6px; text-align: center; }
 button:disabled { cursor: wait; opacity: .55; }
 .reply { display: none; margin-top: 11px; padding: 11px; border: 1px solid var(--line); background: var(--panel); }

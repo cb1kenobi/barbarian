@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { ServerResponse } from 'node:http';
 import Fastify from 'fastify';
@@ -14,6 +15,7 @@ import { AgentRuntime } from './agent-runtime.js';
 import { ReviewDispatcher, reviewTrigger } from './dispatcher.js';
 import { cleanupWorkspace, prepareWorkspace } from './workspaces.js';
 import { buildStatusDraft } from './status.js';
+import { summarizePullRequest } from './summary.js';
 import { recordActivity } from './activity.js';
 import { buildReviewAssessment, refreshReviewContext, storedReviewFindings } from './review-context.js';
 import { completedReviewStatus, displayReviewStatus, newCommitsSinceReview, reviewPriorityScore } from './review-state.js';
@@ -22,6 +24,7 @@ import { fixedIssueReferences } from './fixed-issues.js';
 import { configuredAgentEffort, configuredAgentModel } from './agent-display.js';
 import { agentProviderCapabilities, agentProviderFamily } from './agent-provider.js';
 import { discoverAgentModels, type AgentModelOption } from './agent-models.js';
+import { authoredPullRequestsNeedingAttention } from './authored-pull-requests.js';
 import {
   askLocalBranchAgent,
   LocalBranchInputError,
@@ -223,7 +226,11 @@ function rowToReview(
 
 function reviewContextPayload(database: BarbarianDatabase, config: BarbarianConfig, row: Record<string, unknown>) {
   const metadata = reviewCardMetadata(database).get(String(row.id));
-  const review = rowToReview(row, config, metadata);
+  const body = String(row.body || '');
+  const contextualRow = body.trim()
+    ? { ...row, simple_summary: summarizePullRequest(String(row.title || ''), body) }
+    : row;
+  const review = rowToReview(contextualRow, config, metadata);
   const findings = storedReviewFindings(database, String(row.id)).map((finding) => ({
     ...finding,
     resolved: Boolean(finding.resolved),
@@ -235,6 +242,42 @@ function reviewContextPayload(database: BarbarianDatabase, config: BarbarianConf
     assessment: buildReviewAssessment(review as unknown as Parameters<typeof buildReviewAssessment>[0], findings),
   };
 }
+
+function agentRunView(config: BarbarianConfig, row: Record<string, unknown>) {
+  const agent = String(row.provider);
+  const repository = row.review_repository || row.branch_repository || null;
+  const title = row.review_title || row.branch_name || String(row.task).replaceAll('_', ' ');
+  return {
+    id: Number(row.id),
+    review_id: row.review_id ? String(row.review_id) : null,
+    branch_id: row.branch_id ? String(row.branch_id) : null,
+    agent,
+    model: configuredAgentModel(config, agent),
+    effort: configuredAgentEffort(config, agent),
+    task: String(row.task),
+    status: String(row.status),
+    started_at: String(row.started_at),
+    finished_at: row.finished_at ? String(row.finished_at) : null,
+    repository: repository ? String(repository) : null,
+    number: row.review_number === null || row.review_number === undefined ? null : Number(row.review_number),
+    title: String(title),
+    url: row.review_url ? String(row.review_url) : null,
+    branch_name: row.branch_name ? String(row.branch_name) : null,
+  };
+}
+
+const agentRunSelect = `
+  SELECT agent_runs.*,
+    review_queue.repository AS review_repository,
+    review_queue.number AS review_number,
+    review_queue.title AS review_title,
+    review_queue.url AS review_url,
+    local_branches.repository AS branch_repository,
+    local_branches.branch_name AS branch_name
+  FROM agent_runs
+  LEFT JOIN review_queue ON review_queue.id=agent_runs.review_id
+  LEFT JOIN local_branches ON local_branches.id=agent_runs.branch_id
+`;
 
 function todayParts(config: BarbarianConfig): { date: string; weekday: string } {
   const now = new Date();
@@ -320,45 +363,33 @@ export async function createApp(
       SELECT * FROM work_items WHERE remote_state='OPEN'
       ORDER BY priority DESC, updated_at DESC
     `).all().map((row) => workItemView(row as Record<string, unknown>, activeBranches));
-    const reviews = database.connection.prepare(`
+    const login = (config.profile.githubLogin || config.review.requestedReviewer).trim().toLowerCase();
+    const openReviewRows = database.connection.prepare(`
       SELECT * FROM review_queue WHERE remote_state='OPEN'
       ORDER BY updated_at DESC
-    `).all().map((row) => {
-      const record = row as Record<string, unknown>;
+    `).all() as Array<Record<string, unknown>>;
+    const reviews = openReviewRows.filter((record) =>
+      !login || String(record.author).toLowerCase() !== login,
+    ).map((record) => {
       return rowToReview(record, config, cardMetadata.get(String(record.id)));
+    });
+    const feedback = authoredPullRequestsNeedingAttention(database, login).map((record) => {
+      const review = rowToReview(record, config, cardMetadata.get(String(record.id)));
+      return {
+        ...review,
+        approved: record.approved,
+        has_new_feedback: record.has_new_feedback,
+      };
     });
     const lastSync = database.connection.prepare(`
       SELECT * FROM sync_runs WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1
     `).get();
-    const activeReviews = (database.connection.prepare(`
-      SELECT review_queue.id, review_queue.repository, review_queue.number, review_queue.title,
-        review_queue.url, COALESCE(agent_runs.provider, ?) AS agent,
-        COALESCE(agent_runs.started_at, review_queue.claimed_at, review_queue.updated_at) AS started_at
-      FROM review_queue
-      LEFT JOIN agent_runs ON agent_runs.id=(
-        SELECT candidate.id FROM agent_runs AS candidate
-        WHERE candidate.review_id=review_queue.id AND candidate.task LIKE 'code_review:%'
-          AND (review_queue.claimed_at IS NULL OR candidate.started_at>=review_queue.claimed_at)
-        ORDER BY candidate.id DESC LIMIT 1
-      )
-      WHERE review_queue.remote_state='OPEN' AND (
-        review_queue.status='agent_working' OR review_queue.claim_owner IS NOT NULL
-        OR agent_runs.status='running'
-      )
-      ORDER BY COALESCE(agent_runs.started_at, review_queue.claimed_at, review_queue.updated_at) ASC
-    `).all(config.agents.default) as Array<{
-      id: string; repository: string; number: number; title: string; url: string;
-      agent: string; started_at: string;
-    }>).map((run) => ({
-      ...run,
-      model: configuredAgentModel(config, run.agent),
-      effort: configuredAgentEffort(config, run.agent),
-    }));
-    const activeNonReviewAgents = Number((database.connection.prepare(`
-      SELECT COUNT(*) AS total FROM agent_runs
-      WHERE status='running' AND task NOT LIKE 'code_review:%'
-    `).get() as { total: number }).total);
-    const agentWorking = activeReviews.length + activeNonReviewAgents;
+    const activeAgents = (database.connection.prepare(`
+      ${agentRunSelect}
+      WHERE agent_runs.status='running'
+      ORDER BY agent_runs.started_at ASC
+    `).all() as Array<Record<string, unknown>>).map((row) => agentRunView(config, row));
+    const agentWorking = activeAgents.length;
     const waiting = Number((database.connection.prepare(`
       SELECT COUNT(*) AS total FROM review_queue
       WHERE status IN ('issues_found','awaiting_feedback') AND remote_state='OPEN'
@@ -381,14 +412,64 @@ export async function createApp(
         name: repository.name,
         url: `https://github.com/${repository.name.split('/').map(encodeURIComponent).join('/')}`,
       })),
-      activeReviews,
+      activeAgents,
       workQueue,
+      feedback,
       reviews,
       metrics: { needsAttention, queuedIssues, reviewsNeedingApproval, agentWorking, waiting, previousWorkday: draft.stats },
       statusDraft: draft,
       statusDue,
       lastSync,
     };
+  });
+
+  app.get('/api/agent-runs/:id', async (request, reply) => {
+    const id = z.coerce.number().int().positive().safeParse((request.params as { id: string }).id);
+    if (!id.success) return reply.code(400).send({ error: 'Invalid agent run id' });
+    const row = database.connection.prepare(`${agentRunSelect} WHERE agent_runs.id=?`)
+      .get(id.data) as Record<string, unknown> | undefined;
+    if (!row) return reply.code(404).send({ error: 'Agent run not found' });
+    return {
+      ...agentRunView(configStore.get(), row),
+      command: String(row.command || ''),
+      prompt: String(row.prompt || ''),
+      error: row.error ? String(row.error) : null,
+    };
+  });
+
+  app.delete('/api/agent-runs/:id', async (request, reply) => {
+    const id = z.coerce.number().int().positive().safeParse((request.params as { id: string }).id);
+    if (!id.success) return reply.code(400).send({ error: 'Invalid agent run id' });
+    const run = database.connection.prepare(`
+      SELECT id, review_id, branch_id, task, status, runtime_key FROM agent_runs WHERE id=?
+    `).get(id.data) as {
+      id: number; review_id: string | null; branch_id: string | null;
+      task: string; status: string; runtime_key: string | null;
+    } | undefined;
+    if (!run) return reply.code(404).send({ error: 'Agent run not found' });
+    if (run.status !== 'running') return reply.code(409).send({ error: 'Agent is no longer running' });
+
+    let cancelled = 0;
+    if (run.task.startsWith('code_review:') && run.review_id) {
+      cancelled = dispatcher.cancelReview(run.review_id).cancelled;
+    } else {
+      if (!run.runtime_key) return reply.code(409).send({ error: 'This agent run cannot be stopped' });
+      cancelled = runtime.cancel(run.runtime_key, new Error('Stopped by user'));
+      if (run.task === 'local_branch_review' && run.branch_id) {
+        database.connection.prepare(`
+          UPDATE local_branches SET status='unreviewed', last_agent_error=NULL, updated_at=? WHERE id=?
+        `).run(new Date().toISOString(), run.branch_id);
+      }
+    }
+    if (!cancelled) return reply.code(409).send({ error: 'Agent is no longer running' });
+
+    const now = new Date().toISOString();
+    database.connection.prepare(`
+      UPDATE agent_runs SET status='cancelled', finished_at=?, error='Stopped by user'
+      WHERE id=? AND status='running'
+    `).run(now, run.id);
+    publishDashboardUpdated(String(run.id));
+    return { ok: true, stopped: true, cancelled };
   });
 
   app.post('/api/sync', async (_request, reply) => {
@@ -464,7 +545,11 @@ export async function createApp(
       INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'user', ?, ?, ?)
     `).run(id, body.author, body.message, now);
     if (!body.askAgent) return { message: null };
-    const response = await runtime.run((signal) => askAgent(database, config, id, body.message, body.provider, signal), id);
+    const runtimeKey = `agent-run:${randomUUID()}`;
+    const response = await runtime.run(
+      (signal) => askAgent(database, config, id, body.message, body.provider, signal, { runtimeKey }),
+      runtimeKey,
+    );
     const inserted = database.connection.prepare(`
       INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'assistant', ?, ?, ?)
     `).run(id, body.provider || config.agents.default, response, new Date().toISOString());
@@ -623,9 +708,10 @@ export async function createApp(
       VALUES (?, 'user', ?, ?, ?)
     `).run(id, body.author, body.message, now);
     if (!body.askAgent) return { message: null };
+    const runtimeKey = `agent-run:${randomUUID()}`;
     const response = await runtime.run(
-      (signal) => askIssueAgent(database, config, id, body.message, body.provider, signal),
-      id,
+      (signal) => askIssueAgent(database, config, id, body.message, body.provider, signal, runtimeKey),
+      runtimeKey,
     );
     const inserted = database.connection.prepare(`
       INSERT INTO issue_chat_messages(work_item_id, role, author, content, created_at)
@@ -797,9 +883,14 @@ export async function createApp(
         INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'user', ?, ?, ?)
       `).run(branch.review_id, body.author, body.message, now);
       if (!body.askAgent) return { message: null };
+      const runtimeKey = `agent-run:${randomUUID()}`;
       const response = await runtime.run(
-        (signal) => askAgent(database, config, branch.review_id!, body.message, body.provider, signal),
-        branch.review_id,
+        (signal) => askAgent(database, config, branch.review_id!, body.message, body.provider, signal, {
+          branchId: id,
+          cwd: branch.workspace_path,
+          runtimeKey,
+        }),
+        runtimeKey,
       );
       const inserted = database.connection.prepare(`
         INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'assistant', ?, ?, ?)
@@ -810,9 +901,10 @@ export async function createApp(
       INSERT INTO local_branch_messages(branch_id, role, author, content, created_at) VALUES (?, 'user', ?, ?, ?)
     `).run(id, body.author, body.message, now);
     if (!body.askAgent) return { message: null };
+    const runtimeKey = `agent-run:${randomUUID()}`;
     const response = await runtime.run(
-      (signal) => askLocalBranchAgent(database, config, id, body.message, body.provider, signal),
-      id,
+      (signal) => askLocalBranchAgent(database, config, id, body.message, body.provider, signal, runtimeKey),
+      runtimeKey,
     );
     const inserted = database.connection.prepare(`
       INSERT INTO local_branch_messages(branch_id, role, author, content, created_at) VALUES (?, 'assistant', ?, ?, ?)
