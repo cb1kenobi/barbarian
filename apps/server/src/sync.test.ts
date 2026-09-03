@@ -5,6 +5,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { BarbarianDatabase } from './database.js';
 import { applyDiscovery } from './sync.js';
 import type { BarbarianConfig, DiscoveryResult } from './types.js';
+import { AgentRuntime } from './agent-runtime.js';
+import { ReviewDispatcher } from './dispatcher.js';
+import type { ReviewClaim } from './agents.js';
 
 const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
@@ -30,6 +33,14 @@ function database(): BarbarianDatabase {
   const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-test-'));
   directories.push(directory);
   return new BarbarianDatabase(path.join(directory, 'test.db'));
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error('condition was not reached');
 }
 
 describe('applyDiscovery', () => {
@@ -131,6 +142,96 @@ describe('applyDiscovery', () => {
     `).get()).toEqual({
       status: 'unreviewed', review_paused: 0, approval_carryover: 1, commit_count: 5,
     });
+    db.close();
+  });
+
+  it('reviews a matching PR when it becomes ready and re-reviews each new head', async () => {
+    const db = database();
+    const runtime = new AgentRuntime(1);
+    const automaticConfig: BarbarianConfig = {
+      ...config,
+      agents: { ...config.agents, autoReview: true },
+    };
+    const pullRequest = {
+      provider: 'github' as const,
+      repository: 'Acme/storage',
+      number: 797,
+      title: 'Bound a replication gap',
+      body: '',
+      url: 'https://example.test/pull/797',
+      author: 'author',
+      additions: 42,
+      deletions: 7,
+      commitCount: 1,
+      headSha: 'first-head',
+      headRefName: 'feature',
+      baseRefName: 'main',
+      createdAt: '2026-09-02T01:59:10Z',
+      updatedAt: '2026-09-02T04:35:10Z',
+      isDraft: true,
+      reviewDecision: null,
+      requestedReviewers: ['cb1kenobi'],
+      requestedTeams: [],
+      reviewedBy: [],
+      viewerReviewState: null,
+      viewerReviewSha: null,
+      otherApprovals: 0,
+      linkedIssues: [],
+      mergedAt: null,
+      state: 'OPEN',
+      discussionWatermark: '',
+    };
+    const discovery: DiscoveryResult = {
+      discoveredAt: '2026-09-02T04:36:00Z',
+      githubLogin: 'cb1kenobi',
+      warnings: [],
+      issues: [],
+      pullRequests: [pullRequest],
+    };
+
+    await applyDiscovery(db, automaticConfig, discovery);
+    expect(db.connection.prepare('SELECT id FROM review_queue WHERE number=797').get()).toBeUndefined();
+
+    const claims: ReviewClaim[] = [];
+    const dispatcher = new ReviewDispatcher(
+      db,
+      automaticConfig,
+      runtime,
+      { error: () => undefined },
+      async (runnerDb, _config, claim) => {
+        claims.push(claim);
+        runnerDb.connection.prepare(`
+          UPDATE review_queue SET status='ready_to_merge', last_reviewed_sha=?,
+            last_reviewed_watermark=?, claim_owner=NULL, claimed_at=NULL WHERE id=? AND claim_owner=?
+        `).run(claim.headSha, claim.discussionWatermark, claim.reviewId, claim.owner);
+      },
+    );
+
+    discovery.discoveredAt = '2026-09-02T23:05:00Z';
+    discovery.pullRequests = [{
+      ...pullRequest,
+      isDraft: false,
+      updatedAt: '2026-09-02T23:04:16Z',
+    }];
+    await applyDiscovery(db, automaticConfig, discovery);
+    await dispatcher.pump();
+    await waitFor(() => claims.length === 1 && runtime.availableSlots === 1);
+    expect(claims[0]).toMatchObject({ reviewId: 'github:Acme/storage#797', trigger: 'new_pr', headSha: 'first-head' });
+
+    discovery.discoveredAt = '2026-09-02T23:52:00Z';
+    discovery.pullRequests = [{
+      ...discovery.pullRequests[0]!,
+      headSha: 'second-head',
+      commitCount: 2,
+      updatedAt: '2026-09-02T23:51:30Z',
+    }];
+    await applyDiscovery(db, automaticConfig, discovery);
+    await dispatcher.pump();
+    await waitFor(() => claims.length === 2 && runtime.availableSlots === 1);
+    expect(claims[1]).toMatchObject({ reviewId: 'github:Acme/storage#797', trigger: 'new_commits', headSha: 'second-head' });
+
+    dispatcher.stop();
+    await runtime.shutdown();
     db.close();
   });
 });
