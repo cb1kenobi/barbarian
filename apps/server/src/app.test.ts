@@ -365,6 +365,41 @@ describe('dashboard reviews', () => {
   });
 });
 
+describe('status updates', () => {
+  it('returns saved edits on the dashboard and preserves later overwrites', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-status-save-test-'));
+    directories.push(directory);
+    const database = new BarbarianDatabase(path.join(directory, 'test.db'));
+    const app = await createApp(database, new ConfigStore(config));
+    try {
+      const initial = await app.inject({ method: 'GET', url: '/api/dashboard' });
+      expect(initial.statusCode).toBe(200);
+      expect(initial.json().statusDraft.content).toBe(initial.json().statusDraft.lines.join('\n'));
+
+      const firstSave = await app.inject({
+        method: 'PUT',
+        url: '/api/status/today',
+        payload: { content: '* Finished the persistence fix', personalNote: '', copied: false },
+      });
+      expect(firstSave.statusCode).toBe(200);
+      expect((await app.inject({ method: 'GET', url: '/api/dashboard' })).json().statusDraft.content)
+        .toBe('* Finished the persistence fix');
+
+      const overwrite = await app.inject({
+        method: 'PUT',
+        url: '/api/status/today',
+        payload: { content: '* Verified the persistence fix', personalNote: '', copied: false },
+      });
+      expect(overwrite.statusCode).toBe(200);
+      expect((await app.inject({ method: 'GET', url: '/api/dashboard' })).json().statusDraft.content)
+        .toBe('* Verified the persistence fix');
+    } finally {
+      await app.close();
+      database.close();
+    }
+  });
+});
+
 describe('browser context appearance', () => {
   it('refreshes summaries written by an older summarizer once at startup', async () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-summary-backfill-test-'));

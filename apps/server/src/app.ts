@@ -572,7 +572,8 @@ export async function createApp(
     const reviewsNeedingApproval = reviews.filter((review) => review.display_status !== 'approved').length;
     const needsAttention = queuedIssues + reviewsNeedingApproval;
     const draft = buildStatusDraft(database, config);
-    const savedStatus = database.connection.prepare('SELECT * FROM daily_statuses WHERE workday=?').get(draft.workday);
+    const savedStatus = database.connection.prepare('SELECT * FROM daily_statuses WHERE workday=?')
+      .get(draft.workday) as { content: string } | undefined;
     const day = todayParts(config);
     const statusDue = config.statusUpdate.enabled
       && config.statusUpdate.workdays.includes(day.weekday)
@@ -591,7 +592,10 @@ export async function createApp(
       feedback,
       reviews,
       metrics: { needsAttention, queuedIssues, reviewsNeedingApproval, agentWorking, waiting, previousWorkday: draft.stats },
-      statusDraft: draft,
+      statusDraft: {
+        ...draft,
+        content: savedStatus?.content ?? draft.lines.join('\n'),
+      },
       statusDue,
       lastSync,
     };

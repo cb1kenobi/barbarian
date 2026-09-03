@@ -83,7 +83,7 @@ interface Dashboard {
     needsAttention: number; queuedIssues?: number; reviewsNeedingApproval?: number;
     agentWorking: number; waiting: number; previousWorkday: Record<string, number>;
   };
-  statusDraft: { workday: string; previousWorkday: string; lines: string[]; stats: Record<string, number> };
+  statusDraft: { workday: string; previousWorkday: string; lines: string[]; content: string; stats: Record<string, number> };
   statusDue: boolean;
   lastSync: SyncRun | null;
 }
@@ -584,7 +584,7 @@ function ReviewDrawer({ id, timezone, now, onClose, onChanged }: { id: string; t
 }
 
 function StatusDialog({ dashboard, onClose, onSaved }: { dashboard: Dashboard; onClose: () => void; onSaved: () => Promise<void> }) {
-  const initial = useMemo(() => dashboard.statusDraft.lines.join('\n'), [dashboard.statusDraft.lines]);
+  const initial = useMemo(() => dashboard.statusDraft.content, [dashboard.statusDraft.content]);
   const [content, setContent] = useState(initial); const [saved, setSaved] = useState(false);
   useCloseOnEscape(onClose);
   const save = async (copy: boolean) => {

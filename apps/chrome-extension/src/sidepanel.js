@@ -5,6 +5,9 @@ import { pullRequestSummary } from './review-content.js';
 import { renderMarkdown } from './markdown.js';
 import { shouldSubmitQuestion } from './chat-input.js';
 import { selectionLabel } from './selection-context.js';
+import {
+  rememberSuppressResolved, restoreSuppressResolved, suppressResolvedStorageKey, visibleFindings,
+} from './finding-visibility.js';
 
 let currentTab;
 let currentPageKey = '';
@@ -12,6 +15,7 @@ let currentPageKind = '';
 let currentContext;
 let busy = false;
 let lastSelection;
+let suppressResolvedFindings = false;
 
 const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, (character) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;',
@@ -53,10 +57,7 @@ function renderIssueContext(context) {
     event.preventDefault();
     void sendQuestion('issue');
   });
-  document.querySelectorAll('[data-github-url]').forEach((link) => link.addEventListener('click', (event) => {
-    event.preventDefault();
-    if (currentTab?.id) void chrome.tabs.update(currentTab.id, { url: link.href });
-  }));
+  wireGitHubLinks();
 }
 
 async function activeTab() {
@@ -92,8 +93,12 @@ function findingState(finding) {
 }
 
 function renderFindings(findings) {
-  if (!findings.length) return '<p class="empty">No linked AI review comments yet.</p>';
-  return `<div class="findings">${findings.map((finding) => {
+  const visible = visibleFindings(findings, suppressResolvedFindings);
+  const hidden = findings.length - visible.length;
+  if (!visible.length) return hidden
+    ? `<p class="empty">${hidden} resolved ${hidden === 1 ? 'finding is' : 'findings are'} hidden.</p>`
+    : '<p class="empty">No linked AI review comments yet.</p>';
+  return `<div class="findings">${visible.map((finding) => {
     const state = findingState(finding);
     const location = finding.path ? `${finding.path}${finding.line ? `:${finding.line}` : ''}` : 'Conversation';
     return `<article class="finding ${state.className}"><div class="finding-top"><span class="state" title="${state.label}">${state.symbol}</span><a class="finding-summary" href="${escapeHtml(finding.url)}" data-github-url>${escapeHtml(finding.summary || 'Open review comment')}</a></div><p class="finding-meta">${escapeHtml(state.label)} · ${escapeHtml(location)} · ${escapeHtml(finding.author)}</p></article>`;
@@ -107,6 +112,13 @@ function renderMessage(message) {
 function renderMessages(messages = []) {
   if (!messages.length) return '';
   return `<div class="transcript">${messages.map(renderMessage).join('')}</div>`;
+}
+
+function wireGitHubLinks(root = document) {
+  root.querySelectorAll('[data-github-url]').forEach((link) => link.addEventListener('click', (event) => {
+    event.preventDefault();
+    if (currentTab?.id) void chrome.tabs.update(currentTab.id, { url: link.href });
+  }));
 }
 
 function appendConversationMessage(message) {
@@ -175,7 +187,7 @@ function renderContext(context) {
     <div class="status ${escapeHtml(assessment?.tone || 'attention')}">${escapeHtml(assessment?.label || 'Needs Review')}</div>
     <section class="review-actions"><h2>Review actions</h2><div class="actions"><button class="agent-review${reviewRunning ? ' running' : ''}" data-running="${reviewRunning}"><span class="button-icon" aria-hidden="true">${reviewRunning ? '■' : '▶'}</span><span>${reviewRunning ? 'Stop agent review' : 'Agent review'}</span></button><button class="secondary test-locally">Test locally</button></div><p class="action-status"></p>${review.workspace_path ? `<code class="workspace-path">${escapeHtml(review.workspace_path)}</code>` : ''}</section>
     <section><h2>Summary</h2><div class="summary markdown">${renderMarkdown(summary)}</div>${renderFixedIssues(review)}</section>
-    <section class="findings-panel"><h2>Findings</h2><div class="assessment"><p class="assessment-message">${escapeHtml(assessment?.message || 'Waiting for an AI review.')}</p>${assessment?.stale ? '<p class="stale">⚠ This assessment is older than the latest commit.</p>' : ''}<div class="counts"><div class="count"><strong>${Number(counts.open) || 0}</strong><span>Open</span></div><div class="count"><strong>${Number(counts.resolved) || 0}</strong><span>Resolved</span></div><div class="count"><strong>${Number(counts.outdated) || 0}</strong><span>Outdated</span></div><div class="count"><strong>${Number(counts.total) || 0}</strong><span>Total</span></div></div></div>${renderFindings(findings)}</section>
+    <section class="findings-panel"><div class="findings-heading"><h2>Findings</h2><label class="finding-filter"><input type="checkbox" ${suppressResolvedFindings ? 'checked' : ''}> Hide resolved</label></div><div class="assessment"><p class="assessment-message">${escapeHtml(assessment?.message || 'Waiting for an AI review.')}</p>${assessment?.stale ? '<p class="stale">⚠ This assessment is older than the latest commit.</p>' : ''}<div class="counts"><div class="count"><strong>${Number(counts.open) || 0}</strong><span>Open</span></div><div class="count"><strong>${Number(counts.resolved) || 0}</strong><span>Resolved</span></div><div class="count"><strong>${Number(counts.outdated) || 0}</strong><span>Outdated</span></div><div class="count"><strong>${Number(counts.total) || 0}</strong><span>Total</span></div></div></div><div class="findings-content">${renderFindings(findings)}</div></section>
     <section class="review-room"><h2>Review Room</h2><div class="conversation">${renderMessages(messages)}</div><p class="selection"></p><textarea placeholder="Ask what changed, why it works, what could break, or how to test it…"></textarea><div class="actions"><button class="secondary ask-selection" disabled>Ask about selection</button></div><p class="error"></p></section>`;
   document.querySelector('.ask-selection')?.addEventListener('click', () => void sendQuestion('selection'));
   document.querySelector('textarea')?.addEventListener('keydown', (event) => {
@@ -185,10 +197,16 @@ function renderContext(context) {
   });
   document.querySelector('.agent-review')?.addEventListener('click', () => void runReviewAction('review'));
   document.querySelector('.test-locally')?.addEventListener('click', () => void runReviewAction('workspace'));
-  document.querySelectorAll('[data-github-url]').forEach((link) => link.addEventListener('click', (event) => {
-    event.preventDefault();
-    if (currentTab?.id) void chrome.tabs.update(currentTab.id, { url: link.href });
-  }));
+  document.querySelector('.finding-filter input')?.addEventListener('change', (event) => {
+    suppressResolvedFindings = event.currentTarget.checked;
+    void rememberSuppressResolved(suppressResolvedFindings, chrome.storage.local);
+    const content = document.querySelector('.findings-content');
+    if (content) {
+      content.innerHTML = renderFindings(findings);
+      wireGitHubLinks(content);
+    }
+  });
+  wireGitHubLinks();
   updateSelectionPreview();
   void captureSelection();
 }
@@ -385,9 +403,20 @@ chrome.runtime.onMessage.addListener((message) => {
 chrome.storage.onChanged.addListener((changes, areaName) => {
   const appearance = changes[appearanceStorageKey]?.newValue;
   if (areaName === 'local' && appearance) applyAppearance(appearance);
+  if (areaName === 'local' && suppressResolvedStorageKey in changes) {
+    suppressResolvedFindings = changes[suppressResolvedStorageKey].newValue === true;
+    const checkbox = document.querySelector('.finding-filter input');
+    if (checkbox) checkbox.checked = suppressResolvedFindings;
+    const content = document.querySelector('.findings-content');
+    if (content && currentContext?.findings) {
+      content.innerHTML = renderFindings(currentContext.findings);
+      wireGitHubLinks(content);
+    }
+  }
 });
 setInterval(() => { if (!document.hidden && !busy && !document.querySelector('textarea')?.value) void refresh({ quiet: true }); }, 30_000);
 void (async () => {
+  suppressResolvedFindings = await restoreSuppressResolved(chrome.storage.local);
   const restored = await restoreAppearance(chrome.storage.local);
   const synced = await syncAppearance();
   if (!restored && !synced) applyAppearance(undefined);

@@ -111,7 +111,8 @@ section { margin: 0 0 23px; }
 h2 { margin: 0 0 9px; color: var(--accent); font-size: .6875rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
 p { margin: 0; }
 .assessment { padding: 13px; border: 1px solid var(--line); background: var(--panel); }
-.assessment + .findings, .assessment + .empty { margin-top: 9px; }
+.assessment + .findings, .assessment + .empty,
+.assessment + .findings-content > .findings, .assessment + .findings-content > .empty { margin-top: 9px; }
 .assessment-message { font-size: .875rem; font-weight: 700; line-height: 1.42; }
 .counts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin-top: 12px; }
 .count { padding: 7px 4px; border: 1px solid var(--line-soft); background: var(--panel-deep); text-align: center; }
@@ -128,7 +129,12 @@ p { margin: 0; }
 .issue-context dd { margin: 0; color: var(--ink-soft); overflow-wrap: anywhere; }
 .issue-context a { color: var(--accent); text-underline-offset: 2px; }
 .findings-panel { display: flex; min-height: 0; max-height: min(380px, 38vh); flex: 0 1 auto; flex-direction: column; overflow: hidden; }
-.findings-panel > h2, .findings-panel > .assessment { flex: none; }
+.findings-panel > .findings-heading, .findings-panel > .assessment { flex: none; }
+.findings-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
+.findings-heading h2 { margin: 0; }
+.finding-filter { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: .6875rem; cursor: pointer; }
+.finding-filter input { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }
+.findings-content { display: contents; }
 .findings { display: grid; min-height: 0; max-height: min(240px, 24vh); flex: 1 1 auto; gap: 8px; overflow-y: auto; padding-right: 5px; overscroll-behavior: contain; scrollbar-color: var(--line) transparent; scrollbar-width: thin; }
 .finding { padding: 11px; border: 1px solid var(--line); background: var(--panel-soft); }
 .finding.resolved, .finding.outdated { opacity: .66; }
