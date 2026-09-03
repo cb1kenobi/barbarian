@@ -248,10 +248,6 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
               <p id="profile-name-description">Display name used in the dashboard greeting and other personalized text.</p>
             </div>
             <div className="settings-description-row">
-              <label><span>Review Name</span><input aria-describedby="profile-review-name-description" placeholder="Optional" value={draft.profile.reviewName} onChange={(event) => setDraft({ ...draft, profile: { ...draft.profile, reviewName: event.target.value } })} /></label>
-              <p id="profile-review-name-description">Optional attribution for AI review comments, such as “CB1 reviewed a1b2c3d4.” Leave blank to use “Reviewed” without a name.</p>
-            </div>
-            <div className="settings-description-row">
               <label><span>GitHub login</span><input aria-describedby="profile-github-description" value={draft.profile.githubLogin} onChange={(event) => setDraft({ ...draft, profile: { ...draft.profile, githubLogin: event.target.value } })} /></label>
               <p id="profile-github-description">Identifies your assigned issues, reviews, approvals, and authored PRs. Leave blank to use the account authenticated by <code>gh</code>.</p>
             </div>
@@ -291,6 +287,10 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
           </fieldset>
 
           <fieldset className="settings-section"><legend>Review behavior</legend><div className="settings-description-list">
+            <div className="settings-description-row">
+              <label><span>Reviewer Name</span><input aria-describedby="reviewer-name-description" placeholder="Optional" value={draft.profile.reviewName} onChange={(event) => setDraft({ ...draft, profile: { ...draft.profile, reviewName: event.target.value } })} /></label>
+              <p id="reviewer-name-description">Optional attribution for AI review comments, such as “CB1 reviewed a1b2c3d4.” Leave blank to use “Reviewed” without a name.</p>
+            </div>
             <div className="settings-description-row">
               <label><span>Requested reviewer</span><input aria-describedby="requested-reviewer-description" value={draft.review.requestedReviewer} onChange={(event) => setDraft({ ...draft, review: { ...draft.review, requestedReviewer: event.target.value } })} /></label>
               <p id="requested-reviewer-description">GitHub login Barbarian treats as the target reviewer. Leave blank to use your profile login.</p>
