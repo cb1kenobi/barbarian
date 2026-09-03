@@ -723,14 +723,12 @@ export async function createApp(
       ) ORDER BY id ASC
     `).all(id);
     const record = review as Record<string, unknown>;
-    const payload = {
+    return {
       id,
       appearance: config.appearance,
       ...reviewContextPayload(database, config, record),
       messages,
     };
-    markAuthoredFeedbackSeen(database, config, record);
-    return payload;
   });
 
   app.get('/api/browser/issue-context', async (request, reply) => {

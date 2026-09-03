@@ -86,7 +86,7 @@ function signalIssueUpdate(delay = 150) {
   clearTimeout(issueRefreshTimer);
   issueRefreshTimer = setTimeout(() => {
     if (!isIssuePage()) return;
-    sendRuntimeMessage({ type: 'barbarian-issue-updated', url: location.href });
+    sendRuntimeMessage({ type: 'barbarian-issue-updated', url: location.href, retry: true });
   }, delay);
 }
 
@@ -126,12 +126,4 @@ document.addEventListener('click', (event) => {
 document.addEventListener('turbo:submit-end', () => {
   if (isIssuePage()) signalIssueUpdate(250);
   else if (isPullRequestPage()) signalPullRequestUpdate(250);
-});
-
-document.addEventListener('turbo:load', () => {
-  if (isPullRequestPage()) signalPullRequestUpdate(100);
-});
-
-document.addEventListener('pjax:end', () => {
-  if (isPullRequestPage()) signalPullRequestUpdate(100);
 });

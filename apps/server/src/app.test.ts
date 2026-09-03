@@ -269,6 +269,14 @@ describe('dashboard reviews', () => {
         expect.objectContaining({ number: 2, approved: true, has_new_feedback: false }),
       ]);
       expect(payload.metrics.reviewsNeedingApproval).toBe(1);
+      const browserView = await app.inject({
+        method: 'GET',
+        url: `/api/browser/context?url=${encodeURIComponent('https://github.com/Acme/storage/pull/7')}`,
+      });
+      expect(browserView.statusCode).toBe(200);
+      const afterBrowserView = await app.inject({ method: 'GET', url: '/api/dashboard' });
+      expect((afterBrowserView.json() as { feedback: Array<{ number: number }> }).feedback)
+        .toContainEqual(expect.objectContaining({ number: 7 }));
       const opened = await app.inject({ method: 'GET', url: '/api/reviews/github%3AAcme%2Fstorage%237' });
       expect(opened.statusCode).toBe(200);
       const afterOpen = await app.inject({ method: 'GET', url: '/api/dashboard' });

@@ -226,7 +226,7 @@ async function runReviewAction(kind) {
   const reviewButton = document.querySelector('.agent-review');
   const stoppingReview = kind === 'review' && reviewButton?.dataset.running === 'true';
   status.textContent = kind === 'review'
-    ? stoppingReview ? 'Stopping every agent working on this PR…' : 'Starting the review agent…'
+    ? stoppingReview ? 'Stopping this PR review and pausing automatic reviews…' : 'Starting the review agent…'
     : 'Cloning, installing, and building…';
   document.querySelectorAll('button').forEach((button) => { button.disabled = true; });
   try {
@@ -240,7 +240,7 @@ async function runReviewAction(kind) {
           currentContext.review.review_paused = true;
           setReviewButton(false);
           status.textContent = result.cancelled
-            ? `Stopped ${result.cancelled} in-flight agent ${result.cancelled === 1 ? 'process' : 'processes'}.`
+            ? 'Stopped this PR review. Automatic reviews are paused until you start another review.'
             : 'Agent review request cancelled.';
         } else {
           status.textContent = 'The agent review already finished.';
@@ -253,7 +253,7 @@ async function runReviewAction(kind) {
         currentContext.review.status = 'agent_working';
         currentContext.review.review_paused = false;
         setReviewButton(true);
-        status.textContent = 'Agent review started. Click stop to cancel every agent working on this PR.';
+        status.textContent = 'Agent review started. Click stop to cancel this review and pause automatic reviews.';
         setTimeout(() => void refresh({ quiet: true }), 1_000);
       }
     } else {

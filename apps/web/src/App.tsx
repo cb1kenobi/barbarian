@@ -459,10 +459,20 @@ function AgentRunDrawer({ id, now, onClose, onStopped }: { id: number; now: numb
   useCloseOnEscape(onClose);
   useEffect(() => {
     let active = true;
-    void api<AgentRunDetail>(`/api/agent-runs/${id}`)
-      .then((value) => { if (active) setRun(value); })
-      .catch((caught) => { if (active) setError(caught instanceof Error ? caught.message : String(caught)); });
-    return () => { active = false; };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const loadRun = async () => {
+      try {
+        const value = await api<AgentRunDetail>(`/api/agent-runs/${id}`);
+        if (!active) return;
+        setRun(value);
+        setError('');
+        if (value.status === 'running') timer = setTimeout(() => void loadRun(), 1_000);
+      } catch (caught) {
+        if (active) setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    };
+    void loadRun();
+    return () => { active = false; if (timer) clearTimeout(timer); };
   }, [id]);
   const stop = async () => {
     if (stopping) return;
@@ -486,7 +496,7 @@ function AgentRunDrawer({ id, now, onClose, onStopped }: { id: number; now: numb
       <span className="section-label">AI AGENT · {run.status.toUpperCase()}</span>
       <h2>{agentTarget(run)}</h2>
       <div className="drawer-status"><span>{agentTaskLabel(run.task)}</span><span>{run.agent}</span><span>{run.model}</span><span>{run.effort === 'CLI default' ? 'default effort' : `${run.effort} effort`}</span><span>{formatElapsed(run.started_at, now)}</span></div>
-      {run.status === 'running' && <div className="agent-run-actions"><button type="button" className="kill-agent" disabled={stopping} onClick={() => void stop()}>{stopping ? 'Stopping…' : 'Kill agent'}</button></div>}
+      {run.status === 'running' && <div className="agent-run-actions"><button type="button" className="kill-agent" disabled={stopping} onClick={() => void stop()}>{stopping ? 'Stopping…' : run.task.startsWith('code_review:') ? 'Kill agent & pause reviews' : 'Kill agent'}</button></div>}
       <section className="agent-invocation"><h3>Command</h3><pre><code>{run.command || 'Invocation details were not recorded for this run.'}</code></pre></section>
       <section className="agent-invocation prompt"><h3>Prompt</h3><pre><code>{run.prompt || 'Prompt details were not recorded for this run.'}</code></pre></section>
       {run.error && <p className="inline-error">{run.error}</p>}

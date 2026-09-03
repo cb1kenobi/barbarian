@@ -17,9 +17,15 @@ describe('agent provider options', () => {
   it('can grant a Codex branch-room invocation workspace write access', () => {
     expect(agentInvocationArgs({
       command: 'codex', args: ['exec', '--sandbox', 'read-only', '--skip-git-repo-check', '-'],
-    }, { codexSandbox: 'workspace-write' })).toEqual([
+    }, { workspaceWrite: true })).toEqual([
       'exec', '--skip-git-repo-check', '--sandbox', 'workspace-write', '-',
     ]);
+  });
+
+  it('removes Cursor read-only modes for a branch-room invocation', () => {
+    expect(agentInvocationArgs({
+      command: 'cursor-agent', args: ['-p', '--mode', 'ask', '--output-format', 'text'],
+    }, { workspaceWrite: true })).toEqual(['-p', '--output-format', 'text']);
   });
 
   it('applies Claude model and effort flags', () => {

@@ -58,15 +58,18 @@ function beforeStdinPrompt(args: string[], options: string[]): string[] {
 
 export function agentInvocationArgs(
   provider: AgentProviderConfig,
-  invocation: { codexSandbox?: 'read-only' | 'workspace-write' } = {},
+  invocation: { workspaceWrite?: boolean } = {},
 ): string[] {
   const family = agentProviderFamily(provider.command);
   let args = [...provider.args];
   const options: string[] = [];
   const model = provider.model?.trim();
-  if (invocation.codexSandbox && family === 'codex') {
+  if (invocation.workspaceWrite && family === 'codex') {
     args = withoutOption(args, ['--sandbox', '-s']);
-    options.push('--sandbox', invocation.codexSandbox);
+    options.push('--sandbox', 'workspace-write');
+  } else if (invocation.workspaceWrite && family === 'cursor') {
+    args = withoutOption(args, ['--mode']);
+    args = args.filter((argument) => argument !== '--plan');
   }
   if (model && family !== 'unknown') {
     args = withoutOption(args, ['--model', '-m']);
