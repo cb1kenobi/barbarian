@@ -68,6 +68,45 @@ describe('agent runs', () => {
       database.close();
     }
   });
+
+  it('pauses the whole review when a code review agent is stopped', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-review-agent-stop-test-'));
+    directories.push(directory);
+    const database = new BarbarianDatabase(path.join(directory, 'test.db'));
+    const now = new Date().toISOString();
+    database.connection.prepare(`
+      INSERT INTO review_queue(
+        id, repository, number, title, url, author, head_sha, head_ref_name, base_ref_name,
+        status, first_seen_at, updated_at, last_seen_at
+      ) VALUES ('github:Acme/storage#42', 'Acme/storage', 42, 'Review', 'https://example.test/42',
+        'author', 'head', 'feature', 'main', 'agent_working', ?, ?, ?)
+    `).run(now, now, now);
+    const inserted = database.connection.prepare(`
+      INSERT INTO agent_runs(review_id, provider, task, status, started_at, runtime_key)
+      VALUES ('github:Acme/storage#42', 'codex', 'code_review:manual', 'running', ?,
+        'github:Acme/storage#42:code-review:codex')
+    `).run(now);
+    let pausedReview = '';
+    const dispatcher = {
+      setReviewChangedListener() {},
+      cancelReview(reviewId: string) {
+        pausedReview = reviewId;
+        return { found: true, stopped: true, cancelled: 2 };
+      },
+    } as unknown as ReviewDispatcher;
+    const app = await createApp(database, new ConfigStore(config), undefined, { dispatcher });
+    try {
+      const response = await app.inject({
+        method: 'DELETE', url: `/api/agent-runs/${Number(inserted.lastInsertRowid)}`,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ ok: true, stopped: true, cancelled: 2 });
+      expect(pausedReview).toBe('github:Acme/storage#42');
+    } finally {
+      await app.close();
+      database.close();
+    }
+  });
 });
 
 describe('dashboard reviews', () => {
@@ -119,9 +158,20 @@ describe('dashboard reviews', () => {
         last_reviewed_sha='old-head', last_reviewed_commit_count=4 WHERE number=1
     `).run();
     database.connection.prepare(`
-      INSERT INTO agent_runs(review_id,provider,task,status,started_at,finished_at)
+      INSERT INTO agent_runs(review_id,provider,task,status,started_at,finished_at,model,effort,owner)
       VALUES ('github:Acme/storage#1','codex','code_review:new_pr','complete',
-        '2026-01-02T04:00:00Z','2026-01-02T04:05:00Z')
+        '2026-01-02T04:00:00Z','2026-01-02T04:05:00Z','gpt-review','high','round-1')
+    `).run();
+    database.connection.prepare(`
+      INSERT INTO agent_runs(review_id,provider,task,status,started_at,finished_at,model,effort,owner)
+      VALUES ('github:Acme/storage#1','claude','code_review:new_pr','complete',
+        '2026-01-02T04:00:01Z','2026-01-02T04:05:00Z','opus-review','medium','round-1')
+    `).run();
+    database.connection.prepare(`
+      INSERT INTO activity_events(kind,subject_id,summary,payload_json,created_at)
+      VALUES
+        ('review_discovered','github:Acme/storage#1','Discovered','{}','2026-01-02T03:30:00Z'),
+        ('review_started','github:Acme/storage#1','Started','{"trigger":"new_pr"}','2026-01-02T04:00:00Z')
     `).run();
     database.connection.prepare(`
       INSERT INTO agent_runs(review_id,provider,task,status,started_at)
@@ -213,6 +263,7 @@ describe('dashboard reviews', () => {
       expect(reviews.find((review) => review.number === 1)).toMatchObject({
         remote_updated_at: '2026-01-02T03:04:00Z',
         last_agent_review_at: '2026-01-02T04:05:00Z',
+        review_round_count: 1,
         new_commit_count: 3,
         issue_counts: { high: 1, medium: 0, low: 1 },
         fixed_issues: [
@@ -221,6 +272,24 @@ describe('dashboard reviews', () => {
           { provider: 'linear', identifier: 'ENG-9', url: null },
         ],
       });
+      const reviewDetail = await app.inject({
+        method: 'GET', url: '/api/reviews/github%3AAcme%2Fstorage%231',
+      });
+      expect(reviewDetail.statusCode).toBe(200);
+      expect(reviewDetail.json().timeline).toEqual([
+        expect.objectContaining({
+          kind: 'review_discovered', label: 'Barbarian discovered this PR',
+          created_at: '2026-01-02T03:30:00Z', agents: [],
+        }),
+        expect.objectContaining({
+          kind: 'review_started', label: 'Initial AI review started',
+          created_at: '2026-01-02T04:00:00Z',
+          agents: [
+            { provider: 'codex', model: 'gpt-review', effort: 'high' },
+            { provider: 'claude', model: 'opus-review', effort: 'medium' },
+          ],
+        }),
+      ]);
       expect(payload.statusDraft.lines).toEqual([
         '* Code reviews - 500 PRs need my review',
         '* storage - Work on issue #15: Issue 15',

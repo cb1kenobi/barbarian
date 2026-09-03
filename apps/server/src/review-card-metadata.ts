@@ -10,6 +10,7 @@ export interface SeverityCounts {
 
 export interface ReviewCardMetadata {
   last_agent_review_at: string | null;
+  review_round_count: number;
   issue_counts: SeverityCounts;
 }
 
@@ -34,7 +35,7 @@ export function reviewCardMetadata(database: BarbarianDatabase): Map<string, Rev
   const ensure = (reviewId: string): ReviewCardMetadata => {
     let value = metadata.get(reviewId);
     if (!value) {
-      value = { last_agent_review_at: null, issue_counts: emptyCounts() };
+      value = { last_agent_review_at: null, review_round_count: 0, issue_counts: emptyCounts() };
       metadata.set(reviewId, value);
     }
     return value;
@@ -46,6 +47,13 @@ export function reviewCardMetadata(database: BarbarianDatabase): Map<string, Rev
     GROUP BY review_id
   `).all() as Array<{ review_id: string; finished_at: string }>;
   for (const run of runs) ensure(run.review_id).last_agent_review_at = run.finished_at;
+
+  const rounds = database.connection.prepare(`
+    SELECT subject_id AS review_id, COUNT(*) AS total FROM activity_events
+    WHERE subject_id IS NOT NULL AND kind='review_started'
+    GROUP BY subject_id
+  `).all() as Array<{ review_id: string; total: number }>;
+  for (const round of rounds) ensure(round.review_id).review_round_count = Number(round.total);
 
   const findings = database.connection.prepare(`
     SELECT review_id, body FROM review_findings WHERE resolved=0 AND outdated=0

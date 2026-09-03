@@ -164,6 +164,42 @@ describe('runReviewAgent', () => {
     database.close();
   });
 
+  it('uses the finding provider summary when another provider reports the review as clean', async () => {
+    const clean = 'BARBARIAN_RESULT: {"findings":0,"verdict":"ready","summary":"No issue found."}';
+    const issue = 'BARBARIAN_RESULT: {"findings":1,"verdict":"issues","summary":"Adds validation but leaves one unsafe fallback.","comments":[{"path":"file.ts","line":1,"side":"RIGHT","body":"**High: broken invariant**\\n\\nFailure mode and fix."}]}';
+    const { database, config, claim } = setup(`console.log(${JSON.stringify(clean)})`);
+    config.agents.providers.second = { command: process.execPath, args: ['-e', `console.log(${JSON.stringify(issue)})`] };
+    config.agents.codeReview.second = { enabled: true, model: '', effort: '' };
+    let publishedSummary = '';
+    await runReviewAgent(database, config, claim, undefined, {
+      ...dependencies,
+      postReview: async (_repository, _number, _headSha, summary) => { publishedSummary = summary; },
+    });
+    expect(publishedSummary).toBe('Adds validation but leaves one unsafe fallback.');
+    database.close();
+  });
+
+  it('keeps an issue status when the reported finding was already published', async () => {
+    const finding = {
+      path: 'file.ts', line: 1, side: 'RIGHT' as const,
+      body: '**High: broken invariant**\n\nFailure mode and fix.',
+    };
+    const output = `BARBARIAN_RESULT: ${JSON.stringify({
+      findings: 1, verdict: 'issues', summary: 'One issue remains.', comments: [finding],
+    })}`;
+    const { database, config, claim } = setup(`console.log(${JSON.stringify(output)})`);
+    let posted = false;
+    await runReviewAgent(database, config, claim, undefined, {
+      ...dependencies,
+      fetchBundle: async () => ({ ...bundle, inlineComments: [finding] }),
+      postReview: async () => { posted = true; },
+    });
+    expect(posted).toBe(false);
+    expect(database.connection.prepare('SELECT status, findings_count FROM review_queue WHERE id=?')
+      .get(claim.reviewId)).toEqual({ status: 'issues_found', findings_count: 1 });
+    database.close();
+  });
+
   it('does not publish anything to GitHub for a clean review', async () => {
     const script = "console.log('BARBARIAN_RESULT: {\\\"findings\\\":0,\\\"verdict\\\":\\\"ready\\\",\\\"summary\\\":\\\"Clear.\\\"}')";
     const { database, config, claim } = setup(script);

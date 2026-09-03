@@ -7,6 +7,7 @@ import { agentInvocationArgs } from './agent-provider.js';
 import { completedReviewStatus } from './review-state.js';
 import { configuredAgentForTask } from './agent-config.js';
 import { enabledCodeReviewProviders } from './agent-config.js';
+import { configuredAgentEffort, configuredAgentModel } from './agent-display.js';
 import {
   fetchPullRequestReviewBundle,
   postPullRequestReview,
@@ -92,12 +93,13 @@ function createAgentRun(
   const inserted = database.connection.prepare(`
     INSERT INTO agent_runs(
       review_id, branch_id, work_item_id, provider, task, status, started_at, command, prompt, runtime_key,
-      owner, reviewed_head_sha, reviewed_watermark
-    ) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)
+      owner, reviewed_head_sha, reviewed_watermark, model, effort
+    ) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     reviewId, options.branchId || null, options.workItemId || null, name, task, new Date().toISOString(),
     commandText(provider.command, args), prompt, options.runtimeKey || reviewId || options.branchId || null,
     claim?.owner || null, claim?.headSha || null, claim?.discussionWatermark || null,
+    configuredAgentModel(config, name, task), configuredAgentEffort(config, name, task),
   );
   return Number(inserted.lastInsertRowid);
 }
@@ -427,13 +429,18 @@ export async function runReviewAgent(
   dependencies: ReviewAgentDependencies = {},
 ): Promise<void> {
   const review = getReview(database, claim.reviewId);
-  recordActivity(database, 'review_started', `Agent started reviewing ${review.repository}#${review.number}`, claim.reviewId, { trigger: claim.trigger });
   const fetchBundle = dependencies.fetchBundle || fetchPullRequestReviewBundle;
   const postReview = dependencies.postReview || postPullRequestReview;
   const refreshContextAfterReview = dependencies.refreshContext || refreshReviewContext;
   const task = `code_review:${claim.trigger}`;
   const providers = claim.provider ? [claim.provider] : enabledCodeReviewProviders(config);
   if (providers.length === 0) throw new Error('No code review agents are enabled');
+  recordActivity(database, 'review_started', `Agent started reviewing ${review.repository}#${review.number}`, claim.reviewId, {
+    trigger: claim.trigger,
+    headSha: claim.headSha,
+    discussionWatermark: claim.discussionWatermark,
+    providers,
+  });
   const preparedRuns = new Map<string, { id: number; runtimeKey: string }>();
   try {
     for (const provider of providers) {
@@ -486,10 +493,14 @@ ${JSON.stringify(bundle)}`;
       }`);
     }
     const combinedComments = successful.flatMap(({ result }) => result.comments);
-    const commentsToPublish = newReviewComments(bundle, combinedComments);
+    const uniqueFindings = newReviewComments({ ...bundle, inlineComments: [] }, combinedComments);
+    const commentsToPublish = newReviewComments(bundle, uniqueFindings);
+    const representative = successful.reduce((selected, candidate) => (
+      candidate.result.comments.length > selected.result.comments.length ? candidate : selected
+    ));
     const result = {
-      findings: commentsToPublish.length,
-      summary: successful[0]!.result.summary,
+      findings: uniqueFindings.length,
+      summary: representative.result.summary,
     };
     if (signal?.aborted) throw signal.reason || new Error('Review stopped');
     const stillClaimed = database.connection.prepare('SELECT 1 FROM review_queue WHERE id=? AND claim_owner=?')

@@ -202,7 +202,9 @@ export class BarbarianDatabase {
         runtime_key TEXT,
         owner TEXT,
         reviewed_head_sha TEXT,
-        reviewed_watermark TEXT
+        reviewed_watermark TEXT,
+        model TEXT NOT NULL DEFAULT '',
+        effort TEXT NOT NULL DEFAULT ''
       );
 
       CREATE TABLE IF NOT EXISTS sync_runs (
@@ -250,6 +252,7 @@ export class BarbarianDatabase {
       CREATE INDEX IF NOT EXISTS idx_issue_chat_messages_item ON issue_chat_messages(work_item_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_agent_runs_status_started ON agent_runs(status, started_at);
       CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_events(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_activity_subject_kind ON activity_events(subject_id, kind, created_at);
     `);
     const activityColumns = this.connection.prepare('PRAGMA table_info(activity_events)').all() as Array<{ name: string }>;
     if (!activityColumns.some((column) => column.name === 'remote_key')) {
@@ -295,7 +298,7 @@ export class BarbarianDatabase {
     const runAdditions: Array<[string, string]> = [
       ['owner', 'TEXT'], ['reviewed_head_sha', 'TEXT'], ['reviewed_watermark', 'TEXT'],
       ['command', "TEXT NOT NULL DEFAULT ''"], ['prompt', "TEXT NOT NULL DEFAULT ''"],
-      ['runtime_key', 'TEXT'],
+      ['runtime_key', 'TEXT'], ['model', "TEXT NOT NULL DEFAULT ''"], ['effort', "TEXT NOT NULL DEFAULT ''"],
     ];
     for (const [name, definition] of runAdditions) {
       if (!runColumns.has(name)) this.connection.exec(`ALTER TABLE agent_runs ADD COLUMN ${name} ${definition}`);

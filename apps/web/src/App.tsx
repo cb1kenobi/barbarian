@@ -10,6 +10,7 @@ import { renderMarkdown } from './markdown';
 import { repositoryBookmark, sortRepositoryBookmarks, type RepositoryBookmark } from './repository-links';
 import { sortWorkItems, type WorkSort } from './work-sort';
 import { matchesQueueSearch } from './queue-search';
+import { greetingForTime } from './greeting';
 
 interface WorkItem {
   id: string; repository: string; number: number; title: string; simple_summary: string;
@@ -26,7 +27,7 @@ interface Review {
   findings_count: number; review_skill: string; workspace_path: string | null; updated_at: string;
   pending_reason: string | null; display_status?: string; priority_score: number;
   remote_created_at: string; remote_updated_at: string; last_agent_review_at: string | null;
-  new_commit_count: number;
+  new_commit_count: number; review_round_count: number;
   issue_counts: { high: number; medium: number; low: number };
   linked_issues?: number[];
   fixed_issues?: FixedIssueReference[];
@@ -44,6 +45,11 @@ interface FixedIssueReference {
 }
 
 interface ChatMessage { id: number; role: string; author: string; content: string; created_at: string }
+
+interface ReviewTimelineEvent {
+  id: string; kind: string; label: string; created_at: string;
+  agents: Array<{ provider: string; model: string; effort: string }>;
+}
 
 interface ActiveAgent {
   id: number; review_id: string | null; branch_id: string | null;
@@ -146,6 +152,19 @@ function lastWorkdayTotal(stats: Record<string, number>): number {
   return (stats.pr_created || 0) + (stats.review_completed || 0) + (stats.issue_created || 0) + (stats.issue_resolved || 0);
 }
 
+function formatTimelineTime(value: string, timezone?: string): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return 'Unknown time';
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    month: 'numeric',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
+}
+
 function useCloseOnEscape(onClose: () => void): void {
   useEffect(() => {
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
@@ -244,7 +263,9 @@ export function App() {
   const attentionCount = queuedIssueCount + reviewCount;
   const hasPlan = Boolean(dashboard?.statusDraft.lines.length);
   const name = dashboard?.profile.name?.split(' ')[0] || 'Developer';
-  const date = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'short', day: 'numeric' }).format(new Date()).toUpperCase();
+  const timezone = dashboard?.profile.timezone;
+  const date = new Intl.DateTimeFormat('en-US', { timeZone: timezone, weekday: 'long', month: 'short', day: 'numeric' }).format(now).toUpperCase();
+  const greeting = greetingForTime(now, timezone);
 
   return (
     <div className="shell">
@@ -289,7 +310,7 @@ export function App() {
         <header className="dashboard-header">
           <div className="dashboard-welcome">
             <p className="eyebrow">{date}</p>
-            <h1>Good {new Date().getHours() < 12 ? 'morning' : 'afternoon'}, {name}.</h1>
+            <h1>{greeting}, {name}.</h1>
             <p className="subtitle">{dashboard ? `${queuedIssueCount} issue${queuedIssueCount === 1 ? '' : 's'} on your radar · ${reviewCount} PR${reviewCount === 1 ? '' : 's'} to review.` : 'Connecting to your local command center…'}</p>
           </div>
           <section className="briefing">
@@ -341,21 +362,7 @@ export function App() {
             {reviews.map((review) => <button className="review-card" key={review.id} onClick={() => setSelectedReview(review.id)}>
               <div className="review-card-head"><span><span className="repo">{repositoryName(review.repository)}</span><span className="pr">#{review.number}</span></span><ReviewStatusBadge status={reviewDisplayStatus(review)} /></div>
               <h3>{review.title}</h3><p><InlineCode text={review.simple_summary} /></p>
-              <footer className="review-card-footer">
-                <small className="review-times">
-                  <span title={formatSyncTimestamp(review.remote_updated_at, dashboard?.profile.timezone)}>Updated: {formatElapsed(review.remote_updated_at, now)}</span>
-                  <span title={formatSyncTimestamp(review.last_agent_review_at, dashboard?.profile.timezone)}>Reviewed: {formatElapsed(review.last_agent_review_at, now)}</span>
-                </small>
-                <small className="line-counts" aria-label={`${review.additions} lines added and ${review.deletions} lines removed`}>
-                  <span className="lines-added">+{review.additions}</span><span className="lines-removed">−{review.deletions}</span>
-                </small>
-                <span className="review-signals">
-                  <SeverityCounts counts={review.issue_counts} />
-                  <span className="new-commits" aria-label={`${review.new_commit_count} new ${review.new_commit_count === 1 ? 'commit' : 'commits'} since the last agent review`}>
-                    <strong>{review.new_commit_count}</strong> new {review.new_commit_count === 1 ? 'commit' : 'commits'}
-                  </span>
-                </span>
-              </footer>
+              <footer className="review-card-footer"><ReviewMetadata review={review} timezone={dashboard?.profile.timezone} now={now} /></footer>
             </button>)}
             {!reviews.length && <Empty message={queueSearch || reviewRepository !== 'all' ? 'No code reviews match these filters.' : 'No pull requests currently need your review.'} />}
           </div>
@@ -381,7 +388,7 @@ export function App() {
         </section>
       </main>
 
-      {selectedReview && <ReviewDrawer id={selectedReview} onClose={() => setSelectedReview(null)} onChanged={load} />}
+      {selectedReview && <ReviewDrawer id={selectedReview} timezone={dashboard?.profile.timezone} now={now} onClose={() => setSelectedReview(null)} onChanged={load} />}
       {selectedAgent && <AgentRunDrawer id={selectedAgent} now={now} onClose={() => setSelectedAgent(null)} onStopped={load} />}
       {showStatus && dashboard && <StatusDialog dashboard={dashboard} onClose={() => setShowStatus(false)} onSaved={load} />}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} onSaved={load} />}
@@ -424,6 +431,25 @@ function SeverityCounts({ counts }: { counts: Review['issue_counts'] }) {
     <span className="severity medium" title={`${counts.medium} medium severity`}><SeverityIcon kind="medium" />{counts.medium}</span>
     <span className="severity low" title={`${counts.low} low severity/nit`}><SeverityIcon kind="low" />{counts.low}</span>
   </span>;
+}
+
+function ReviewMetadata({ review, timezone, now }: { review: Review; timezone: string | undefined; now: number }) {
+  return <>
+    <small className="review-times">
+      <span title={formatSyncTimestamp(review.remote_updated_at, timezone)}>Updated: {formatElapsed(review.remote_updated_at, now)}</span>
+      <span title={formatSyncTimestamp(review.last_agent_review_at, timezone)}>Reviewed: {formatElapsed(review.last_agent_review_at, now)}</span>
+      <span className="review-rounds" aria-label={`${review.review_round_count ?? 0} agent review ${(review.review_round_count ?? 0) === 1 ? 'round' : 'rounds'}`}>AI Review Rounds: <strong>{review.review_round_count ?? 0}</strong></span>
+    </small>
+    <small className="line-counts" aria-label={`${review.additions} lines added and ${review.deletions} lines removed`}>
+      <span className="lines-added">+{review.additions}</span><span className="lines-removed">−{review.deletions}</span>
+    </small>
+    <span className="review-signals">
+      <SeverityCounts counts={review.issue_counts} />
+      <span className="new-commits" aria-label={`${review.new_commit_count} new ${review.new_commit_count === 1 ? 'commit' : 'commits'} since the last agent review`}>
+        <strong>{review.new_commit_count}</strong> new {review.new_commit_count === 1 ? 'commit' : 'commits'}
+      </span>
+    </span>
+  </>;
 }
 
 function SeverityIcon({ kind }: { kind: 'high' | 'medium' | 'low' }) {
@@ -519,14 +545,16 @@ function AgentRunDrawer({ id, now, onClose, onStopped }: { id: number; now: numb
   </aside></div>;
 }
 
-function ReviewDrawer({ id, onClose, onChanged }: { id: string; onClose: () => void; onChanged: () => Promise<void> }) {
+function ReviewDrawer({ id, timezone, now, onClose, onChanged }: { id: string; timezone: string | undefined; now: number; onClose: () => void; onChanged: () => Promise<void> }) {
   const [review, setReview] = useState<Review | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [timeline, setTimeline] = useState<ReviewTimelineEvent[]>([]);
+  const [tab, setTab] = useState<'review-room' | 'timeline'>('review-room');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   useCloseOnEscape(onClose);
-  const load = useCallback(async () => { const detail = await api<{ review: Review; messages: ChatMessage[] }>(`/api/reviews/${encodeURIComponent(id)}`); setReview(detail.review); setMessages(detail.messages); }, [id]);
+  const load = useCallback(async () => { const detail = await api<{ review: Review; messages: ChatMessage[]; timeline?: ReviewTimelineEvent[] }>(`/api/reviews/${encodeURIComponent(id)}`); setReview(detail.review); setMessages(detail.messages); setTimeline(detail.timeline || []); }, [id]);
   useEffect(() => { void load(); }, [load]);
   const action = async (name: string, operation: () => Promise<unknown>) => { setBusy(name); setError(''); try { await operation(); await load(); await onChanged(); } catch (caught) { setError(caught instanceof Error ? caught.message : String(caught)); } finally { setBusy(''); } };
   const send = async (event: FormEvent) => { event.preventDefault(); if (busy || !message.trim()) return; const text = message; setMessage(''); await action('chat', () => api(`/api/reviews/${encodeURIComponent(id)}/chat`, { method: 'POST', body: JSON.stringify({ message: text }) })); };
@@ -537,12 +565,20 @@ function ReviewDrawer({ id, onClose, onChanged }: { id: string; onClose: () => v
   };
 
   return <div className="drawer-backdrop" onMouseDown={onClose}><aside className="drawer" onMouseDown={(event) => event.stopPropagation()}><button className="drawer-close" onClick={onClose}>×</button>
-    {!review ? <p>Loading review…</p> : <><div className="drawer-details"><span className="section-label">{review.repository} · #{review.number} · BY {review.author.startsWith('@') ? review.author : `@${review.author}`}</span><h2>{review.title}</h2><p className="plain-summary"><InlineCode text={review.simple_summary} /></p><FixedIssues review={review} />
-      <div className="drawer-status"><ReviewStatusBadge status={reviewDisplayStatus(review)} />{review.pending_reason && <span>Queued: {review.pending_reason.replaceAll('_', ' ')}</span>}<span>{review.findings_count} blocking issues</span><span>{review.review_skill}</span></div>
-      <div className="drawer-actions"><button disabled={!!busy} onClick={() => void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: '{}' }))}>{busy === 'review' ? 'Starting…' : 'Send review agent'}</button><button disabled={!!busy} onClick={() => void action('workspace', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'POST', body: '{}' }))}>{busy === 'workspace' ? 'Cloning & building…' : review.workspace_path ? 'Rebuild workspace' : 'Prepare locally'}</button>{review.workspace_path && <button className="muted-button" disabled={!!busy} onClick={() => void action('cleanup', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'DELETE' }))}>Clean up</button>}<a href={review.url} target="_blank">Open GitHub ↗</a></div>
+    {!review ? <p>Loading review…</p> : <><div className="drawer-details"><div className="drawer-review-heading"><span className="section-label">{review.repository} · #{review.number} · BY {review.author.startsWith('@') ? review.author : `@${review.author}`}</span><div className="drawer-status"><ReviewStatusBadge status={reviewDisplayStatus(review)} />{review.pending_reason && <span>Queued: {review.pending_reason.replaceAll('_', ' ')}</span>}</div></div><h2>{review.title}</h2><p className="plain-summary"><InlineCode text={review.simple_summary} /></p><FixedIssues review={review} />
+      <div className="drawer-review-metadata"><ReviewMetadata review={review} timezone={timezone} now={now} /></div>
+      <div className="drawer-actions"><button disabled={!!busy} onClick={() => void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: '{}' }))}>{busy === 'review' ? 'Starting…' : '▶ Agent review'}</button><button disabled={!!busy} onClick={() => void action('workspace', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'POST', body: '{}' }))}>{busy === 'workspace' ? 'Cloning & building…' : review.workspace_path ? 'Rebuild workspace' : 'Prepare locally'}</button>{review.workspace_path && <button disabled={!!busy} onClick={() => void action('cleanup', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'DELETE' }))}>Clean up</button>}<a href={review.url} target="_blank">Open GitHub ↗</a></div>
       {review.workspace_path && <code className="workspace-path">{review.workspace_path}</code>}{error && <p className="inline-error">{error}</p>}</div>
-      <section className="review-room"><div className="chat-head"><span className="section-label">REVIEW ROOM</span></div><div className="chat-log">{!messages.length && <p className="chat-empty">Ask what changed, why it matters, what could break, or how to test it.</p>}{messages.map((entry) => <div className={`message ${entry.role}`} key={entry.id}><span>{entry.author}</span><div className="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(entry.content) }} /></div>)}{busy === 'chat' && <div className="message assistant"><span>agent</span><p className="typing">Thinking…</p></div>}</div>
+      <div className="drawer-tabs" role="tablist" aria-label="Pull request details">
+        <button type="button" role="tab" aria-selected={tab === 'review-room'} className={tab === 'review-room' ? 'active' : ''} onClick={() => setTab('review-room')}>Review Room</button>
+        <button type="button" role="tab" aria-selected={tab === 'timeline'} className={tab === 'timeline' ? 'active' : ''} onClick={() => setTab('timeline')}>Timeline</button>
+      </div>
+      {tab === 'review-room' ? <section className="review-room" role="tabpanel"><div className="chat-log">{!messages.length && <p className="chat-empty">Ask what changed, why it matters, what could break, or how to test it.</p>}{messages.map((entry) => <div className={`message ${entry.role}`} key={entry.id}><span>{entry.author}</span><div className="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(entry.content) }} /></div>)}{busy === 'chat' && <div className="message assistant"><span>agent</span><p className="typing">Thinking…</p></div>}</div>
       <form className="chat-form" onSubmit={(event) => void send(event)}><textarea value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={submitOnEnter} placeholder="Ask about this pull request…" /></form></section>
+      : <section className="review-timeline" role="tabpanel">{timeline.length ? <ol>{timeline.map((event) => <li key={event.id}>
+        <time title={formatSyncTimestamp(event.created_at, timezone)}>{formatTimelineTime(event.created_at, timezone)}</time>
+        {event.agents.length ? <span className="timeline-agent" tabIndex={0} title={event.agents.map((agent) => `${agent.provider}: ${agent.model}, ${agent.effort === 'CLI default' ? 'default effort' : `${agent.effort} effort`}`).join('\n')}>{event.label}<span className="timeline-agent-tooltip" role="tooltip">{event.agents.map((agent) => <span key={`${event.id}:${agent.provider}`}><strong>{agent.provider}</strong><span>{agent.model}</span><span>{agent.effort === 'CLI default' ? 'Default effort' : `${agent.effort} effort`}</span></span>)}</span></span> : <span>{event.label}</span>}
+      </li>)}</ol> : <p className="timeline-empty">No timeline events have been recorded for this PR yet.</p>}</section>}
     </>}
   </aside></div>;
 }

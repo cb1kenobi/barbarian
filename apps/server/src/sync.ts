@@ -101,7 +101,7 @@ export function upsertReview(database: BarbarianDatabase, config: BarbarianConfi
   const id = reviewId(pr);
   const existing = database.connection.prepare(
     `SELECT head_sha, last_reviewed_sha, discussion_watermark, last_reviewed_watermark,
-      attempt_head_sha, attempt_watermark, status, approval_carryover
+      attempt_head_sha, attempt_watermark, status, approval_carryover, is_draft
       FROM review_queue WHERE id = ?`,
   ).get(id) as {
     head_sha: string;
@@ -112,6 +112,7 @@ export function upsertReview(database: BarbarianDatabase, config: BarbarianConfi
     attempt_watermark: string | null;
     status: string;
     approval_carryover: number;
+    is_draft: number;
   } | undefined;
 
   const watermark = pr.discussionWatermark > (existing?.discussion_watermark || '')
@@ -185,8 +186,16 @@ export function upsertReview(database: BarbarianDatabase, config: BarbarianConfi
     UPDATE local_branches SET review_id=?, updated_at=?
     WHERE repository=? AND branch_name=?
   `).run(id, seenAt, pr.repository, pr.headRefName);
-  if (!existing) recordActivity(database, 'review_discovered', `${pr.repository}#${pr.number} added to the review queue`, id);
-  else if (existing.head_sha !== pr.headSha) recordActivity(database, 'review_updated', `${pr.repository}#${pr.number} has new commits`, id);
+  if (!existing) {
+    recordActivity(database, 'review_discovered', `${pr.repository}#${pr.number} added to the review queue`, id);
+  } else {
+    if (existing.is_draft && !pr.isDraft) {
+      recordActivity(database, 'review_ready', `${pr.repository}#${pr.number} marked ready for review`, id);
+    }
+    if (existing.head_sha !== pr.headSha) {
+      recordActivity(database, 'review_updated', `${pr.repository}#${pr.number} has new commits`, id);
+    }
+  }
 }
 
 export async function trackGithubPullRequest(

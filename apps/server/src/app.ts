@@ -176,6 +176,7 @@ function settingsView(config: BarbarianConfig): {
 
 const emptyCardMetadata: ReviewCardMetadata = {
   last_agent_review_at: null,
+  review_round_count: 0,
   issue_counts: { high: 0, medium: 0, low: 0 },
 };
 
@@ -271,8 +272,8 @@ function agentRunView(config: BarbarianConfig, row: Record<string, unknown>) {
     review_id: row.review_id ? String(row.review_id) : null,
     branch_id: row.branch_id ? String(row.branch_id) : null,
     agent,
-    model: configuredAgentModel(config, agent, String(row.task)),
-    effort: configuredAgentEffort(config, agent, String(row.task)),
+    model: String(row.model || '') || configuredAgentModel(config, agent, String(row.task)),
+    effort: String(row.effort || '') || configuredAgentEffort(config, agent, String(row.task)),
     task: String(row.task),
     status: String(row.status),
     started_at: String(row.started_at),
@@ -287,9 +288,102 @@ function agentRunView(config: BarbarianConfig, row: Record<string, unknown>) {
   };
 }
 
+interface ReviewTimelineAgent {
+  provider: string;
+  model: string;
+  effort: string;
+}
+
+interface ReviewTimelineEvent {
+  id: string;
+  kind: string;
+  label: string;
+  created_at: string;
+  agents: ReviewTimelineAgent[];
+}
+
+function reviewRoundLabel(index: number, trigger: string): string {
+  if (index === 0) return 'Initial AI review started';
+  if (trigger === 'new_commits') return 'Re-review started after new commits';
+  if (trigger === 'discussion_changed') return 'Re-review started after new feedback';
+  if (trigger === 'manual') return 'Manual AI re-review started';
+  return 'AI re-review started';
+}
+
+function reviewTimeline(database: BarbarianDatabase, config: BarbarianConfig, reviewId: string): ReviewTimelineEvent[] {
+  const activities = database.connection.prepare(`
+    SELECT id, kind, payload_json, created_at FROM activity_events
+    WHERE subject_id=? AND kind IN (
+      'review_discovered', 'review_ready', 'review_updated', 'review_started',
+      'agent_review_completed', 'agent_review_cancelled', 'pr_merged', 'pr_closed'
+    )
+    ORDER BY created_at ASC, id ASC
+  `).all(reviewId) as Array<{ id: number; kind: string; payload_json: string; created_at: string }>;
+  const runs = database.connection.prepare(`
+    SELECT id, owner, provider, task, started_at, model, effort
+    FROM agent_runs WHERE review_id=? AND task LIKE 'code_review:%'
+    ORDER BY started_at ASC, id ASC
+  `).all(reviewId) as Array<Record<string, unknown>>;
+  const groupedRuns = new Map<string, { startedAt: string; agents: ReviewTimelineAgent[] }>();
+  for (const run of runs) {
+    const key = run.owner ? String(run.owner) : `run:${run.id}`;
+    let group = groupedRuns.get(key);
+    if (!group) {
+      group = { startedAt: String(run.started_at), agents: [] };
+      groupedRuns.set(key, group);
+    }
+    const provider = String(run.provider);
+    group.agents.push({
+      provider,
+      model: String(run.model || '') || configuredAgentModel(config, provider, String(run.task)),
+      effort: String(run.effort || '') || configuredAgentEffort(config, provider, String(run.task)),
+    });
+  }
+  const rounds = [...groupedRuns.values()].sort((left, right) => left.startedAt.localeCompare(right.startedAt));
+  const startedCount = activities.filter(({ kind }) => kind === 'review_started').length;
+  let startedIndex = 0;
+  let completedIndex = 0;
+  const events: ReviewTimelineEvent[] = [];
+  for (const activity of activities) {
+    const payload = parseJson<Record<string, unknown>>(activity.payload_json || '{}');
+    let label = '';
+    let agents: ReviewTimelineAgent[] = [];
+    switch (activity.kind) {
+      case 'review_discovered': label = 'Barbarian discovered this PR'; break;
+      case 'review_ready': label = 'PR marked ready for review'; break;
+      case 'review_updated': label = 'PR updated with new commits'; break;
+      case 'review_started':
+        label = reviewRoundLabel(startedIndex, String(payload.trigger || ''));
+        agents = rounds[startedIndex]?.agents || [];
+        startedIndex += 1;
+        break;
+      case 'agent_review_completed':
+        if (completedIndex < startedCount) { completedIndex += 1; continue; }
+        label = completedIndex === 0 ? 'Initial AI review completed' : 'AI re-review completed';
+        agents = rounds[completedIndex]?.agents || [];
+        completedIndex += 1;
+        break;
+      case 'agent_review_cancelled': label = 'AI review stopped'; break;
+      case 'pr_merged': label = 'PR merged'; break;
+      case 'pr_closed': label = 'PR closed'; break;
+    }
+    if (label) events.push({
+      id: `activity:${activity.id}`,
+      kind: activity.kind,
+      label,
+      created_at: activity.kind === 'review_started' && rounds[startedIndex - 1]
+        ? rounds[startedIndex - 1]!.startedAt
+        : activity.created_at,
+      agents,
+    });
+  }
+  return events.sort((left, right) => left.created_at.localeCompare(right.created_at));
+}
+
 const agentRunColumns = `
   agent_runs.id, agent_runs.review_id, agent_runs.branch_id, agent_runs.work_item_id,
   agent_runs.provider, agent_runs.task, agent_runs.status, agent_runs.started_at, agent_runs.finished_at,
+  agent_runs.model, agent_runs.effort,
   review_queue.repository AS review_repository,
   review_queue.number AS review_number,
   review_queue.title AS review_title,
@@ -543,9 +637,15 @@ export async function createApp(
     if (run.status !== 'running') return reply.code(409).send({ error: 'Agent is no longer running' });
 
     let cancelled = 0;
-    if (!run.runtime_key) return reply.code(409).send({ error: 'This agent run cannot be stopped' });
-    cancelled = runtime.cancel(run.runtime_key, new Error('Stopped by user'));
-    if (!cancelled) return reply.code(409).send({ error: 'Agent is no longer running' });
+    if (run.task.startsWith('code_review:') && run.review_id) {
+      const result = dispatcher.cancelReview(run.review_id);
+      if (!result.found) return reply.code(409).send({ error: 'Agent is no longer running' });
+      cancelled = result.cancelled;
+    } else {
+      if (!run.runtime_key) return reply.code(409).send({ error: 'This agent run cannot be stopped' });
+      cancelled = runtime.cancel(run.runtime_key, new Error('Stopped by user'));
+      if (!cancelled) return reply.code(409).send({ error: 'Agent is no longer running' });
+    }
 
     if (run.task === 'local_branch_review' && run.branch_id) {
       database.connection.prepare(`
@@ -608,11 +708,11 @@ export async function createApp(
       SELECT * FROM chat_messages WHERE review_id=? ORDER BY id ASC
     `).all(id);
     const runs = database.connection.prepare(`
-      SELECT id, provider, task, status, started_at, finished_at, error
+      SELECT id, provider, task, status, started_at, finished_at, error, model, effort
       FROM agent_runs WHERE review_id=? ORDER BY id DESC LIMIT 20
     `).all(id);
     const record = review as Record<string, unknown>;
-    const payload = { ...reviewContextPayload(database, config, record), messages, runs };
+    const payload = { ...reviewContextPayload(database, config, record), messages, runs, timeline: reviewTimeline(database, config, id) };
     markAuthoredFeedbackSeen(database, config, record);
     return payload;
   });
