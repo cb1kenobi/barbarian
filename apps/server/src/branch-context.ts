@@ -91,6 +91,17 @@ export async function upsertLocalBranch(
   }
 
   const id = branchId(repository, input.branch);
+  const existing = database.connection.prepare(`
+    SELECT workspace_path FROM local_branches WHERE id=?
+  `).get(id) as { workspace_path: string } | undefined;
+  if (existing?.workspace_path) {
+    const existingPath = await realpath(existing.workspace_path).catch(() => '');
+    if (existingPath && existingPath !== workspacePath) {
+      throw new LocalBranchInputError(
+        `This repository branch is already tracked from another checkout: ${existingPath}`,
+      );
+    }
+  }
   const pullRequestId = input.pullRequest
     ? `github:${input.pullRequest.repository}#${input.pullRequest.number}`
     : null;
@@ -357,6 +368,6 @@ ${history.map((entry) => `${entry.author}: ${entry.content}`).join('\n')}
 Developer: ${message}`;
   return executeAgent(
     database, config, null, 'local_branch_chat', prompt, provider, signal, undefined,
-    { branchId: id, cwd: branch.workspace_path, ...(runtimeKey ? { runtimeKey } : {}) },
+    { branchId: id, cwd: branch.workspace_path, workspaceWrite: true, ...(runtimeKey ? { runtimeKey } : {}) },
   );
 }

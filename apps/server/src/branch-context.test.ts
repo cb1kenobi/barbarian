@@ -77,6 +77,20 @@ describe('local branch agent review', () => {
       chatConfig.agents.providers.fake!.args = ['-e', 'console.log(process.cwd())'];
       expect(await askLocalBranchAgent(database, chatConfig, branch.id, 'Where are you running?'))
         .toBe(realpathSync(directory));
+      const otherCheckout = mkdtempSync(path.join(tmpdir(), 'barbarian-branch-review-other-'));
+      directories.push(otherCheckout);
+      git(otherCheckout, ['init', '-b', 'feature/review']);
+      git(otherCheckout, ['remote', 'add', 'origin', 'git@github.com:Acme/storage.git']);
+      await expect(upsertLocalBranch(database, {
+        remote: 'git@github.com:Acme/storage.git', branch: 'feature/review',
+        baseBranch: 'main', baseRef: 'main', headSha: branch.head_sha,
+        worktreeState: 'clean', workspacePath: otherCheckout,
+      })).rejects.toThrow('already tracked from another checkout');
+      await expect(upsertLocalBranch(database, {
+        remote: 'git@github.com:Other/project.git', branch: 'feature/review',
+        baseBranch: 'main', baseRef: 'main', headSha: git(directory, ['rev-parse', 'HEAD']),
+        worktreeState: 'dirty', workspacePath: directory,
+      })).rejects.toThrow('workspace origin does not match');
     } finally {
       database.close();
     }

@@ -239,6 +239,19 @@ function reviewContextPayload(database: BarbarianDatabase, config: BarbarianConf
   };
 }
 
+function markAuthoredFeedbackSeen(
+  database: BarbarianDatabase,
+  config: BarbarianConfig,
+  row: Record<string, unknown>,
+): void {
+  const login = (config.profile.githubLogin || config.review.requestedReviewer).trim().toLowerCase();
+  if (!login || String(row.author).toLowerCase() !== login) return;
+  database.connection.prepare(`
+    UPDATE review_queue SET author_seen_watermark=discussion_watermark
+    WHERE id=? AND discussion_watermark>COALESCE(author_seen_watermark, '')
+  `).run(String(row.id));
+}
+
 function agentRunView(config: BarbarianConfig, row: Record<string, unknown>) {
   const agent = String(row.provider);
   const repository = row.review_repository || row.issue_repository || row.branch_repository || null;
@@ -264,29 +277,37 @@ function agentRunView(config: BarbarianConfig, row: Record<string, unknown>) {
   };
 }
 
-const agentRunSelect = `
-  SELECT agent_runs.id, agent_runs.review_id, agent_runs.branch_id, agent_runs.work_item_id,
-    agent_runs.provider, agent_runs.task, agent_runs.status, agent_runs.started_at, agent_runs.finished_at,
-    review_queue.repository AS review_repository,
-    review_queue.number AS review_number,
-    review_queue.title AS review_title,
-    review_queue.url AS review_url,
-    work_items.repository AS issue_repository,
-    work_items.number AS issue_number,
-    work_items.title AS issue_title,
-    work_items.url AS issue_url,
-    local_branches.repository AS branch_repository,
-    local_branches.branch_name AS branch_name
+const agentRunColumns = `
+  agent_runs.id, agent_runs.review_id, agent_runs.branch_id, agent_runs.work_item_id,
+  agent_runs.provider, agent_runs.task, agent_runs.status, agent_runs.started_at, agent_runs.finished_at,
+  review_queue.repository AS review_repository,
+  review_queue.number AS review_number,
+  review_queue.title AS review_title,
+  review_queue.url AS review_url,
+  work_items.repository AS issue_repository,
+  work_items.number AS issue_number,
+  work_items.title AS issue_title,
+  work_items.url AS issue_url,
+  local_branches.repository AS branch_repository,
+  local_branches.branch_name AS branch_name
+`;
+
+const agentRunJoins = `
   FROM agent_runs
   LEFT JOIN review_queue ON review_queue.id=agent_runs.review_id
   LEFT JOIN work_items ON work_items.id=agent_runs.work_item_id
   LEFT JOIN local_branches ON local_branches.id=agent_runs.branch_id
 `;
 
-const agentRunDetailSelect = agentRunSelect.replace(
-  'SELECT agent_runs.id,',
-  'SELECT agent_runs.command, agent_runs.prompt, agent_runs.error, agent_runs.id,',
-);
+const agentRunSelect = `
+  SELECT ${agentRunColumns}
+  ${agentRunJoins}
+`;
+
+const agentRunDetailSelect = `
+  SELECT agent_runs.command, agent_runs.prompt, agent_runs.error, ${agentRunColumns}
+  ${agentRunJoins}
+`;
 
 function dashboardApiAllowed(origin: string | undefined, host: string | undefined): boolean {
   if (!origin) return true;
@@ -299,7 +320,7 @@ function dashboardApiAllowed(origin: string | undefined, host: string | undefine
 }
 
 function localAgentApiAllowed(origin: string | undefined, host: string | undefined): boolean {
-  return dashboardApiAllowed(origin, host) || Boolean(origin?.startsWith('vscode-webview://'));
+  return dashboardApiAllowed(origin, host);
 }
 
 function refreshStoredReviewSummaries(database: BarbarianDatabase): void {
@@ -355,8 +376,9 @@ export async function createApp(
     trackReview?: typeof trackGithubPullRequest;
   } = {},
 ) {
-  refreshStoredReviewSummaries(database);
   const app = Fastify({ logger: true, bodyLimit: 2 * 1024 * 1024 });
+  try { refreshStoredReviewSummaries(database); }
+  catch (error) { app.log.warn(error, 'could not refresh stored pull request summaries'); }
   const initialConfig = configStore.get();
   const runtime = services.runtime || new AgentRuntime(initialConfig.agents.maxConcurrent);
   const dispatcher = services.dispatcher || new ReviewDispatcher(database, () => configStore.get(), runtime, app.log);
@@ -572,7 +594,10 @@ export async function createApp(
       SELECT id, provider, task, status, started_at, finished_at, error
       FROM agent_runs WHERE review_id=? ORDER BY id DESC LIMIT 20
     `).all(id);
-    return { ...reviewContextPayload(database, config, review as Record<string, unknown>), messages, runs };
+    const record = review as Record<string, unknown>;
+    const payload = { ...reviewContextPayload(database, config, record), messages, runs };
+    markAuthoredFeedbackSeen(database, config, record);
+    return payload;
   });
 
   app.patch('/api/reviews/:id', async (request, reply) => {
@@ -697,12 +722,15 @@ export async function createApp(
         FROM chat_messages WHERE review_id=? ORDER BY id DESC LIMIT 12
       ) ORDER BY id ASC
     `).all(id);
-    return {
+    const record = review as Record<string, unknown>;
+    const payload = {
       id,
       appearance: config.appearance,
-      ...reviewContextPayload(database, config, review as Record<string, unknown>),
+      ...reviewContextPayload(database, config, record),
       messages,
     };
+    markAuthoredFeedbackSeen(database, config, record);
+    return payload;
   });
 
   app.get('/api/browser/issue-context', async (request, reply) => {
@@ -943,6 +971,7 @@ export async function createApp(
         (signal) => askAgent(database, config, branch.review_id!, body.message, body.provider, signal, {
           branchId: id,
           cwd: branch.workspace_path,
+          workspaceWrite: true,
           runtimeKey,
         }),
         runtimeKey,

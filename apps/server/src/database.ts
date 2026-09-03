@@ -76,6 +76,7 @@ export class BarbarianDatabase {
         approval_carryover INTEGER NOT NULL DEFAULT 0,
         discussion_watermark TEXT NOT NULL DEFAULT '',
         last_reviewed_watermark TEXT,
+        author_seen_watermark TEXT,
         claim_owner TEXT,
         claimed_at TEXT,
         manual_requested_at TEXT,
@@ -264,6 +265,7 @@ export class BarbarianDatabase {
     const reviewAdditions: Array<[string, string]> = [
       ['discussion_watermark', "TEXT NOT NULL DEFAULT ''"],
       ['last_reviewed_watermark', 'TEXT'],
+      ['author_seen_watermark', 'TEXT'],
       ['claim_owner', 'TEXT'],
       ['claimed_at', 'TEXT'],
       ['manual_requested_at', 'TEXT'],

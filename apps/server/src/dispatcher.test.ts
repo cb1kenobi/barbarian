@@ -116,7 +116,8 @@ describe('ReviewDispatcher', () => {
     const now = new Date().toISOString();
     db.connection.prepare("INSERT INTO sync_runs(started_at,status) VALUES (?,'running')").run(now);
     db.connection.prepare(`
-      INSERT INTO agent_runs(review_id,provider,task,status,started_at) VALUES (?,'fake','code_review:new_pr','running',?)
+      INSERT INTO agent_runs(review_id,provider,task,status,started_at,prompt)
+      VALUES (?,'fake','code_review:new_pr','running',?,'sensitive prompt')
     `).run(id, now);
     db.connection.prepare("UPDATE review_queue SET claim_owner='old-owner',claimed_at=?,attempt_count=1 WHERE id=?")
       .run(now, id);
@@ -131,8 +132,8 @@ describe('ReviewDispatcher', () => {
     dispatcher.recoverInterruptedRuns();
     expect(db.connection.prepare('SELECT status,error FROM sync_runs').get())
       .toEqual({ status: 'failed', error: 'Barbarian restarted during this sync' });
-    expect(db.connection.prepare('SELECT status,error FROM agent_runs').get())
-      .toEqual({ status: 'interrupted', error: 'Barbarian restarted during this run' });
+    expect(db.connection.prepare('SELECT status,error,prompt FROM agent_runs').get())
+      .toEqual({ status: 'interrupted', error: 'Barbarian restarted during this run', prompt: '' });
     expect(db.connection.prepare('SELECT status,claim_owner,retry_after FROM review_queue WHERE id=?').get(id))
       .toMatchObject({ status: 'agent_failed', claim_owner: null });
     expect(db.connection.prepare('SELECT status,last_agent_error FROM local_branches WHERE id=?').get('branch:test'))

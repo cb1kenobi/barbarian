@@ -14,6 +14,14 @@ describe('agent provider options', () => {
     ]);
   });
 
+  it('can grant a Codex branch-room invocation workspace write access', () => {
+    expect(agentInvocationArgs({
+      command: 'codex', args: ['exec', '--sandbox', 'read-only', '--skip-git-repo-check', '-'],
+    }, { codexSandbox: 'workspace-write' })).toEqual([
+      'exec', '--skip-git-repo-check', '--sandbox', 'workspace-write', '-',
+    ]);
+  });
+
   it('applies Claude model and effort flags', () => {
     expect(agentInvocationArgs({
       command: 'claude', args: ['-p', '--effort=low'], model: 'opus', effort: 'high',

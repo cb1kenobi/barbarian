@@ -56,11 +56,18 @@ function beforeStdinPrompt(args: string[], options: string[]): string[] {
   return [...args.slice(0, -1), ...options, '-'];
 }
 
-export function agentInvocationArgs(provider: AgentProviderConfig): string[] {
+export function agentInvocationArgs(
+  provider: AgentProviderConfig,
+  invocation: { codexSandbox?: 'read-only' | 'workspace-write' } = {},
+): string[] {
   const family = agentProviderFamily(provider.command);
   let args = [...provider.args];
   const options: string[] = [];
   const model = provider.model?.trim();
+  if (invocation.codexSandbox && family === 'codex') {
+    args = withoutOption(args, ['--sandbox', '-s']);
+    options.push('--sandbox', invocation.codexSandbox);
+  }
   if (model && family !== 'unknown') {
     args = withoutOption(args, ['--model', '-m']);
     options.push('--model', model);

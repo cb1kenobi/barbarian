@@ -371,14 +371,20 @@ class BranchReviewProvider implements vscode.WebviewViewProvider, vscode.Disposa
     this.operationRevision += 1;
     this.post({ type: 'asked', message: baseQuestion });
     this.post({ type: 'busy', message: 'Agent is thinking…' });
+    let failed = false;
     try {
       await api(`/api/local/branches/${encodeURIComponent(id)}/chat`, {
         method: 'POST',
         body: JSON.stringify({ message, askAgent: true, author: 'VS Code extension' }),
       }, 15 * 60_000);
+    } catch (error) {
+      failed = true;
+      throw error;
     } finally {
       this.actionBusy = false;
       await this.refresh(true);
+      const wasPersisted = this.context?.messages.some((entry) => entry.role === 'user' && entry.content === message);
+      if (failed && !wasPersisted) this.post({ type: 'restoreDraft', message: baseQuestion });
     }
   }
 
@@ -462,7 +468,7 @@ const textarea=main.querySelector('textarea'),include=main.querySelector('.inclu
 main.querySelector('.review')?.addEventListener('click',()=>vscode.postMessage({type:running?'stopReview':'runReview'}));main.querySelector('.open-pr')?.addEventListener('click',()=>vscode.postMessage({type:'openPr'}));main.querySelectorAll('[data-finding]').forEach(el=>el.addEventListener('click',()=>vscode.postMessage({type:'openFinding',finding:context.findings[Number(el.dataset.finding)]})));main.querySelector('.findings-toggle')?.addEventListener('click',()=>{hideResolved=!hideResolved;render()});textarea?.addEventListener('keydown',event=>{if(event.key!=='Enter'||event.shiftKey||event.isComposing)return;event.preventDefault();const q=textarea.value;const include=Boolean(main.querySelector('.include input')?.checked);vscode.postMessage({type:'ask',question:q,includeSelection:include})});updateSelection();if(scrollChat)scrollTranscriptToBottom()}
 function updateSelection(){const preview=main.querySelector('.selection'),include=main.querySelector('.include'),row=main.querySelector('.ask-row');if(!preview||!include||!row)return;if(!selection){preview.classList.remove('visible');include.classList.remove('visible');row.classList.remove('visible');return}preview.textContent=selection.path+':'+selection.line+' — '+selection.text.replace(/\\s+/g,' ');preview.title=selection.text;preview.classList.add('visible');include.classList.add('visible');row.classList.add('visible')}
 document.querySelector('.refresh').addEventListener('click',()=>vscode.postMessage({type:'refresh'}));
-window.addEventListener('message',({data})=>{if(data.type==='loading'&&!context)main.innerHTML='<p class="loading">Reading the current branch…</p>';if(data.type==='context'){const previousMessageCount=context?.messages?.length||0;context=data.context;applyAppearance(context?.appearance);busy=false;render(Boolean(data.changedBranch),(context.messages?.length||0)>previousMessageCount)}if(data.type==='selection'){selection=data.selection;updateSelection()}if(data.type==='busy'){busy=true;document.querySelectorAll('button').forEach(b=>b.disabled=true);const textarea=main.querySelector('textarea');if(textarea)textarea.disabled=true;const status=main.querySelector('.action-status')||main.querySelector('.error');if(status)status.textContent=data.message}if(data.type==='asked'&&context){context.messages=[...(context.messages||[]),{id:'pending-'+Date.now(),role:'user',author:'VS Code extension',content:data.message}];render(true,true)}if(data.type==='error'){busy=false;document.querySelectorAll('button').forEach(b=>b.disabled=false);const textarea=main.querySelector('textarea');if(textarea)textarea.disabled=false;const error=main.querySelector('.error')||main.querySelector('.action-status');if(error)error.textContent=data.message}if(data.type==='offline'){context=undefined;busy=false;key.textContent='Branch review';main.innerHTML='<p class="offline"><strong>Branch context unavailable</strong>'+escapeHtml(data.message)+'</p><p class="empty">Fix the error above, then refresh this view.</p>'}});
+window.addEventListener('message',({data})=>{if(data.type==='loading'&&!context)main.innerHTML='<p class="loading">Reading the current branch…</p>';if(data.type==='context'){const previousMessageCount=context?.messages?.length||0;context=data.context;applyAppearance(context?.appearance);busy=false;render(Boolean(data.changedBranch),(context.messages?.length||0)>previousMessageCount)}if(data.type==='selection'){selection=data.selection;updateSelection()}if(data.type==='busy'){busy=true;document.querySelectorAll('button').forEach(b=>b.disabled=true);const textarea=main.querySelector('textarea');if(textarea)textarea.disabled=true;const status=main.querySelector('.action-status')||main.querySelector('.error');if(status)status.textContent=data.message}if(data.type==='asked'&&context){context.messages=[...(context.messages||[]),{id:'pending-'+Date.now(),role:'user',author:'VS Code extension',content:data.message}];render(true,true)}if(data.type==='restoreDraft'){const textarea=main.querySelector('textarea');if(textarea&&!textarea.value){textarea.value=data.message||'';textarea.focus()}}if(data.type==='error'){busy=false;document.querySelectorAll('button').forEach(b=>b.disabled=false);const textarea=main.querySelector('textarea');if(textarea)textarea.disabled=false;const error=main.querySelector('.error')||main.querySelector('.action-status');if(error)error.textContent=data.message}if(data.type==='offline'){context=undefined;busy=false;key.textContent='Branch review';main.innerHTML='<p class="offline"><strong>Branch context unavailable</strong>'+escapeHtml(data.message)+'</p><p class="empty">Fix the error above, then refresh this view.</p>'}});
 </script></body></html>`;
   }
 }

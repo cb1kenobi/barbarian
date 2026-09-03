@@ -259,7 +259,7 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
 .drawer-close { position: absolute; top: 17px; right: 19px; border: 0; background: none; color: #777c70; font-size: 1.6875rem; cursor: pointer; }
 .drawer h2 { max-width: 510px; margin: 8px 0 13px; font-size: 1.6875rem; line-height: 1.2; letter-spacing: -.03em; }
 .plain-summary { padding: 13px 15px; border-left: 2px solid var(--acid); background: var(--panel-hover); color: var(--muted-strong); font-size: .875rem; line-height: 1.6; }
-.review-card p code, .plain-summary code { color: var(--text); font: .95em ui-monospace, SFMono-Regular, Menlo, monospace; }
+.review-card p code, .plain-summary code { color: var(--ink); font: .95em ui-monospace, SFMono-Regular, Menlo, monospace; }
 .fixed-issues { margin: 10px 0 0; color: var(--muted); font-size: .8125rem; line-height: 1.5; }
 .fixed-issues strong { color: var(--muted-strong); }
 .fixed-issues a { color: var(--acid); font-weight: 700; text-underline-offset: 2px; }

@@ -120,10 +120,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const expectedKind = message.type === 'barbarian-issue-updated' ? 'issue' : 'pullRequest';
     if (page?.kind !== expectedKind) { sendResponse({ ok: false }); return false; }
     const refresh = () => refreshLoadedPage(sender, sender.tab?.url).catch(() => {});
-    refresh();
-    setTimeout(refresh, 700);
-    setTimeout(refresh, 2_000);
-    if (expectedKind === 'pullRequest') setTimeout(refresh, 5_000);
+    void refresh().finally(() => {
+      if (message.retry) setTimeout(refresh, 2_500);
+    });
     sendResponse({ ok: true });
   }
   else return false;

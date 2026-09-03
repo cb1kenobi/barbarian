@@ -263,11 +263,17 @@ describe('dashboard reviews', () => {
       };
       expect(payload.reviews).toEqual([expect.objectContaining({ number: 1 })]);
       expect(payload.feedback).toEqual([
+        expect.objectContaining({ number: 7, approved: false, has_new_feedback: true }),
         expect.objectContaining({ number: 6, approved: true, has_new_feedback: true }),
         expect.objectContaining({ number: 3, approved: false, has_new_feedback: true }),
         expect.objectContaining({ number: 2, approved: true, has_new_feedback: false }),
       ]);
       expect(payload.metrics.reviewsNeedingApproval).toBe(1);
+      const opened = await app.inject({ method: 'GET', url: '/api/reviews/github%3AAcme%2Fstorage%237' });
+      expect(opened.statusCode).toBe(200);
+      const afterOpen = await app.inject({ method: 'GET', url: '/api/dashboard' });
+      expect((afterOpen.json() as { feedback: Array<{ number: number }> }).feedback)
+        .not.toContainEqual(expect.objectContaining({ number: 7 }));
     } finally {
       await app.close();
       database.close();
@@ -276,6 +282,33 @@ describe('dashboard reviews', () => {
 });
 
 describe('browser context appearance', () => {
+  it('refreshes summaries written by an older summarizer once at startup', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-summary-backfill-test-'));
+    directories.push(directory);
+    const database = new BarbarianDatabase(path.join(directory, 'test.db'));
+    const now = new Date().toISOString();
+    database.connection.prepare(`
+      INSERT INTO review_queue(
+        id, repository, number, title, simple_summary, body, url, author, head_sha,
+        head_ref_name, base_ref_name, first_seen_at, updated_at, last_seen_at
+      ) VALUES (
+        'github:Acme/storage#88', 'Acme/storage', 88, 'Fix audit logs', 'Old clipped summary…',
+        'The \`delete_audit_logs_before\` operation now returns the complete result to callers.',
+        'https://github.com/Acme/storage/pull/88', 'author', 'head', 'feature', 'main', ?, ?, ?
+      )
+    `).run(now, now, now);
+    const app = await createApp(database, new ConfigStore(config));
+    try {
+      expect(database.connection.prepare('SELECT simple_summary FROM review_queue WHERE number=88').get())
+        .toEqual({ simple_summary: 'The `delete_audit_logs_before` operation now returns the complete result to callers.' });
+      expect(database.connection.prepare("SELECT value FROM app_metadata WHERE key='review_summary_version'").get())
+        .toEqual({ value: '2' });
+    } finally {
+      await app.close();
+      database.close();
+    }
+  });
+
   it('returns app appearance settings even for an untracked pull request', async () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-browser-context-test-'));
     directories.push(directory);

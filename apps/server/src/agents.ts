@@ -52,9 +52,25 @@ function agentEnvironment(): NodeJS.ProcessEnv {
 }
 
 function commandText(command: string, args: string[]): string {
-  return [command, ...args].map((argument) => /^[\w./:@%+=,-]+$/.test(argument)
+  const safeArgs = args.map((argument, index) => {
+    if (/^(?:--?[^=]*(?:api[-_]?key|token|password|secret)[^=]*)=/i.test(argument)) {
+      return `${argument.slice(0, argument.indexOf('=') + 1)}[redacted]`;
+    }
+    if (index > 0 && /(?:api[-_]?key|token|password|secret)/i.test(args[index - 1] || '')) return '[redacted]';
+    return argument;
+  });
+  return [command, ...safeArgs].map((argument) => /^[\w./:@%+=,\[\]-]+$/.test(argument)
     ? argument
     : `'${argument.replaceAll("'", "'\\''")}'`).join(' ');
+}
+
+interface AgentExecutionOptions {
+  branchId?: string;
+  workItemId?: string;
+  cwd?: string;
+  runtimeKey?: string;
+  runId?: number;
+  workspaceWrite?: boolean;
 }
 
 function createAgentRun(
@@ -65,10 +81,10 @@ function createAgentRun(
   prompt: string,
   requestedProvider?: string,
   claim?: ReviewClaim,
-  options: { branchId?: string; workItemId?: string; runtimeKey?: string } = {},
+  options: AgentExecutionOptions = {},
 ): number {
   const { name, provider } = providerFor(config, requestedProvider);
-  const args = agentInvocationArgs(provider);
+  const args = agentInvocationArgs(provider, options.workspaceWrite ? { codexSandbox: 'workspace-write' } : {});
   const inserted = database.connection.prepare(`
     INSERT INTO agent_runs(
       review_id, branch_id, work_item_id, provider, task, status, started_at, command, prompt, runtime_key,
@@ -91,10 +107,10 @@ export async function executeAgent(
   requestedProvider?: string,
   signal?: AbortSignal,
   claim?: ReviewClaim,
-  options: { branchId?: string; workItemId?: string; cwd?: string; runtimeKey?: string; runId?: number } = {},
+  options: AgentExecutionOptions = {},
 ): Promise<string> {
   const { provider } = providerFor(config, requestedProvider);
-  const args = agentInvocationArgs(provider);
+  const args = agentInvocationArgs(provider, options.workspaceWrite ? { codexSandbox: 'workspace-write' } : {});
   const runId = options.runId || createAgentRun(
     database, config, reviewId, task, prompt, requestedProvider, claim, options,
   );
@@ -146,13 +162,16 @@ export async function askAgent(
   message: string,
   provider?: string,
   signal?: AbortSignal,
-  options: { branchId?: string; workItemId?: string; cwd?: string; runtimeKey?: string } = {},
+  options: AgentExecutionOptions = {},
 ): Promise<string> {
   const review = getReview(database, reviewId);
   const history = database.connection.prepare(`
     SELECT role, author, content FROM chat_messages WHERE review_id=? ORDER BY id DESC LIMIT 20
   `).all(reviewId).reverse() as Array<{ role: string; author: string; content: string }>;
-  const prompt = `You are helping a developer understand a pull request. Be direct and use plain language.
+  const workspaceInstruction = options.workspaceWrite && options.cwd
+    ? `\nYour working directory is ${options.cwd}. Inspect the repository as needed. You may modify files or local git state when the developer asks you to. Do not perform external actions unless the developer explicitly requests them.\n`
+    : '';
+  const prompt = `You are helping a developer understand a pull request. Be direct and use plain language.${workspaceInstruction}
 
 PR: ${review.repository}#${review.number} — ${review.title}
 URL: ${review.url}

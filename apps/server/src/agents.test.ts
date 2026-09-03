@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { BarbarianDatabase } from './database.js';
 import type { BarbarianConfig } from './types.js';
 import {
-  newReviewComments, parseReviewResult, runReviewAgent, type ReviewClaim,
+  executeAgent, newReviewComments, parseReviewResult, runReviewAgent, type ReviewClaim,
 } from './agents.js';
 import type { ReviewBundle } from './github.js';
 
@@ -280,6 +280,24 @@ describe('runReviewAgent', () => {
       postReview: async () => { posted = true; },
     })).rejects.toThrow('head changed');
     expect(posted).toBe(false);
+    database.close();
+  });
+});
+
+describe('executeAgent', () => {
+  it('redacts credential-like provider arguments from stored display commands', async () => {
+    const { database, config } = setup("console.log('unused')");
+    config.agents.providers.fake = {
+      command: 'barbarian-missing-agent', args: ['--api-key', 'do-not-store-this'],
+    };
+    await expect(executeAgent(database, config, null, 'chat', 'Prompt'))
+      .rejects.toThrow('was not found on PATH');
+    const run = database.connection.prepare(`
+      SELECT command, prompt FROM agent_runs ORDER BY id DESC LIMIT 1
+    `).get() as { command: string; prompt: string };
+    expect(run.command).toContain('--api-key [redacted]');
+    expect(run.command).not.toContain('do-not-store-this');
+    expect(run.prompt).toBe('');
     database.close();
   });
 });

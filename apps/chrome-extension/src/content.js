@@ -98,25 +98,29 @@ function mergeInteraction(event) {
     .filter(Boolean);
   return controls.some((control) => {
     const clue = control instanceof HTMLInputElement ? control.value : control.textContent;
-    return /^\s*(?:confirm\s+)?(?:(?:squash|rebase) and )?merge(?: pull request| when ready)?\s*$/i
+    return /^\s*(?:confirm\s+)?(?:(?:squash|rebase)\s+and\s+)?merge(?:\s+pull\s+request|\s+when\s+ready)?\s*$/i
       .test(clue || '');
   });
 }
 
 let pullRequestRefreshTimer;
-function signalPullRequestUpdate(delay = 150) {
+let pullRequestNeedsRetry = false;
+function signalPullRequestUpdate(delay = 150, retry = false) {
+  pullRequestNeedsRetry ||= retry;
   clearTimeout(pullRequestRefreshTimer);
   pullRequestRefreshTimer = setTimeout(() => {
     if (!isPullRequestPage()) return;
+    const retryRequested = pullRequestNeedsRetry;
+    pullRequestNeedsRetry = false;
     sendRuntimeMessage({
-      type: 'barbarian-pull-request-updated', url: location.href,
+      type: 'barbarian-pull-request-updated', url: location.href, retry: retryRequested,
     });
   }, delay);
 }
 
 document.addEventListener('click', (event) => {
   if (isIssuePage() && assigneeInteraction(event)) signalIssueUpdate(250);
-  else if (isPullRequestPage() && mergeInteraction(event)) signalPullRequestUpdate(350);
+  else if (isPullRequestPage() && mergeInteraction(event)) signalPullRequestUpdate(500, true);
 }, true);
 
 document.addEventListener('turbo:submit-end', () => {
