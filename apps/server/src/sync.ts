@@ -91,8 +91,9 @@ function shouldTrackReview(
   const fallbackTeam = pr.requestedReviewers.length === 0 && pr.requestedTeams.some((team) =>
     config.review.fallbackTeams.some((candidate) => candidate.toLowerCase() === team.toLowerCase()),
   );
+  const authoredByViewer = pr.author.toLowerCase() === githubLogin.toLowerCase();
   const tracked = database.connection.prepare('SELECT 1 FROM review_queue WHERE id = ?').get(reviewId(pr));
-  return Boolean(explicitlyRequested || alreadyReviewed || fallbackTeam || tracked);
+  return Boolean(authoredByViewer || explicitlyRequested || alreadyReviewed || fallbackTeam || tracked);
 }
 
 export function upsertReview(database: BarbarianDatabase, config: BarbarianConfig, pr: DiscoveredPullRequest, seenAt: string): void {

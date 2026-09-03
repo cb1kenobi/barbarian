@@ -60,7 +60,7 @@ describe('applyDiscovery', () => {
     db.close();
   });
 
-  it('tracks requested and previously reviewed pull requests while ignoring unrelated ones', async () => {
+  it('tracks requested, previously reviewed, and authored pull requests while ignoring unrelated ones', async () => {
     const db = database();
     const base = {
       provider: 'github' as const, repository: 'Acme/storage', body: '', author: 'author',
@@ -78,12 +78,14 @@ describe('applyDiscovery', () => {
         { ...base, number: 11, title: 'Unrelated', url: 'https://example/11', requestedReviewers: ['someone-else'] },
         { ...base, number: 12, title: 'Previously reviewed', url: 'https://example/12', requestedReviewers: [], reviewedBy: ['cb1kenobi'] },
         { ...base, number: 13, title: 'Reviewed by someone else', url: 'https://example/13', requestedReviewers: [], reviewedBy: ['someone-else'] },
+        { ...base, number: 14, title: 'Authored by viewer', url: 'https://example/14', author: 'CB1Kenobi', requestedReviewers: ['someone-else'] },
       ],
     };
     await applyDiscovery(db, config, discovery);
     expect(db.connection.prepare('SELECT number FROM review_queue ORDER BY number').all()).toEqual([
       { number: 10 },
       { number: 12 },
+      { number: 14 },
     ]);
     expect(db.connection.prepare('SELECT remote_updated_at, additions, deletions FROM review_queue WHERE number=10').get())
       .toEqual({ remote_updated_at: '2026-08-31T10:00:00Z', additions: 42, deletions: 7 });
@@ -110,6 +112,7 @@ describe('applyDiscovery', () => {
     expect(db.connection.prepare('SELECT number FROM review_queue ORDER BY number').all()).toEqual([
       { number: 10 },
       { number: 12 },
+      { number: 14 },
     ]);
 
     db.connection.prepare('UPDATE review_queue SET review_paused=1 WHERE number=10').run();

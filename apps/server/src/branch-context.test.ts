@@ -19,6 +19,7 @@ describe('local branch agent review', () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-branch-review-test-'));
     directories.push(directory);
     git(directory, ['init', '-b', 'main']);
+    git(directory, ['remote', 'add', 'origin', 'git@github.com:Acme/storage.git']);
     git(directory, ['config', 'user.name', 'Test']);
     git(directory, ['config', 'user.email', 'test@example.com']);
     writeFileSync(path.join(directory, 'value.ts'), 'export const value = 1;\n');

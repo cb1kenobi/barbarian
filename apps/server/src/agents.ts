@@ -57,6 +57,31 @@ function commandText(command: string, args: string[]): string {
     : `'${argument.replaceAll("'", "'\\''")}'`).join(' ');
 }
 
+function createAgentRun(
+  database: BarbarianDatabase,
+  config: BarbarianConfig,
+  reviewId: string | null,
+  task: string,
+  prompt: string,
+  requestedProvider?: string,
+  claim?: ReviewClaim,
+  options: { branchId?: string; workItemId?: string; runtimeKey?: string } = {},
+): number {
+  const { name, provider } = providerFor(config, requestedProvider);
+  const args = agentInvocationArgs(provider);
+  const inserted = database.connection.prepare(`
+    INSERT INTO agent_runs(
+      review_id, branch_id, work_item_id, provider, task, status, started_at, command, prompt, runtime_key,
+      owner, reviewed_head_sha, reviewed_watermark
+    ) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    reviewId, options.branchId || null, options.workItemId || null, name, task, new Date().toISOString(),
+    commandText(provider.command, args), prompt, options.runtimeKey || reviewId || options.branchId || null,
+    claim?.owner || null, claim?.headSha || null, claim?.discussionWatermark || null,
+  );
+  return Number(inserted.lastInsertRowid);
+}
+
 export async function executeAgent(
   database: BarbarianDatabase,
   config: BarbarianConfig,
@@ -66,22 +91,17 @@ export async function executeAgent(
   requestedProvider?: string,
   signal?: AbortSignal,
   claim?: ReviewClaim,
-  options: { branchId?: string; cwd?: string; runtimeKey?: string } = {},
+  options: { branchId?: string; workItemId?: string; cwd?: string; runtimeKey?: string; runId?: number } = {},
 ): Promise<string> {
-  const { name, provider } = providerFor(config, requestedProvider);
-  const startedAt = new Date().toISOString();
+  const { provider } = providerFor(config, requestedProvider);
   const args = agentInvocationArgs(provider);
-  const inserted = database.connection.prepare(`
-    INSERT INTO agent_runs(
-      review_id, branch_id, provider, task, status, started_at, command, prompt, runtime_key,
-      owner, reviewed_head_sha, reviewed_watermark
-    ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    reviewId, options.branchId || null, name, task, startedAt,
-    commandText(provider.command, args), prompt, options.runtimeKey || reviewId || options.branchId || null,
-    claim?.owner || null, claim?.headSha || null, claim?.discussionWatermark || null,
+  const runId = options.runId || createAgentRun(
+    database, config, reviewId, task, prompt, requestedProvider, claim, options,
   );
-  const runId = Number(inserted.lastInsertRowid);
+  if (options.runId) {
+    database.connection.prepare('UPDATE agent_runs SET prompt=? WHERE id=? AND status=\'running\'')
+      .run(prompt, runId);
+  }
   try {
     const command = await resolveExecutable(provider.command);
     if (!command) throw new Error(`Agent command "${provider.command}" was not found on PATH`);
@@ -97,14 +117,14 @@ export async function executeAgent(
     });
     if (result.exitCode !== 0) throw new Error(result.stderr.trim() || `${provider.command} exited ${result.exitCode}`);
     database.connection.prepare(`
-      UPDATE agent_runs SET status='complete', finished_at=?, output=? WHERE id=?
+      UPDATE agent_runs SET status='complete', finished_at=?, output=?, prompt='' WHERE id=?
     `).run(new Date().toISOString(), result.stdout, runId);
     return result.stdout.trim();
   } catch (error) {
     const cancelled = Boolean(signal?.aborted);
     const message = cancelled ? 'Stopped by user' : error instanceof Error ? error.message : String(error);
     database.connection.prepare(`
-      UPDATE agent_runs SET status=?, finished_at=?, error=? WHERE id=?
+      UPDATE agent_runs SET status=?, finished_at=?, error=?, prompt='' WHERE id=?
     `).run(cancelled ? 'cancelled' : 'failed', new Date().toISOString(), message, runId);
     throw error;
   }
@@ -126,7 +146,7 @@ export async function askAgent(
   message: string,
   provider?: string,
   signal?: AbortSignal,
-  options: { branchId?: string; cwd?: string; runtimeKey?: string } = {},
+  options: { branchId?: string; workItemId?: string; cwd?: string; runtimeKey?: string } = {},
 ): Promise<string> {
   const review = getReview(database, reviewId);
   const history = database.connection.prepare(`
@@ -207,6 +227,7 @@ ${history.map((entry) => `${entry.author}: ${entry.content}`).join('\n')}
 Developer: ${message}`;
   return executeAgent(database, config, null, 'issue_chat', prompt, provider, signal, undefined, {
     runtimeKey: runtimeKey || workItemId,
+    workItemId,
   });
 }
 
@@ -379,7 +400,14 @@ export async function runReviewAgent(
   const fetchBundle = dependencies.fetchBundle || fetchPullRequestReviewBundle;
   const postReview = dependencies.postReview || postPullRequestReview;
   const refreshContextAfterReview = dependencies.refreshContext || refreshReviewContext;
+  const task = `code_review:${claim.trigger}`;
+  let preparedRunId: number | null = null;
   try {
+    preparedRunId = createAgentRun(
+      database, config, claim.reviewId, task,
+      `Preparing review context for ${review.repository}#${review.number} at ${claim.headSha}.`,
+      claim.provider, claim,
+    );
     const bundle = await fetchBundle(review.repository, review.number);
     if (bundle.metadata.headRefOid !== claim.headSha) {
       throw new Error('Pull request head changed before the review bundle was captured');
@@ -396,7 +424,7 @@ BARBARIAN_RESULT: {"findings":<count>,"verdict":"ready|issues","summary":"<plain
 REVIEW_BUNDLE_JSON:
 ${JSON.stringify(bundle)}`;
     const output = await executeAgent(
-      database, config, claim.reviewId, `code_review:${claim.trigger}`, prompt, claim.provider, signal, claim,
+      database, config, claim.reviewId, task, prompt, claim.provider, signal, claim, { runId: preparedRunId },
     );
     const result = parseReviewResult(output);
     validateReviewCommentLocations(bundle.diff, result.comments);
@@ -425,6 +453,13 @@ ${JSON.stringify(bundle)}`;
     );
     try { await refreshContextAfterReview(database, claim.reviewId); } catch {}
   } catch (error) {
+    const message = signal?.aborted ? 'Stopped by user' : error instanceof Error ? error.message : String(error);
+    if (preparedRunId !== null) {
+      database.connection.prepare(`
+        UPDATE agent_runs SET status=?, finished_at=?, error=?, prompt=''
+        WHERE id=? AND status='running'
+      `).run(signal?.aborted ? 'cancelled' : 'failed', new Date().toISOString(), message, preparedRunId);
+    }
     if (!signal?.aborted) failClaim(database, config, claim, error);
     throw error;
   }

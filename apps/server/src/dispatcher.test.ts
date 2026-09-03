@@ -68,6 +68,23 @@ describe('reviewTrigger', () => {
 });
 
 describe('ReviewDispatcher', () => {
+  it('does not automatically review pull requests authored by the configured user', async () => {
+    const db = database();
+    const id = seedReview(db, 7);
+    db.connection.prepare("UPDATE review_queue SET author='CB1Kenobi' WHERE id=?").run(id);
+    let claimed = false;
+    const dispatcher = new ReviewDispatcher(
+      db, config(1), new AgentRuntime(1), { error: () => undefined },
+      async () => { claimed = true; },
+    );
+    await dispatcher.pump();
+    expect(claimed).toBe(false);
+    expect(db.connection.prepare('SELECT status, claim_owner FROM review_queue WHERE id=?').get(id))
+      .toEqual({ status: 'unreviewed', claim_owner: null });
+    dispatcher.stop();
+    db.close();
+  });
+
   it('re-reviews an approved PR when its head advances', async () => {
     const db = database();
     const id = seedReview(db, 11, 'new-head');
@@ -248,6 +265,25 @@ describe('ReviewDispatcher', () => {
     expect(db.connection.prepare('SELECT review_paused, manual_requested_at IS NOT NULL AS requested FROM review_queue WHERE id=?')
       .get(id)).toEqual({ review_paused: 0, requested: 1 });
     await runtime.shutdown();
+    db.close();
+  });
+
+  it('does not hide a review-room chat when stopping the code review', async () => {
+    const db = database();
+    const id = seedReview(db, 15);
+    const now = new Date().toISOString();
+    db.connection.prepare(`
+      UPDATE review_queue SET status='agent_working', claim_owner='owner', claimed_at=? WHERE id=?
+    `).run(now, id);
+    db.connection.prepare(`
+      INSERT INTO agent_runs(review_id, provider, task, status, started_at, runtime_key)
+      VALUES (?, 'fake', 'chat', 'running', ?, 'agent-run:chat')
+    `).run(id, now);
+    const dispatcher = new ReviewDispatcher(db, config(1), new AgentRuntime(1), { error: () => undefined });
+    expect(dispatcher.cancelReview(id)).toMatchObject({ found: true, stopped: true, cancelled: 0 });
+    expect(db.connection.prepare('SELECT status FROM agent_runs WHERE runtime_key=\'agent-run:chat\'').get())
+      .toEqual({ status: 'running' });
+    dispatcher.stop();
     db.close();
   });
 

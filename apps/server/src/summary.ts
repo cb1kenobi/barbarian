@@ -1,4 +1,13 @@
 const cruft = /(^|\s)(fix|feat|chore|refactor|docs|test)(\([^)]*\))?:\s*/i;
+const maximumSentenceLength = 2_400;
+const maximumSummaryLength = 4_000;
+
+function truncateAtWord(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  const prefix = value.slice(0, limit - 1);
+  const boundary = prefix.lastIndexOf(' ');
+  return `${prefix.slice(0, boundary > limit * 0.7 ? boundary : prefix.length).trimEnd()}…`;
+}
 
 function cleanMarkdown(value: string): string {
   return value
@@ -38,12 +47,17 @@ function normalizedText(value: string): string {
 function sentenceCandidates(value: string): string[] {
   return value
     .split(/(?<=[.!?])\s+/)
-    .map((sentence) => sentence.replace(/\s+/g, ' ').trim())
+    .map((sentence) => truncateAtWord(sentence.replace(/\s+/g, ' ').trim(), maximumSentenceLength))
     .filter((sentence) => sentence.length >= 20 && !/^https?:\/\/\S+$/i.test(sentence));
 }
 
 function joinCompleteSentences(sentences: string[]): string {
-  return sentences.join(' ');
+  const selected: string[] = [];
+  for (const sentence of sentences) {
+    if (selected.length && selected.join(' ').length + sentence.length + 1 > maximumSummaryLength) break;
+    selected.push(sentence);
+  }
+  return selected.join(' ');
 }
 
 function markdownSections(body: string): Array<{ heading: string; body: string }> {

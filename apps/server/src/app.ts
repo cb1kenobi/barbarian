@@ -226,11 +226,7 @@ function rowToReview(
 
 function reviewContextPayload(database: BarbarianDatabase, config: BarbarianConfig, row: Record<string, unknown>) {
   const metadata = reviewCardMetadata(database).get(String(row.id));
-  const body = String(row.body || '');
-  const contextualRow = body.trim()
-    ? { ...row, simple_summary: summarizePullRequest(String(row.title || ''), body) }
-    : row;
-  const review = rowToReview(contextualRow, config, metadata);
+  const review = rowToReview(row, config, metadata);
   const findings = storedReviewFindings(database, String(row.id)).map((finding) => ({
     ...finding,
     resolved: Boolean(finding.resolved),
@@ -245,8 +241,8 @@ function reviewContextPayload(database: BarbarianDatabase, config: BarbarianConf
 
 function agentRunView(config: BarbarianConfig, row: Record<string, unknown>) {
   const agent = String(row.provider);
-  const repository = row.review_repository || row.branch_repository || null;
-  const title = row.review_title || row.branch_name || String(row.task).replaceAll('_', ' ');
+  const repository = row.review_repository || row.issue_repository || row.branch_repository || null;
+  const title = row.review_title || row.issue_title || row.branch_name || String(row.task).replaceAll('_', ' ');
   return {
     id: Number(row.id),
     review_id: row.review_id ? String(row.review_id) : null,
@@ -259,25 +255,76 @@ function agentRunView(config: BarbarianConfig, row: Record<string, unknown>) {
     started_at: String(row.started_at),
     finished_at: row.finished_at ? String(row.finished_at) : null,
     repository: repository ? String(repository) : null,
-    number: row.review_number === null || row.review_number === undefined ? null : Number(row.review_number),
+    number: row.review_number === null || row.review_number === undefined
+      ? row.issue_number === null || row.issue_number === undefined ? null : Number(row.issue_number)
+      : Number(row.review_number),
     title: String(title),
-    url: row.review_url ? String(row.review_url) : null,
+    url: row.review_url || row.issue_url ? String(row.review_url || row.issue_url) : null,
     branch_name: row.branch_name ? String(row.branch_name) : null,
   };
 }
 
 const agentRunSelect = `
-  SELECT agent_runs.*,
+  SELECT agent_runs.id, agent_runs.review_id, agent_runs.branch_id, agent_runs.work_item_id,
+    agent_runs.provider, agent_runs.task, agent_runs.status, agent_runs.started_at, agent_runs.finished_at,
     review_queue.repository AS review_repository,
     review_queue.number AS review_number,
     review_queue.title AS review_title,
     review_queue.url AS review_url,
+    work_items.repository AS issue_repository,
+    work_items.number AS issue_number,
+    work_items.title AS issue_title,
+    work_items.url AS issue_url,
     local_branches.repository AS branch_repository,
     local_branches.branch_name AS branch_name
   FROM agent_runs
   LEFT JOIN review_queue ON review_queue.id=agent_runs.review_id
+  LEFT JOIN work_items ON work_items.id=agent_runs.work_item_id
   LEFT JOIN local_branches ON local_branches.id=agent_runs.branch_id
 `;
+
+const agentRunDetailSelect = agentRunSelect.replace(
+  'SELECT agent_runs.id,',
+  'SELECT agent_runs.command, agent_runs.prompt, agent_runs.error, agent_runs.id,',
+);
+
+function dashboardApiAllowed(origin: string | undefined, host: string | undefined): boolean {
+  if (!origin) return true;
+  try {
+    const parsed = new URL(origin);
+    return /^(127\.0\.0\.1|localhost)$/.test(parsed.hostname) && parsed.host === host;
+  } catch {
+    return false;
+  }
+}
+
+function localAgentApiAllowed(origin: string | undefined, host: string | undefined): boolean {
+  return dashboardApiAllowed(origin, host) || Boolean(origin?.startsWith('vscode-webview://'));
+}
+
+function refreshStoredReviewSummaries(database: BarbarianDatabase): void {
+  const key = 'review_summary_version';
+  const version = '2';
+  const current = database.connection.prepare('SELECT value FROM app_metadata WHERE key=?')
+    .get(key) as { value: string } | undefined;
+  if (current?.value === version) return;
+  const rows = database.connection.prepare(`
+    SELECT id, title, body FROM review_queue WHERE trim(body)<>''
+  `).all() as Array<{ id: string; title: string; body: string }>;
+  const update = database.connection.prepare('UPDATE review_queue SET simple_summary=? WHERE id=?');
+  database.connection.exec('BEGIN IMMEDIATE');
+  try {
+    for (const row of rows) update.run(summarizePullRequest(row.title, row.body), row.id);
+    database.connection.prepare(`
+      INSERT INTO app_metadata(key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value=excluded.value
+    `).run(key, version);
+    database.connection.exec('COMMIT');
+  } catch (error) {
+    database.connection.exec('ROLLBACK');
+    throw error;
+  }
+}
 
 function todayParts(config: BarbarianConfig): { date: string; weekday: string } {
   const now = new Date();
@@ -308,6 +355,7 @@ export async function createApp(
     trackReview?: typeof trackGithubPullRequest;
   } = {},
 ) {
+  refreshStoredReviewSummaries(database);
   const app = Fastify({ logger: true, bodyLimit: 2 * 1024 * 1024 });
   const initialConfig = configStore.get();
   const runtime = services.runtime || new AgentRuntime(initialConfig.agents.maxConcurrent);
@@ -424,9 +472,10 @@ export async function createApp(
   });
 
   app.get('/api/agent-runs/:id', async (request, reply) => {
+    if (!dashboardApiAllowed(request.headers.origin, request.headers.host)) return reply.code(403).send({ error: 'Dashboard access required' });
     const id = z.coerce.number().int().positive().safeParse((request.params as { id: string }).id);
     if (!id.success) return reply.code(400).send({ error: 'Invalid agent run id' });
-    const row = database.connection.prepare(`${agentRunSelect} WHERE agent_runs.id=?`)
+    const row = database.connection.prepare(`${agentRunDetailSelect} WHERE agent_runs.id=?`)
       .get(id.data) as Record<string, unknown> | undefined;
     if (!row) return reply.code(404).send({ error: 'Agent run not found' });
     return {
@@ -438,6 +487,7 @@ export async function createApp(
   });
 
   app.delete('/api/agent-runs/:id', async (request, reply) => {
+    if (!dashboardApiAllowed(request.headers.origin, request.headers.host)) return reply.code(403).send({ error: 'Dashboard access required' });
     const id = z.coerce.number().int().positive().safeParse((request.params as { id: string }).id);
     if (!id.success) return reply.code(400).send({ error: 'Invalid agent run id' });
     const run = database.connection.prepare(`
@@ -455,17 +505,18 @@ export async function createApp(
     } else {
       if (!run.runtime_key) return reply.code(409).send({ error: 'This agent run cannot be stopped' });
       cancelled = runtime.cancel(run.runtime_key, new Error('Stopped by user'));
-      if (run.task === 'local_branch_review' && run.branch_id) {
-        database.connection.prepare(`
-          UPDATE local_branches SET status='unreviewed', last_agent_error=NULL, updated_at=? WHERE id=?
-        `).run(new Date().toISOString(), run.branch_id);
-      }
     }
     if (!cancelled) return reply.code(409).send({ error: 'Agent is no longer running' });
 
+    if (run.task === 'local_branch_review' && run.branch_id) {
+      database.connection.prepare(`
+        UPDATE local_branches SET status='unreviewed', last_agent_error=NULL, updated_at=? WHERE id=?
+      `).run(new Date().toISOString(), run.branch_id);
+    }
+
     const now = new Date().toISOString();
     database.connection.prepare(`
-      UPDATE agent_runs SET status='cancelled', finished_at=?, error='Stopped by user'
+      UPDATE agent_runs SET status='cancelled', finished_at=?, error='Stopped by user', prompt=''
       WHERE id=? AND status='running'
     `).run(now, run.id);
     publishDashboardUpdated(String(run.id));
@@ -743,6 +794,7 @@ export async function createApp(
   });
 
   app.post('/api/local/branches/context', async (request, reply) => {
+    if (!localAgentApiAllowed(request.headers.origin, request.headers.host)) return reply.code(403).send({ error: 'Editor access required' });
     const config = configStore.get();
     try {
       const branch = await upsertLocalBranch(database, localBranchBody.parse(request.body));
@@ -826,6 +878,7 @@ export async function createApp(
   });
 
   app.post('/api/local/branches/:id/run-review', async (request, reply) => {
+    if (!localAgentApiAllowed(request.headers.origin, request.headers.host)) return reply.code(403).send({ error: 'Editor access required' });
     const id = decodeURIComponent((request.params as { id: string }).id);
     const branch = database.connection.prepare('SELECT * FROM local_branches WHERE id=?').get(id) as unknown as LocalBranchRow | undefined;
     if (!branch) return reply.code(404).send({ error: 'Local branch is not tracked' });
@@ -854,6 +907,7 @@ export async function createApp(
   });
 
   app.delete('/api/local/branches/:id/run-review', async (request, reply) => {
+    if (!localAgentApiAllowed(request.headers.origin, request.headers.host)) return reply.code(403).send({ error: 'Editor access required' });
     const id = decodeURIComponent((request.params as { id: string }).id);
     const branch = database.connection.prepare('SELECT * FROM local_branches WHERE id=?').get(id) as unknown as LocalBranchRow | undefined;
     if (!branch) return reply.code(404).send({ error: 'Local branch is not tracked' });
@@ -870,6 +924,7 @@ export async function createApp(
   });
 
   app.post('/api/local/branches/:id/chat', async (request, reply) => {
+    if (!localAgentApiAllowed(request.headers.origin, request.headers.host)) return reply.code(403).send({ error: 'Editor access required' });
     const id = decodeURIComponent((request.params as { id: string }).id);
     const branch = database.connection.prepare('SELECT * FROM local_branches WHERE id=?').get(id) as unknown as LocalBranchRow | undefined;
     if (!branch) return reply.code(404).send({ error: 'Local branch is not tracked' });

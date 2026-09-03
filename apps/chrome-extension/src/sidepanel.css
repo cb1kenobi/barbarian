@@ -148,7 +148,7 @@ p { margin: 0; }
 .transcript { display: grid; gap: 8px; margin-bottom: 10px; }
 .review-room { display: flex; min-height: 0; flex: 0 1 auto; flex-direction: column; overflow: hidden; margin: 0; }
 .conversation { min-height: 0; max-height: min(320px, 38vh); flex: 0 1 auto; overflow-y: auto; margin: 0 -6px 10px 0; padding-right: 6px; overscroll-behavior: contain; scrollbar-color: var(--line) transparent; scrollbar-width: thin; }
-.conversation:not(:has(.transcript, .reply.visible)) { display: none; }
+.conversation:not(:has(.transcript)) { display: none; }
 .message { padding: 9px 10px; border: 1px solid var(--line); background: var(--panel-soft); color: var(--ink-soft); font-size: .875rem; overflow-wrap: anywhere; }
 .message.user { margin-left: 24px; border-color: var(--user-border); background: var(--user-panel); }
 .message.assistant { margin-right: 24px; }
@@ -167,9 +167,6 @@ button.secondary { border-color: var(--line); background: transparent; color: va
 button.agent-review.running { border-color: #ff987a; background: transparent; color: #ff987a; }
 .button-icon { display: inline-block; width: 1em; margin-right: 6px; text-align: center; }
 button:disabled { cursor: wait; opacity: .55; }
-.reply { display: none; margin-top: 11px; padding: 11px; border: 1px solid var(--line); background: var(--panel); }
-.reply.visible { display: block; }
-.reply-label { display: block; margin-bottom: 5px; color: var(--accent); font-size: .6875rem; font-weight: 800; letter-spacing: .08em; }
 .markdown > :first-child { margin-top: 0; }
 .markdown > :last-child { margin-bottom: 0; }
 .markdown p { margin: 0 0 10px; }

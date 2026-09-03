@@ -1,4 +1,5 @@
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -120,8 +121,9 @@ describe('dashboard reviews', () => {
       VALUES ('github:Acme/storage#2','codex','code_review:new_pr','running','2026-01-02T05:00:00Z')
     `).run();
     const issueChatRun = database.connection.prepare(`
-      INSERT INTO agent_runs(provider,task,status,started_at,command,prompt)
-      VALUES ('codex','issue_chat','running','2026-01-02T05:15:00Z','codex exec -','Explain issue #42')
+      INSERT INTO agent_runs(work_item_id,provider,task,status,started_at,command,prompt)
+      VALUES ('github:Acme/storage#issue-1','codex','issue_chat','running',
+        '2026-01-02T05:15:00Z','codex exec -','Explain issue #1')
     `).run();
     database.connection.prepare(`
       UPDATE review_queue SET status='agent_working', claim_owner='claim-3',
@@ -174,7 +176,7 @@ describe('dashboard reviews', () => {
         repository: 'Acme/storage', number: 2, agent: 'codex', model: 'CLI default',
         task: 'code_review:new_pr', started_at: '2026-01-02T05:00:00Z',
       }), expect.objectContaining({
-        repository: null, number: null, agent: 'codex', model: 'CLI default',
+        repository: 'Acme/storage', number: 1, title: 'Issue 1', agent: 'codex', model: 'CLI default',
         task: 'issue_chat', started_at: '2026-01-02T05:15:00Z',
       })]);
       expect(payload.metrics).toMatchObject({
@@ -188,8 +190,19 @@ describe('dashboard reviews', () => {
       });
       expect(runResponse.statusCode).toBe(200);
       expect(runResponse.json()).toMatchObject({
-        task: 'issue_chat', status: 'running', command: 'codex exec -', prompt: 'Explain issue #42',
+        repository: 'Acme/storage', number: 1, title: 'Issue 1',
+        task: 'issue_chat', status: 'running', command: 'codex exec -', prompt: 'Explain issue #1',
       });
+      const extensionRunResponse = await app.inject({
+        method: 'GET', url: `/api/agent-runs/${Number(issueChatRun.lastInsertRowid)}`,
+        headers: { origin: 'chrome-extension://unrelated-extension' },
+      });
+      expect(extensionRunResponse.statusCode).toBe(403);
+      const otherLocalAppResponse = await app.inject({
+        method: 'GET', url: `/api/agent-runs/${Number(issueChatRun.lastInsertRowid)}`,
+        headers: { origin: 'http://localhost:3000' },
+      });
+      expect(otherLocalAppResponse.statusCode).toBe(403);
       expect(reviews.find((review) => review.number === 1)).toMatchObject({
         remote_updated_at: '2026-01-02T03:04:00Z',
         last_agent_review_at: '2026-01-02T04:05:00Z',
@@ -237,6 +250,7 @@ describe('dashboard reviews', () => {
     addReview(4, 'cb1kenobi', 'unreviewed', 'APPROVED', '', null, true);
     addReview(5, 'cb1kenobi', 'unreviewed', null, '', null);
     addReview(6, 'cb1kenobi', 'unreviewed', 'APPROVED', '2026-01-02T06:00:00Z', '2026-01-01T06:00:00Z');
+    addReview(7, 'cb1kenobi', 'unreviewed', null, '2026-01-02T07:00:00Z', null);
 
     const app = await createApp(database, new ConfigStore(config));
     try {
@@ -420,7 +434,12 @@ describe('browser issue context', () => {
 });
 
 describe('local branch context', () => {
-  const branchPayload = (workspacePath: string) => ({
+  const branchPayload = (workspacePath: string) => {
+    if (!existsSync(path.join(workspacePath, '.git'))) {
+      execFileSync('git', ['init', '-b', 'main'], { cwd: workspacePath });
+      execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:Acme/storage.git'], { cwd: workspacePath });
+    }
+    return ({
     remote: 'git@github.com:Acme/storage.git',
     branch: 'feature/local-review',
     baseBranch: 'main',
@@ -428,7 +447,8 @@ describe('local branch context', () => {
     headSha: '0123456789abcdef0123456789abcdef01234567',
     worktreeState: 'clean',
     workspacePath,
-  });
+    });
+  };
 
   it('persists a branch without requiring a pull request and keeps its review room', async () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-local-branch-test-'));

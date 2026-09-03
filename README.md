@@ -334,6 +334,8 @@ Sources are applied in that order, so Barbarian’s generic `cb1-code-review` wi
 - Back up `data/barbarian.db` if you want to retain workflow history.
 - Prepared checkouts live under `.barbarian/workspaces` by default and are gitignored.
 - Cleanup validates every path is below that configured root and removes worktrees through git.
+- VS Code review-room agents run in the open Git checkout so they can carry out an explicit editing request. Barbarian verifies that the checkout's `origin` matches the repository reported by the extension before starting the agent.
+- Active agent prompts are retained only while the agent is running and are available only to the dashboard's own origin; completed, failed, interrupted, and cancelled runs clear the prompt.
 - The API accepts only localhost, Chrome-extension, and VS Code webview origins and binds to loopback by default.
 - Barbarian does not post the daily status to Slack; it saves and copies an editable draft.
 - Do not expose port 4142 to another machine. There is intentionally no authentication for this local-only application.

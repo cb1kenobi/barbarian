@@ -85,7 +85,7 @@ export class ReviewDispatcher {
         WHERE status='running'
       `).run(now.toISOString());
       this.database.connection.prepare(`
-        UPDATE agent_runs SET status='interrupted', finished_at=?, error='Barbarian restarted during this run'
+        UPDATE agent_runs SET status='interrupted', finished_at=?, error='Barbarian restarted during this run', prompt=''
         WHERE status='running'
       `).run(now.toISOString());
       this.database.connection.prepare(`
@@ -132,7 +132,8 @@ export class ReviewDispatcher {
     `).get(reviewId) as { status: string; claim_owner: string | null; manual_requested_at: string | null } | undefined;
     if (!review) return { found: false, stopped: false, cancelled: 0 };
     const running = Number((this.database.connection.prepare(`
-      SELECT COUNT(*) AS total FROM agent_runs WHERE review_id=? AND status='running'
+      SELECT COUNT(*) AS total FROM agent_runs
+      WHERE review_id=? AND status='running' AND task LIKE 'code_review:%'
     `).get(reviewId) as { total: number }).total);
     const pending = review.status === 'agent_working' || review.claim_owner || review.manual_requested_at || running > 0;
     if (!pending) return { found: true, stopped: false, cancelled: 0 };
@@ -148,8 +149,8 @@ export class ReviewDispatcher {
         WHERE id=? AND remote_state='OPEN'
       `).run(now, reviewId);
       this.database.connection.prepare(`
-        UPDATE agent_runs SET status='cancelled', finished_at=?, error='Stopped by user'
-        WHERE review_id=? AND status='running'
+        UPDATE agent_runs SET status='cancelled', finished_at=?, error='Stopped by user', prompt=''
+        WHERE review_id=? AND status='running' AND task LIKE 'code_review:%'
       `).run(now, reviewId);
       this.database.connection.exec('COMMIT');
       if (result.changes) this.publishReviewChanged(reviewId);
@@ -196,6 +197,7 @@ export class ReviewDispatcher {
 
   private claimNext(config: BarbarianConfig): ReviewClaim | null {
     const now = new Date().toISOString();
+    const reviewer = (config.profile.githubLogin || config.review.requestedReviewer).trim().toLowerCase();
     this.database.connection.exec('BEGIN IMMEDIATE');
     try {
       const rows = this.database.connection.prepare(`
@@ -205,10 +207,10 @@ export class ReviewDispatcher {
         FROM review_queue
         WHERE remote_state='OPEN' AND is_draft=0 AND claim_owner IS NULL
           AND status NOT IN ('merged','closed')
-          AND (manual_requested_at IS NOT NULL OR (?=1 AND review_paused=0))
+          AND (manual_requested_at IS NOT NULL OR (?=1 AND review_paused=0 AND lower(author)<>?))
         ORDER BY manual_requested_at IS NULL, updated_at ASC
         LIMIT 50
-      `).all(config.agents.autoReview ? 1 : 0) as unknown as CandidateRow[];
+      `).all(config.agents.autoReview ? 1 : 0, reviewer) as unknown as CandidateRow[];
       for (const row of rows) {
         const trigger = reviewTrigger(row);
         if (!trigger || (row.status === 'approved' && trigger !== 'manual' && trigger !== 'new_commits')) continue;

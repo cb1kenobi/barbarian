@@ -1,4 +1,4 @@
-import { stat } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -79,9 +79,16 @@ export async function upsertLocalBranch(
   if (input.pullRequest && input.pullRequest.repository.toLowerCase() !== repository.toLowerCase()) {
     throw new LocalBranchInputError('The pull request does not belong to this repository');
   }
-  const workspacePath = path.resolve(input.workspacePath);
+  const workspacePath = await realpath(path.resolve(input.workspacePath)).catch(() => '');
   const workspace = await stat(workspacePath).catch(() => null);
   if (!workspace?.isDirectory()) throw new LocalBranchInputError('The local repository path is not available to Barbarian');
+  const origin = await runProcess('git', ['remote', 'get-url', 'origin'], {
+    cwd: workspacePath, timeoutMs: 20_000, maxOutputCharacters: 4_000,
+  });
+  const actualRepository = origin.exitCode === 0 ? repositoryFromRemote(origin.stdout.trim()) : null;
+  if (!actualRepository || actualRepository.toLowerCase() !== repository.toLowerCase()) {
+    throw new LocalBranchInputError('The workspace origin does not match the requested GitHub repository');
+  }
 
   const id = branchId(repository, input.branch);
   const pullRequestId = input.pullRequest

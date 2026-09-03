@@ -188,6 +188,7 @@ export class BarbarianDatabase {
       CREATE TABLE IF NOT EXISTS agent_runs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         review_id TEXT REFERENCES review_queue(id) ON DELETE SET NULL,
+        work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL,
         provider TEXT NOT NULL,
         task TEXT NOT NULL,
         status TEXT NOT NULL,
@@ -233,6 +234,11 @@ export class BarbarianDatabase {
         copied_at TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS app_metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_work_items_queue ON work_items(remote_state, status, priority DESC);
       CREATE INDEX IF NOT EXISTS idx_review_queue_active ON review_queue(remote_state, status, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_review_findings_review ON review_findings(review_id, resolved, outdated);
@@ -241,6 +247,7 @@ export class BarbarianDatabase {
       CREATE INDEX IF NOT EXISTS idx_local_branch_messages_branch ON local_branch_messages(branch_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_chat_messages_review ON chat_messages(review_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_issue_chat_messages_item ON issue_chat_messages(work_item_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_agent_runs_status_started ON agent_runs(status, started_at);
       CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_events(created_at DESC);
     `);
     const activityColumns = this.connection.prepare('PRAGMA table_info(activity_events)').all() as Array<{ name: string }>;
@@ -292,6 +299,8 @@ export class BarbarianDatabase {
       if (!runColumns.has(name)) this.connection.exec(`ALTER TABLE agent_runs ADD COLUMN ${name} ${definition}`);
     }
     if (!runColumns.has('branch_id')) this.connection.exec('ALTER TABLE agent_runs ADD COLUMN branch_id TEXT REFERENCES local_branches(id) ON DELETE SET NULL');
+    if (!runColumns.has('work_item_id')) this.connection.exec('ALTER TABLE agent_runs ADD COLUMN work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL');
+    this.connection.exec("UPDATE agent_runs SET prompt='' WHERE status<>'running' AND prompt<>''");
     const branchColumns = new Set((this.connection.prepare('PRAGMA table_info(local_branches)').all() as Array<{ name: string }>).map((column) => column.name));
     const branchAdditions: Array<[string, string]> = [
       ['is_dirty', 'INTEGER NOT NULL DEFAULT 0'],

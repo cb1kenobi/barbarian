@@ -100,6 +100,33 @@ describe('newReviewComments', () => {
 });
 
 describe('runReviewAgent', () => {
+  it('records the agent while review context is still being prepared', async () => {
+    const script = "console.log('BARBARIAN_RESULT: {\\\"findings\\\":0,\\\"verdict\\\":\\\"ready\\\",\\\"summary\\\":\\\"Clear.\\\"}')";
+    const { database, config, claim } = setup(script);
+    let releaseBundle!: () => void;
+    const bundleReady = new Promise<void>((resolve) => { releaseBundle = resolve; });
+    let announceFetch!: () => void;
+    const fetchStarted = new Promise<void>((resolve) => { announceFetch = resolve; });
+    const running = runReviewAgent(database, config, claim, undefined, {
+      ...dependencies,
+      fetchBundle: async () => {
+        announceFetch();
+        await bundleReady;
+        return bundle;
+      },
+    });
+    await fetchStarted;
+    expect(database.connection.prepare(`
+      SELECT task, status, prompt FROM agent_runs ORDER BY id DESC LIMIT 1
+    `).get()).toEqual({
+      task: 'code_review:new_pr', status: 'running',
+      prompt: 'Preparing review context for Acme/repo#1 at old-head.',
+    });
+    releaseBundle();
+    await running;
+    database.close();
+  });
+
   it('does not publish anything to GitHub for a clean review', async () => {
     const script = "console.log('BARBARIAN_RESULT: {\\\"findings\\\":0,\\\"verdict\\\":\\\"ready\\\",\\\"summary\\\":\\\"Clear.\\\"}')";
     const { database, config, claim } = setup(script);
@@ -119,7 +146,7 @@ describe('runReviewAgent', () => {
       SELECT command, prompt, runtime_key FROM agent_runs ORDER BY id DESC LIMIT 1
     `).get() as { command: string; prompt: string; runtime_key: string };
     expect(run.command).toContain(process.execPath);
-    expect(run.prompt).toContain('Apply the review standards of cb1-code-review');
+    expect(run.prompt).toBe('');
     expect(run.runtime_key).toBe(claim.reviewId);
     database.close();
   });
@@ -227,6 +254,20 @@ describe('runReviewAgent', () => {
     expect(row.attempt_count).toBe(1);
     expect(row.retry_after).not.toBeNull();
     expect(row.last_agent_error).toContain('did not emit');
+    database.close();
+  });
+
+  it('releases the claim when the configured provider is unavailable', async () => {
+    const { database, config, claim } = setup("console.log('unused')");
+    config.agents.default = 'missing';
+    config.agents.providers = {};
+    await expect(runReviewAgent(database, config, claim, undefined, dependencies))
+      .rejects.toThrow('is not configured');
+    expect(database.connection.prepare(`
+      SELECT status, claim_owner FROM review_queue WHERE id=?
+    `).get(claim.reviewId)).toEqual({ status: 'agent_failed', claim_owner: null });
+    expect(database.connection.prepare('SELECT COUNT(*) AS total FROM agent_runs').get())
+      .toEqual({ total: 0 });
     database.close();
   });
 

@@ -97,11 +97,9 @@ function mergeInteraction(event) {
     .map((element) => element.closest?.('button, input[type="submit"], [role="button"]'))
     .filter(Boolean);
   return controls.some((control) => {
-    const clue = [
-      control.textContent, control.getAttribute('aria-label'), control.getAttribute('data-testid'),
-      control.getAttribute('name'), control.getAttribute('value'), control.getAttribute('title'),
-    ].filter((value) => typeof value === 'string').join(' ');
-    return /(?:confirm |squash and |rebase and |queue |auto-?)?merge(?: pull request| when ready)?/i.test(clue);
+    const clue = control instanceof HTMLInputElement ? control.value : control.textContent;
+    return /^\s*(?:confirm\s+)?(?:(?:squash|rebase) and )?merge(?: pull request| when ready)?\s*$/i
+      .test(clue || '');
   });
 }
 

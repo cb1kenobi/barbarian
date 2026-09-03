@@ -100,6 +100,13 @@ function appError(caught: unknown): AppError {
 }
 
 function repositoryName(repository: string): string { return repository.split('/').at(-1) || repository; }
+function InlineCode({ text }: { text: string }) {
+  return <>{text.split(/(`[^`\n]+`)/g).filter(Boolean).map((part, index) =>
+    part.startsWith('`') && part.endsWith('`')
+      ? <code key={index}>{part.slice(1, -1)}</code>
+      : part,
+  )}</>;
+}
 function agentTaskLabel(task: string): string {
   if (task.startsWith('code_review:')) return 'Code review';
   return ({
@@ -307,7 +314,7 @@ export function App() {
           <div className="review-grid queue-viewport feedback-viewport">
             {feedback.map((review) => <button className="review-card feedback-card" key={review.id} onClick={() => setSelectedReview(review.id)}>
               <div className="review-card-head"><span><span className="repo">{repositoryName(review.repository)}</span><span className="pr">#{review.number}</span></span><FeedbackBadges review={review} /></div>
-              <h3>{review.title}</h3><p>{review.simple_summary}</p>
+              <h3>{review.title}</h3><p><InlineCode text={review.simple_summary} /></p>
               <footer className="feedback-card-footer">
                 <small className="feedback-updated" title={formatSyncTimestamp(review.remote_updated_at, dashboard?.profile.timezone)}>Updated: {formatElapsed(review.remote_updated_at, now)}</small>
                 <small className="line-counts" aria-label={`${review.additions} lines added and ${review.deletions} lines removed`}>
@@ -327,7 +334,7 @@ export function App() {
           <div className="review-grid queue-viewport review-viewport">
             {reviews.map((review) => <button className="review-card" key={review.id} onClick={() => setSelectedReview(review.id)}>
               <div className="review-card-head"><span><span className="repo">{repositoryName(review.repository)}</span><span className="pr">#{review.number}</span></span><ReviewStatusBadge status={reviewDisplayStatus(review)} /></div>
-              <h3>{review.title}</h3><p>{review.simple_summary}</p>
+              <h3>{review.title}</h3><p><InlineCode text={review.simple_summary} /></p>
               <footer className="review-card-footer">
                 <small className="review-times">
                   <span title={formatSyncTimestamp(review.remote_updated_at, dashboard?.profile.timezone)}>Updated: {formatElapsed(review.remote_updated_at, now)}</span>
@@ -505,7 +512,7 @@ function ReviewDrawer({ id, onClose, onChanged }: { id: string; onClose: () => v
   };
 
   return <div className="drawer-backdrop" onMouseDown={onClose}><aside className="drawer" onMouseDown={(event) => event.stopPropagation()}><button className="drawer-close" onClick={onClose}>×</button>
-    {!review ? <p>Loading review…</p> : <><div className="drawer-details"><span className="section-label">{review.repository} · #{review.number} · BY {review.author.startsWith('@') ? review.author : `@${review.author}`}</span><h2>{review.title}</h2><p className="plain-summary">{review.simple_summary}</p><FixedIssues review={review} />
+    {!review ? <p>Loading review…</p> : <><div className="drawer-details"><span className="section-label">{review.repository} · #{review.number} · BY {review.author.startsWith('@') ? review.author : `@${review.author}`}</span><h2>{review.title}</h2><p className="plain-summary"><InlineCode text={review.simple_summary} /></p><FixedIssues review={review} />
       <div className="drawer-status"><ReviewStatusBadge status={reviewDisplayStatus(review)} />{review.pending_reason && <span>Queued: {review.pending_reason.replaceAll('_', ' ')}</span>}<span>{review.findings_count} blocking issues</span><span>{review.review_skill}</span></div>
       <div className="drawer-actions"><button disabled={!!busy} onClick={() => void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: '{}' }))}>{busy === 'review' ? 'Starting…' : 'Send review agent'}</button><button disabled={!!busy} onClick={() => void action('workspace', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'POST', body: '{}' }))}>{busy === 'workspace' ? 'Cloning & building…' : review.workspace_path ? 'Rebuild workspace' : 'Prepare locally'}</button>{review.workspace_path && <button className="muted-button" disabled={!!busy} onClick={() => void action('cleanup', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'DELETE' }))}>Clean up</button>}<a href={review.url} target="_blank">Open GitHub ↗</a></div>
       {review.workspace_path && <code className="workspace-path">{review.workspace_path}</code>}{error && <p className="inline-error">{error}</p>}</div>

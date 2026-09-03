@@ -24,7 +24,7 @@
   --accent-panel: #1d2317;
   --accent-panel-end: #191b16;
   --accent-panel-border: #3b432b;
-  --overlay: #0506041a;
+  --overlay: #05060448;
   --shadow: #000b;
   --ember: #ff6b3d;
   --brand-mark: url('/weapons/double-axe.svg');
@@ -259,6 +259,7 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
 .drawer-close { position: absolute; top: 17px; right: 19px; border: 0; background: none; color: #777c70; font-size: 1.6875rem; cursor: pointer; }
 .drawer h2 { max-width: 510px; margin: 8px 0 13px; font-size: 1.6875rem; line-height: 1.2; letter-spacing: -.03em; }
 .plain-summary { padding: 13px 15px; border-left: 2px solid var(--acid); background: var(--panel-hover); color: var(--muted-strong); font-size: .875rem; line-height: 1.6; }
+.review-card p code, .plain-summary code { color: var(--text); font: .95em ui-monospace, SFMono-Regular, Menlo, monospace; }
 .fixed-issues { margin: 10px 0 0; color: var(--muted); font-size: .8125rem; line-height: 1.5; }
 .fixed-issues strong { color: var(--muted-strong); }
 .fixed-issues a { color: var(--acid); font-weight: 700; text-underline-offset: 2px; }
@@ -386,7 +387,7 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
 .field-label.spaced { margin-top: 17px; }
 .choice-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .choice-card { position: relative; overflow: hidden; display: flex !important; align-items: center; gap: 7px; min-width: 96px; padding: 10px 12px; border: 1px solid var(--line-strong); background: var(--panel-deep); cursor: pointer; }
-.choice-card:has(input:checked) { border-color: var(--acid); box-shadow: inset 0 -2px var(--acid); color: var(--ink); }
+.choice-card:has(input:checked) { border-color: var(--acid); color: var(--ink); }
 .choice-card > span { display: inline !important; margin: 0 !important; }
 .theme-light::after, .theme-dark::after, .theme-slayer::after { content: ''; width: 15px; height: 15px; margin-left: auto; border: 1px solid #777; background: #f4f5f0; box-shadow: inset 5px 0 #587a17; }
 .theme-dark::after { border-color: #3a3e34; background: #11120f; box-shadow: inset 5px 0 #c6f45d; }

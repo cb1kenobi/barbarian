@@ -73,4 +73,10 @@ The \`delete_audit_logs_before\` operation now returns the value computed by \`d
     expect(summary).toContain('`delete_audit_logs_before`');
     expect(summary).toContain('`deleteHistory`');
   });
+
+  it('bounds generated descriptions while preserving ordinary complete summaries', () => {
+    const summary = summarizePullRequest('fix: generated description', `## Summary\n\n${'word '.repeat(2_000)}.`);
+    expect(summary.length).toBeLessThanOrEqual(2_400);
+    expect(summary.endsWith('…')).toBe(true);
+  });
 });
