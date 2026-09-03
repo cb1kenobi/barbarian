@@ -21,7 +21,9 @@ function config(maxConcurrent = 2): BarbarianConfig {
     review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
     linear: { enabled: false, command: [] },
     agents: {
-      default: 'fake', autoReview: true, maxConcurrent, maxAutomaticAttempts: 3,
+      autoReview: true, maxConcurrent, maxAutomaticAttempts: 3,
+      codeReview: { provider: 'fake', model: '', effort: '' },
+      chat: { provider: 'fake', model: '', effort: '' },
       retryBaseMinutes: 1, maxRunsPerPullRequestPerHour: 3,
       providers: { fake: { command: process.execPath, args: [] } },
     },

@@ -21,7 +21,9 @@ const config: BarbarianConfig = {
   review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
   linear: { enabled: false, command: [] },
   agents: {
-    default: 'codex', autoReview: false, maxConcurrent: 2, maxAutomaticAttempts: 3,
+    autoReview: false, maxConcurrent: 2, maxAutomaticAttempts: 3,
+    codeReview: { provider: 'codex', model: '', effort: '' },
+    chat: { provider: 'codex', model: '', effort: '' },
     retryBaseMinutes: 5, maxRunsPerPullRequestPerHour: 3, providers: {},
   },
   statusUpdate: {

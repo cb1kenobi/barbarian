@@ -5,6 +5,7 @@ import { recordActivity } from './activity.js';
 import { refreshReviewContext } from './review-context.js';
 import { agentInvocationArgs } from './agent-provider.js';
 import { completedReviewStatus } from './review-state.js';
+import { configuredAgentForTask } from './agent-config.js';
 import {
   fetchPullRequestReviewBundle,
   postPullRequestReview,
@@ -34,13 +35,6 @@ export interface ReviewClaim {
   trigger: 'new_pr' | 'new_commits' | 'feedback' | 'manual';
   provider?: string;
   attemptCount: number;
-}
-
-function providerFor(config: BarbarianConfig, requested?: string) {
-  const name = requested || config.agents.default;
-  const provider = config.agents.providers[name];
-  if (!provider) throw new Error(`Agent provider "${name}" is not configured`);
-  return { name, provider };
 }
 
 function agentEnvironment(): NodeJS.ProcessEnv {
@@ -92,7 +86,7 @@ function createAgentRun(
   claim?: ReviewClaim,
   options: AgentExecutionOptions = {},
 ): number {
-  const { name, provider } = providerFor(config, requestedProvider);
+  const { name, provider } = configuredAgentForTask(config, task, requestedProvider);
   const args = agentInvocationArgs(provider, options.workspaceWrite ? { workspaceWrite: true } : {});
   const inserted = database.connection.prepare(`
     INSERT INTO agent_runs(
@@ -118,7 +112,7 @@ export async function executeAgent(
   claim?: ReviewClaim,
   options: AgentExecutionOptions = {},
 ): Promise<string> {
-  const { provider } = providerFor(config, requestedProvider);
+  const { provider } = configuredAgentForTask(config, task, requestedProvider);
   const args = agentInvocationArgs(provider, options.workspaceWrite ? { workspaceWrite: true } : {});
   const runId = options.runId || createAgentRun(
     database, config, reviewId, task, prompt, requestedProvider, claim, options,

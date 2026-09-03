@@ -5,7 +5,7 @@ export type Theme = 'light' | 'dark' | 'slayer';
 export type FontSize = 'small' | 'normal';
 export type AgentEffort = '' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export interface AppearanceConfig { theme: Theme; fontSize: FontSize; weapon: Weapon }
-interface AgentProviderSettings { model: string; effort: AgentEffort }
+interface AgentSelectionSettings { provider: string; model: string; effort: AgentEffort }
 export interface RepositoryConfig {
   name: string;
   priority: number;
@@ -21,13 +21,13 @@ export interface SettingsConfig {
   repositories: RepositoryConfig[];
   review: { requestedReviewer: string; fallbackTeams: string[]; autoCleanup: boolean };
   agents: {
-    default: string;
+    codeReview: AgentSelectionSettings;
+    chat: AgentSelectionSettings;
     autoReview: boolean;
     maxConcurrent: number;
     maxAutomaticAttempts: number;
     retryBaseMinutes: number;
     maxRunsPerPullRequestPerHour: number;
-    providers: Record<string, AgentProviderSettings>;
   };
   statusUpdate: { enabled: boolean; workdays: string[]; daysOff: string[] };
 }
@@ -121,6 +121,36 @@ function messageFromResponse(body: unknown, fallback: string): string {
   return issue ? `${issue.path || 'config'}: ${issue.message || 'invalid value'}` : candidate.error || fallback;
 }
 
+function AgentPicker({
+  selection, providers, modelsLoading, onChange,
+}: {
+  selection: AgentSelectionSettings;
+  providers: AdvancedSettings['providers'];
+  modelsLoading: boolean;
+  onChange: (selection: AgentSelectionSettings) => void;
+}) {
+  const provider = providers.find((candidate) => candidate.name === selection.provider);
+  const detectedModels = provider?.models || [];
+  const modelDiscoveryLoading = Boolean(modelsLoading && provider?.supportsModelDiscovery && detectedModels.length === 0);
+  const selectedModelIsDetected = !selection.model || detectedModels.some((model) => model.id === selection.model);
+  const defaultName = detectedModels.find((model) => model.id === provider?.defaultModel)?.name || provider?.defaultModel;
+  return <div className="settings-grid three agent-picker">
+    <label><span>Provider</span><select required value={selection.provider} onChange={(event) => onChange({ provider: event.target.value, model: '', effort: '' })}>
+      {!providers.some((candidate) => candidate.name === selection.provider) && <option value={selection.provider}>{selection.provider}</option>}
+      {providers.map((candidate) => <option key={candidate.name} value={candidate.name}>{candidate.name}</option>)}
+    </select></label>
+    <label><span>Model <small>{detectedModels.length ? `${detectedModels.length} detected` : modelDiscoveryLoading ? 'loading' : provider?.error ? 'discovery failed' : provider?.supportsModel ? defaultName ? `CLI default: ${defaultName}` : 'blank uses CLI default' : 'not supported'}</small></span>{modelDiscoveryLoading
+      ? <div className="model-discovery-loading" role="status"><span aria-hidden="true" />Detecting models…</div>
+      : detectedModels.length ? <select value={selection.model} onChange={(event) => onChange({ ...selection, model: event.target.value })}>
+        <option value="">{defaultName ? `CLI default — ${defaultName}` : 'CLI default'}</option>
+        {!selectedModelIsDetected && <option value={selection.model}>{selection.model}</option>}
+        {detectedModels.map((model) => <option key={model.id} value={model.id}>{model.name}{model.isDefault ? ' — default' : ''}</option>)}
+      </select>
+      : <input disabled={!provider?.supportsModel} placeholder="CLI default" value={selection.model} onChange={(event) => onChange({ ...selection, model: event.target.value })} />}</label>
+    <label><span>Effort <small>{provider?.supportsEffort ? 'reasoning depth' : 'not supported'}</small></span><select className={!provider?.supportsEffort ? 'unsupported-field' : undefined} disabled={!provider?.supportsEffort} value={provider?.supportsEffort ? selection.effort : ''} onChange={(event) => onChange({ ...selection, effort: event.target.value as AgentEffort })}>{effortLevels.map((effort) => <option key={effort || 'default'} value={effort}>{effort || 'CLI default'}</option>)}</select></label>
+  </div>;
+}
+
 export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => Promise<void> }) {
   const [draft, setDraft] = useState<SettingsDraft | null>(null);
   const [configFile, setConfigFile] = useState('config/barbarian.yaml');
@@ -201,16 +231,6 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
       id: nextId(), name: '', priority: 0, watchIssues: true, watchPullRequests: true,
       reviewSkill: 'cb1-code-review', labelsText: '',
     }],
-  }));
-  const updateProvider = (name: string, patch: Partial<AgentProviderSettings>) => setDraft((current) => current && ({
-    ...current,
-    agents: {
-      ...current.agents,
-      providers: {
-        ...current.agents.providers,
-        [name]: { ...(current.agents.providers[name] || { model: '', effort: '' }), ...patch },
-      },
-    },
   }));
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -309,36 +329,23 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
             </div>
           </div></fieldset>
 
-          <fieldset className="settings-section"><legend>Agents</legend><div className="settings-grid four">
-            <label><span>Default provider</span><input list="provider-names" required value={draft.agents.default} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, default: event.target.value } })} /><datalist id="provider-names">{advanced?.providers.map((provider) => <option key={provider.name} value={provider.name} />)}</datalist></label>
+          <fieldset className="settings-section"><legend>Code Review Agent</legend>
+            <p className="settings-section-description">Used for automatic PR reviews, manual PR reviews, and local branch reviews.</p>
+            <AgentPicker selection={draft.agents.codeReview} providers={advanced?.providers || []} modelsLoading={modelsLoading} onChange={(codeReview) => setDraft({ ...draft, agents: { ...draft.agents, codeReview } })} />
+          </fieldset>
+
+          <fieldset className="settings-section"><legend>Chat Agent</legend>
+            <p className="settings-section-description">Used for conversations about pull requests, issues, and local branches.</p>
+            <AgentPicker selection={draft.agents.chat} providers={advanced?.providers || []} modelsLoading={modelsLoading} onChange={(chat) => setDraft({ ...draft, agents: { ...draft.agents, chat } })} />
+          </fieldset>
+
+          <fieldset className="settings-section"><legend>Agent behavior</legend><div className="settings-grid four">
             <label><span>Max concurrent</span><input type="number" min="1" max="8" value={draft.agents.maxConcurrent} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, maxConcurrent: Number(event.target.value) } })} /></label>
             <label><span>Max attempts</span><input type="number" min="1" max="10" value={draft.agents.maxAutomaticAttempts} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, maxAutomaticAttempts: Number(event.target.value) } })} /></label>
             <label><span>Runs / PR / hour</span><input type="number" min="1" max="20" value={draft.agents.maxRunsPerPullRequestPerHour} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, maxRunsPerPullRequestPerHour: Number(event.target.value) } })} /></label>
             <label><span>Retry base (minutes)</span><input type="number" min="1" max="120" value={draft.agents.retryBaseMinutes} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, retryBaseMinutes: Number(event.target.value) } })} /></label>
             <label className="check-field"><input type="checkbox" checked={draft.agents.autoReview} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, autoReview: event.target.checked } })} /><span>Automatically review</span></label>
-          </div>
-          <div className="settings-subhead"><strong>Provider models</strong><small>Blank values use that CLI’s defaults. Executable commands remain editable only in YAML.</small></div>
-          <div className="settings-list providers-list">{advanced?.providers.map((provider) => {
-            const values = draft.agents.providers[provider.name] || { model: '', effort: '' };
-            const detectedModels = provider.models || [];
-            const modelDiscoveryLoading = modelsLoading && provider.supportsModelDiscovery && detectedModels.length === 0;
-            const selectedModelIsDetected = !values.model || detectedModels.some((model) => model.id === values.model);
-            const defaultName = detectedModels.find((model) => model.id === provider.defaultModel)?.name || provider.defaultModel;
-            return <article className="settings-card provider-card" key={provider.name}>
-              <div className="settings-card-head"><strong>{provider.name}</strong>{draft.agents.default === provider.name && <small>Default provider</small>}</div>
-              <div className="settings-grid two">
-                <label><span>Model <small>{detectedModels.length ? `${detectedModels.length} detected` : modelDiscoveryLoading ? 'loading' : provider.error ? 'discovery failed' : provider.supportsModel ? defaultName ? `CLI default: ${defaultName}` : 'blank uses CLI default' : 'not supported'}</small></span>{modelDiscoveryLoading
-                  ? <div className="model-discovery-loading" role="status"><span aria-hidden="true" />Detecting models…</div>
-                  : detectedModels.length ? <select value={values.model} onChange={(event) => updateProvider(provider.name, { model: event.target.value })}>
-                    <option value="">{defaultName ? `CLI default — ${defaultName}` : 'CLI default'}</option>
-                    {!selectedModelIsDetected && <option value={values.model}>{values.model}</option>}
-                    {detectedModels.map((model) => <option key={model.id} value={model.id}>{model.name}{model.isDefault ? ' — default' : ''}</option>)}
-                  </select>
-                  : <input disabled={!provider.supportsModel} placeholder="CLI default" value={values.model} onChange={(event) => updateProvider(provider.name, { model: event.target.value })} />}</label>
-                <label><span>Effort <small>{provider.supportsEffort ? 'review depth' : 'not supported'}</small></span><select disabled={!provider.supportsEffort} value={values.effort} onChange={(event) => updateProvider(provider.name, { effort: event.target.value as AgentEffort })}>{effortLevels.map((effort) => <option key={effort || 'default'} value={effort}>{effort || 'CLI default'}</option>)}</select></label>
-              </div>
-            </article>;
-          })}</div></fieldset>
+          </div></fieldset>
 
           <fieldset className="settings-section"><legend>Status updates &amp; Linear</legend><div className="settings-grid two">
             <div><label className="check-field"><input type="checkbox" checked={draft.statusUpdate.enabled} onChange={(event) => setDraft({ ...draft, statusUpdate: { ...draft.statusUpdate, enabled: event.target.checked } })} /><span>Prepare daily status updates</span></label><span className="field-label spaced">Workdays</span><div className="weekday-row">{weekdays.map((day) => <label key={day}><input type="checkbox" checked={draft.statusUpdate.workdays.includes(day)} onChange={(event) => setDraft({ ...draft, statusUpdate: { ...draft.statusUpdate, workdays: event.target.checked ? [...draft.statusUpdate.workdays, day] : draft.statusUpdate.workdays.filter((candidate) => candidate !== day) } })} /><span>{day.slice(0, 3)}</span></label>)}</div><label><span>Days off <small>dates separated by commas or lines</small></span><textarea rows={2} value={draft.statusUpdate.daysOff.join('\n')} onChange={(event) => setDraft({ ...draft, statusUpdate: { ...draft.statusUpdate, daysOff: splitItems(event.target.value) } })} /></label></div>

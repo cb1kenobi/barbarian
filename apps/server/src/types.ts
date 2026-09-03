@@ -24,8 +24,16 @@ export type BrandWeapon = 'double-axe' | 'sword' | 'crossed-swords' | 'single-ax
 export interface AgentProviderConfig {
   command: string;
   args: string[];
+  /** @deprecated Model and effort now belong to a task-specific agent selection. */
   model?: string;
+  /** @deprecated Model and effort now belong to a task-specific agent selection. */
   effort?: AgentEffort;
+}
+
+export interface AgentSelectionConfig {
+  provider: string;
+  model: string;
+  effort: AgentEffort | '';
 }
 
 export interface BarbarianConfig {
@@ -42,7 +50,8 @@ export interface BarbarianConfig {
   };
   linear: { enabled: boolean; command: string[] };
   agents: {
-    default: string;
+    codeReview: AgentSelectionConfig;
+    chat: AgentSelectionConfig;
     autoReview: boolean;
     maxConcurrent: number;
     maxAutomaticAttempts: number;

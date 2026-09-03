@@ -47,7 +47,9 @@ describe('local branch agent review', () => {
       review: { requestedReviewer: '', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
       linear: { enabled: false, command: [] },
       agents: {
-        default: 'fake', autoReview: false, maxConcurrent: 1, maxAutomaticAttempts: 1,
+        autoReview: false, maxConcurrent: 1, maxAutomaticAttempts: 1,
+        codeReview: { provider: 'fake', model: '', effort: '' },
+        chat: { provider: 'fake', model: '', effort: '' },
         retryBaseMinutes: 1, maxRunsPerPullRequestPerHour: 1,
         providers: { fake: { command: process.execPath, args: ['-e', `let input='';process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{if(input.includes('base-only.ts'))process.exit(2);console.log(${JSON.stringify(output)})})`] } },
       },

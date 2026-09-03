@@ -173,7 +173,14 @@ Agent commands are arrays, not shell strings. Barbarian launches them without a 
 
 ```yaml
 agents:
-  default: codex
+  codeReview:
+    provider: codex
+    model: ""
+    effort: ""
+  chat:
+    provider: claude
+    model: ""
+    effort: ""
   autoReview: true
   maxConcurrent: 2
   maxAutomaticAttempts: 3
@@ -191,7 +198,7 @@ agents:
       args: [-p, --mode, ask, --output-format, text]
 ```
 
-Set a provider’s model and effort in Settings. Barbarian passes the selected model to Codex, Claude, Cursor, or Gemini; effort is passed to Codex and Claude, whose installed CLIs support it. Cursor model IDs already encode their effort level. Barbarian discovers the installed Cursor CLI’s available choices with `cursor-agent --list-models`. Blank values retain the CLI defaults. The command and other arguments remain editable only in YAML.
+Choose the provider, model, and effort independently for the Code Review Agent and Chat Agent in Settings. Code review selection applies to automatic and manual PR reviews as well as local branch reviews; chat selection applies to PR, issue, and editor conversations. Barbarian passes the selected model to Codex, Claude, Cursor, or Gemini. Effort is available for Codex and Claude; Cursor model IDs already encode their effort level. Detected model lists come from the installed CLIs, and blank values retain the selected CLI’s defaults. Provider commands and their base arguments remain editable only in YAML.
 
 Provider API keys are optional because Barbarian launches local CLI programs. A CLI authenticated through its own login flow—such as `codex login` using ChatGPT—does not need an API key in `.env`. Put a provider key there only when that CLI is configured to use one. Barbarian inherits the environment but never returns secrets from its settings API.
 

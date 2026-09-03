@@ -39,7 +39,14 @@ linear:
   command: []
 
 agents:
-  default: codex
+  codeReview:
+    provider: codex
+    model: ""
+    effort: ""
+  chat:
+    provider: codex
+    model: ""
+    effort: ""
   autoReview: false
   maxConcurrent: 2
   maxAutomaticAttempts: 3

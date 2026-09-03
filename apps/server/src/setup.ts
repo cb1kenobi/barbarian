@@ -84,7 +84,7 @@ export async function collectSetupAnswers(
   const githubLogin = (await ask(`GitHub username${current.profile.githubLogin ? ` [${current.profile.githubLogin}]` : ''}: `)).trim()
     || current.profile.githubLogin;
   const runOnStartup = await askBoolean(ask, 'Sync when Barbarian starts?', current.monitor.runOnStartup);
-  const defaultAgent = await askDefaultAgent(ask, write, installed, current.agents.default);
+  const defaultAgent = await askDefaultAgent(ask, write, installed, current.agents.codeReview.provider);
   const installEditorExtension = await askBoolean(ask, 'Build and install the Cursor/VS Code extension?', false);
   const installChromeExtension = await askBoolean(ask, 'Set up the Chrome extension?', false);
   return { name, githubLogin, runOnStartup, defaultAgent, installEditorExtension, installChromeExtension };
@@ -108,7 +108,8 @@ export function applySetupAnswers(current: BarbarianConfig, answers: SetupAnswer
     },
     agents: {
       ...current.agents,
-      default: answers.defaultAgent,
+      codeReview: { ...current.agents.codeReview, provider: answers.defaultAgent },
+      chat: { ...current.agents.chat, provider: answers.defaultAgent },
     },
   });
 }

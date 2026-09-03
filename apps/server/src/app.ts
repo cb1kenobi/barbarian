@@ -22,6 +22,7 @@ import { completedReviewStatus, displayReviewStatus, newCommitsSinceReview, revi
 import { reviewCardMetadata, type ReviewCardMetadata } from './review-card-metadata.js';
 import { fixedIssueReferences } from './fixed-issues.js';
 import { configuredAgentEffort, configuredAgentModel } from './agent-display.js';
+import { agentSelectionForTask } from './agent-config.js';
 import { agentProviderCapabilities, agentProviderFamily } from './agent-provider.js';
 import { discoverAgentModels, type AgentModelOption } from './agent-models.js';
 import { authoredPullRequestsNeedingAttention } from './authored-pull-requests.js';
@@ -145,15 +146,13 @@ function settingsView(config: BarbarianConfig): {
         autoCleanup: config.review.autoCleanup,
       },
       agents: {
-        default: config.agents.default,
+        codeReview: config.agents.codeReview,
+        chat: config.agents.chat,
         autoReview: config.agents.autoReview,
         maxConcurrent: config.agents.maxConcurrent,
         maxAutomaticAttempts: config.agents.maxAutomaticAttempts,
         retryBaseMinutes: config.agents.retryBaseMinutes,
         maxRunsPerPullRequestPerHour: config.agents.maxRunsPerPullRequestPerHour,
-        providers: Object.fromEntries(Object.entries(config.agents.providers).map(([name, provider]) => [name, {
-          model: provider.model || '', effort: provider.effort || '',
-        }])),
       },
       statusUpdate: config.statusUpdate,
     },
@@ -272,8 +271,8 @@ function agentRunView(config: BarbarianConfig, row: Record<string, unknown>) {
     review_id: row.review_id ? String(row.review_id) : null,
     branch_id: row.branch_id ? String(row.branch_id) : null,
     agent,
-    model: configuredAgentModel(config, agent),
-    effort: configuredAgentEffort(config, agent),
+    model: configuredAgentModel(config, agent, String(row.task)),
+    effort: configuredAgentEffort(config, agent, String(row.task)),
     task: String(row.task),
     status: String(row.status),
     started_at: String(row.started_at),
@@ -653,8 +652,8 @@ export async function createApp(
     );
     const inserted = database.connection.prepare(`
       INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'assistant', ?, ?, ?)
-    `).run(id, body.provider || config.agents.default, response, new Date().toISOString());
-    return { message: { id: Number(inserted.lastInsertRowid), role: 'assistant', author: body.provider || config.agents.default, content: response } };
+    `).run(id, body.provider || agentSelectionForTask(config, 'chat').provider, response, new Date().toISOString());
+    return { message: { id: Number(inserted.lastInsertRowid), role: 'assistant', author: body.provider || agentSelectionForTask(config, 'chat').provider, content: response } };
   });
 
   app.post('/api/reviews/:id/track', async (request, reply) => {
@@ -820,11 +819,11 @@ export async function createApp(
     const inserted = database.connection.prepare(`
       INSERT INTO issue_chat_messages(work_item_id, role, author, content, created_at)
       VALUES (?, 'assistant', ?, ?, ?)
-    `).run(id, body.provider || config.agents.default, response, new Date().toISOString());
+    `).run(id, body.provider || agentSelectionForTask(config, 'issue_chat').provider, response, new Date().toISOString());
     return {
       message: {
         id: Number(inserted.lastInsertRowid), role: 'assistant',
-        author: body.provider || config.agents.default, content: response,
+        author: body.provider || agentSelectionForTask(config, 'issue_chat').provider, content: response,
       },
     };
   });
@@ -1004,8 +1003,8 @@ export async function createApp(
       );
       const inserted = database.connection.prepare(`
         INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'assistant', ?, ?, ?)
-      `).run(branch.review_id, body.provider || config.agents.default, response, new Date().toISOString());
-      return { message: { id: Number(inserted.lastInsertRowid), role: 'assistant', author: body.provider || config.agents.default, content: response } };
+      `).run(branch.review_id, body.provider || agentSelectionForTask(config, 'chat').provider, response, new Date().toISOString());
+      return { message: { id: Number(inserted.lastInsertRowid), role: 'assistant', author: body.provider || agentSelectionForTask(config, 'chat').provider, content: response } };
     }
     database.connection.prepare(`
       INSERT INTO local_branch_messages(branch_id, role, author, content, created_at) VALUES (?, 'user', ?, ?, ?)
@@ -1020,8 +1019,8 @@ export async function createApp(
     );
     const inserted = database.connection.prepare(`
       INSERT INTO local_branch_messages(branch_id, role, author, content, created_at) VALUES (?, 'assistant', ?, ?, ?)
-    `).run(id, body.provider || config.agents.default, response, new Date().toISOString());
-    return { message: { id: Number(inserted.lastInsertRowid), role: 'assistant', author: body.provider || config.agents.default, content: response } };
+    `).run(id, body.provider || agentSelectionForTask(config, 'local_branch_chat').provider, response, new Date().toISOString());
+    return { message: { id: Number(inserted.lastInsertRowid), role: 'assistant', author: body.provider || agentSelectionForTask(config, 'local_branch_chat').provider, content: response } };
   });
 
   app.get('/api/settings', async () => ({

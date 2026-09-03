@@ -12,7 +12,9 @@ function config(provider: BarbarianConfig['agents']['providers'][string]): Barba
     review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '', autoCleanup: true },
     linear: { enabled: false, command: [] },
     agents: {
-      default: 'codex', autoReview: true, maxConcurrent: 2, maxAutomaticAttempts: 3,
+      autoReview: true, maxConcurrent: 2, maxAutomaticAttempts: 3,
+      codeReview: { provider: 'codex', model: provider.model || '', effort: provider.effort || '' },
+      chat: { provider: 'codex', model: provider.model || '', effort: provider.effort || '' },
       retryBaseMinutes: 5, maxRunsPerPullRequestPerHour: 3, providers: { codex: provider },
     },
     statusUpdate: { enabled: false, workdays: [], daysOff: [] },

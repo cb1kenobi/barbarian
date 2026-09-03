@@ -29,13 +29,15 @@ const repositorySchema = z.object({
 }).strict();
 
 const agentEffortSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
-const writableAgentProviderSchema = z.object({
+const agentSelectionSchema = z.object({
+  provider: z.string().min(1).max(100),
   model: z.string().max(200).default(''),
   effort: z.union([agentEffortSchema, z.literal('')]).default(''),
 }).strict();
 
 const agentsSchema = z.object({
-  default: z.string().default('codex'),
+  codeReview: agentSelectionSchema,
+  chat: agentSelectionSchema,
   autoReview: z.boolean().default(false),
   maxConcurrent: z.number().int().min(1).max(8).default(2),
   maxAutomaticAttempts: z.number().int().min(1).max(10).default(3),
@@ -77,8 +79,10 @@ export const configSchema = z.object({
   }),
   linear: z.object({ enabled: z.boolean().default(false), command: z.array(z.string()).default([]) }),
   agents: agentsSchema.superRefine((agents, context) => {
-    if (Object.keys(agents.providers).length > 0 && !agents.providers[agents.default]) {
-      context.addIssue({ code: 'custom', path: ['default'], message: 'Default agent must name a configured provider' });
+    for (const [field, selection] of [['codeReview', agents.codeReview], ['chat', agents.chat]] as const) {
+      if (Object.keys(agents.providers).length > 0 && !agents.providers[selection.provider]) {
+        context.addIssue({ code: 'custom', path: [field, 'provider'], message: 'Agent must name a configured provider' });
+      }
     }
   }),
   statusUpdate: z.object({
@@ -95,13 +99,14 @@ export const writableConfigSchema = z.object({
   repositories: configSchema.shape.repositories,
   review: configSchema.shape.review.pick({ requestedReviewer: true, fallbackTeams: true, autoCleanup: true }).strict(),
   agents: agentsSchema.pick({
-    default: true,
+    codeReview: true,
+    chat: true,
     autoReview: true,
     maxConcurrent: true,
     maxAutomaticAttempts: true,
     retryBaseMinutes: true,
     maxRunsPerPullRequestPerHour: true,
-  }).extend({ providers: z.record(z.string(), writableAgentProviderSchema).default({}) }).strict(),
+  }).strict(),
   statusUpdate: configSchema.shape.statusUpdate.strict(),
 }).strict();
 
@@ -129,7 +134,31 @@ export async function loadConfig(): Promise<BarbarianConfig> {
 }
 
 export function parseConfig(value: unknown): BarbarianConfig {
-  return configSchema.parse(value) as BarbarianConfig;
+  if (!value || typeof value !== 'object') return configSchema.parse(value) as BarbarianConfig;
+  const source = value as Record<string, unknown>;
+  const rawAgents = source.agents && typeof source.agents === 'object'
+    ? source.agents as Record<string, unknown>
+    : {};
+  const legacyProviderName = typeof rawAgents.default === 'string' ? rawAgents.default : 'codex';
+  const rawProviders = rawAgents.providers && typeof rawAgents.providers === 'object'
+    ? rawAgents.providers as Record<string, unknown>
+    : {};
+  const legacyProvider = rawProviders[legacyProviderName] && typeof rawProviders[legacyProviderName] === 'object'
+    ? rawProviders[legacyProviderName] as Record<string, unknown>
+    : {};
+  const legacySelection = {
+    provider: legacyProviderName,
+    model: typeof legacyProvider.model === 'string' ? legacyProvider.model : '',
+    effort: typeof legacyProvider.effort === 'string' ? legacyProvider.effort : '',
+  };
+  return configSchema.parse({
+    ...source,
+    agents: {
+      ...rawAgents,
+      codeReview: rawAgents.codeReview || legacySelection,
+      chat: rawAgents.chat || legacySelection,
+    },
+  }) as BarbarianConfig;
 }
 
 function contentRevision(source: string): string {
@@ -184,21 +213,14 @@ function safeUpdate(current: BarbarianConfig, submitted: WritableConfig): Barbar
     },
     agents: {
       ...current.agents,
-      default: submitted.agents.default,
+      codeReview: submitted.agents.codeReview,
+      chat: submitted.agents.chat,
       autoReview: submitted.agents.autoReview,
       maxConcurrent: submitted.agents.maxConcurrent,
       maxAutomaticAttempts: submitted.agents.maxAutomaticAttempts,
       retryBaseMinutes: submitted.agents.retryBaseMinutes,
       maxRunsPerPullRequestPerHour: submitted.agents.maxRunsPerPullRequestPerHour,
-      providers: Object.fromEntries(Object.entries(current.agents.providers).map(([name, provider]) => {
-        const update = submitted.agents.providers[name];
-        if (!update) return [name, provider];
-        return [name, {
-          ...provider,
-          model: update.model.trim() || undefined,
-          effort: update.effort || undefined,
-        }];
-      })),
+      providers: current.agents.providers,
     },
     statusUpdate: submitted.statusUpdate,
   });
@@ -212,7 +234,8 @@ const writablePaths: Array<{ path: Array<string>; value: (config: BarbarianConfi
   { path: ['review', 'requestedReviewer'], value: (config) => config.review.requestedReviewer },
   { path: ['review', 'fallbackTeams'], value: (config) => config.review.fallbackTeams },
   { path: ['review', 'autoCleanup'], value: (config) => config.review.autoCleanup },
-  { path: ['agents', 'default'], value: (config) => config.agents.default },
+  { path: ['agents', 'codeReview'], value: (config) => config.agents.codeReview },
+  { path: ['agents', 'chat'], value: (config) => config.agents.chat },
   { path: ['agents', 'autoReview'], value: (config) => config.agents.autoReview },
   { path: ['agents', 'maxConcurrent'], value: (config) => config.agents.maxConcurrent },
   { path: ['agents', 'maxAutomaticAttempts'], value: (config) => config.agents.maxAutomaticAttempts },
@@ -230,13 +253,12 @@ export async function saveConfigUpdate(
   const document = parseDocument(documentSource ?? await readFile(filename, 'utf8'));
   if (document.errors.length) throw document.errors[0];
   for (const entry of writablePaths) document.setIn(entry.path, entry.value(config));
+  document.deleteIn(['agents', 'default']);
   for (const [name, provider] of Object.entries(config.agents.providers)) {
     const modelPath = ['agents', 'providers', name, 'model'];
     const effortPath = ['agents', 'providers', name, 'effort'];
-    if (provider.model) document.setIn(modelPath, provider.model);
-    else document.deleteIn(modelPath);
-    if (provider.effort) document.setIn(effortPath, provider.effort);
-    else document.deleteIn(effortPath);
+    document.deleteIn(modelPath);
+    document.deleteIn(effortPath);
   }
   return persistYaml(document.toString(), filename, expectedRevision, documentSource !== undefined);
 }

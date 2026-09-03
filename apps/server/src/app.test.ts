@@ -22,7 +22,9 @@ const config: BarbarianConfig = {
   review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
   linear: { enabled: false, command: [] },
   agents: {
-    default: 'codex', autoReview: false, maxConcurrent: 2, maxAutomaticAttempts: 3,
+    autoReview: false, maxConcurrent: 2, maxAutomaticAttempts: 3,
+    codeReview: { provider: 'codex', model: '', effort: '' },
+    chat: { provider: 'codex', model: '', effort: '' },
     retryBaseMinutes: 5, maxRunsPerPullRequestPerHour: 3, providers: {},
   },
   statusUpdate: { enabled: false, workdays: [], daysOff: [] },
@@ -651,7 +653,7 @@ describe('local branch context', () => {
     directories.push(directory);
     const database = new BarbarianDatabase(path.join(directory, 'test.db'));
     const current = structuredClone(config);
-    current.agents.default = 'fake';
+    current.agents.chat.provider = 'fake';
     current.agents.providers = {
       fake: { command: process.execPath, args: ['-e', 'console.log(process.cwd())'] },
     };
@@ -704,7 +706,10 @@ describe('settings API', () => {
       expect(before.json()).toMatchObject({
         config: {
           appearance: { theme: 'dark', fontSize: 'small', weapon: 'double-axe' },
-          agents: { providers: { codex: { model: '', effort: '' } } },
+          agents: {
+            codeReview: { provider: 'codex', model: '', effort: '' },
+            chat: { provider: 'codex', model: '', effort: '' },
+          },
         },
         advanced: { providers: [{ name: 'codex', supportsModel: true, supportsEffort: true }] },
         revision: 'memory:1',
@@ -721,7 +726,8 @@ describe('settings API', () => {
         appearance: { theme: 'slayer', fontSize: 'normal', weapon: 'double-axe' },
         agents: {
           ...(editable.agents as Record<string, unknown>),
-          providers: { codex: { model: 'gpt-review', effort: 'high' } },
+          codeReview: { provider: 'codex', model: 'gpt-review', effort: 'high' },
+          chat: { provider: 'codex', model: 'gpt-chat', effort: 'medium' },
         },
         repositories: [...current.repositories, {
           name: 'Acme/ui', priority: 5, watchIssues: false, watchPullRequests: true,
@@ -746,9 +752,9 @@ describe('settings API', () => {
       expect(saved.statusCode).toBe(200);
       expect(persisted).toHaveLength(1);
       expect(persisted[0]).toMatchObject(next);
-      expect(persisted[0]!.agents.providers.codex).toEqual({
-        ...current.agents.providers.codex, model: 'gpt-review', effort: 'high',
-      });
+      expect(persisted[0]!.agents.codeReview).toEqual({ provider: 'codex', model: 'gpt-review', effort: 'high' });
+      expect(persisted[0]!.agents.chat).toEqual({ provider: 'codex', model: 'gpt-chat', effort: 'medium' });
+      expect(persisted[0]!.agents.providers.codex).toEqual(current.agents.providers.codex);
       expect(persisted[0]!.review.workspaceRoot).toBe(current.review.workspaceRoot);
       expect(store.get()).toMatchObject({ profile: { name: 'Barbarian' }, appearance: next.appearance });
       expect((await app.inject({ method: 'GET', url: '/api/dashboard' })).statusCode).toBe(200);

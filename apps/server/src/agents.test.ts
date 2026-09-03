@@ -38,7 +38,9 @@ function setup(command: string): { database: BarbarianDatabase; config: Barbaria
     review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
     linear: { enabled: false, command: [] },
     agents: {
-      default: 'fake', autoReview: true, maxConcurrent: 1, maxAutomaticAttempts: 3,
+      autoReview: true, maxConcurrent: 1, maxAutomaticAttempts: 3,
+      codeReview: { provider: 'fake', model: '', effort: '' },
+      chat: { provider: 'fake', model: '', effort: '' },
       retryBaseMinutes: 1, maxRunsPerPullRequestPerHour: 3,
       providers: { fake: { command: process.execPath, args: ['-e', command] } },
     },
@@ -259,7 +261,7 @@ describe('runReviewAgent', () => {
 
   it('releases the claim when the configured provider is unavailable', async () => {
     const { database, config, claim } = setup("console.log('unused')");
-    config.agents.default = 'missing';
+    config.agents.codeReview.provider = 'missing';
     config.agents.providers = {};
     await expect(runReviewAgent(database, config, claim, undefined, dependencies))
       .rejects.toThrow('is not configured');

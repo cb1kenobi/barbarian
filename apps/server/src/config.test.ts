@@ -28,11 +28,33 @@ describe('Barbarian config', () => {
     expect(parseConfig(base)).toMatchObject({
       appearance: { theme: 'dark', fontSize: 'normal', weapon: 'double-axe' },
       profile: { reviewName: '' },
+      agents: {
+        codeReview: { provider: 'codex', model: '', effort: '' },
+        chat: { provider: 'codex', model: '', effort: '' },
+      },
     });
     const example = parse(readFileSync(path.resolve('config/barbarian.example.yaml'), 'utf8'));
     expect(parseConfig(example)).toMatchObject({
       appearance: { theme: 'dark', fontSize: 'normal', weapon: 'double-axe' },
       profile: { reviewName: '' },
+    });
+  });
+
+  it('migrates the legacy default provider selection to both agent roles', () => {
+    const legacy = {
+      ...base,
+      agents: {
+        ...base.agents,
+        default: 'claude',
+        providers: {
+          ...base.agents.providers,
+          claude: { command: 'claude', args: ['-p'], model: 'opus', effort: 'high' },
+        },
+      },
+    };
+    expect(parseConfig(legacy).agents).toMatchObject({
+      codeReview: { provider: 'claude', model: 'opus', effort: 'high' },
+      chat: { provider: 'claude', model: 'opus', effort: 'high' },
     });
   });
 
@@ -49,7 +71,10 @@ describe('Barbarian config', () => {
       ...base,
       repositories: [{ name: '../repo', priority: 0, watchIssues: true, watchPullRequests: true, reviewSkill: 'cb1-code-review', labels: {} }],
     })).toThrow();
-    expect(() => parseConfig({ ...base, agents: { ...base.agents, default: 'missing' } })).toThrow();
+    expect(() => parseConfig({
+      ...base,
+      agents: { ...base.agents, codeReview: { provider: 'missing', model: '', effort: '' } },
+    })).toThrow();
   });
 
   it('atomically writes private YAML that round-trips through the schema', async () => {
@@ -83,13 +108,13 @@ describe('Barbarian config', () => {
         autoCleanup: initial.review.autoCleanup,
       },
       agents: {
-        default: initial.agents.default,
+        codeReview: { provider: 'codex', model: 'gpt-review', effort: 'high' as const },
+        chat: { provider: 'codex', model: 'gpt-chat', effort: 'medium' as const },
         autoReview: initial.agents.autoReview,
         maxConcurrent: initial.agents.maxConcurrent,
         maxAutomaticAttempts: initial.agents.maxAutomaticAttempts,
         retryBaseMinutes: initial.agents.retryBaseMinutes,
         maxRunsPerPullRequestPerHour: initial.agents.maxRunsPerPullRequestPerHour,
-        providers: { codex: { model: 'gpt-review', effort: 'high' as const } },
       },
       statusUpdate: initial.statusUpdate,
     };
@@ -101,9 +126,9 @@ describe('Barbarian config', () => {
     await store.update(submitted, 'memory:1');
     expect(store.get().appearance).toEqual(submitted.appearance);
     expect(store.get().review.workspaceRoot).toBe(initial.review.workspaceRoot);
-    expect(store.get().agents.providers.codex).toEqual({
-      ...initial.agents.providers.codex, model: 'gpt-review', effort: 'high',
-    });
+    expect(store.get().agents.codeReview).toEqual({ provider: 'codex', model: 'gpt-review', effort: 'high' });
+    expect(store.get().agents.chat).toEqual({ provider: 'codex', model: 'gpt-chat', effort: 'medium' });
+    expect(store.get().agents.providers.codex).toEqual(initial.agents.providers.codex);
     expect(Object.isFrozen(store.get().repositories)).toBe(true);
     expect(store.warning).toBeNull();
     await expect(store.update(submitted, 'memory:1')).rejects.toBeInstanceOf(ConfigConflictError);
@@ -140,13 +165,13 @@ describe('Barbarian config', () => {
         autoCleanup: initial.review.autoCleanup,
       },
       agents: {
-        default: initial.agents.default,
+        codeReview: { provider: 'codex', model: 'gpt-review', effort: 'high' as const },
+        chat: { provider: 'codex', model: 'gpt-chat', effort: 'medium' as const },
         autoReview: initial.agents.autoReview,
         maxConcurrent: initial.agents.maxConcurrent,
         maxAutomaticAttempts: initial.agents.maxAutomaticAttempts,
         retryBaseMinutes: initial.agents.retryBaseMinutes,
         maxRunsPerPullRequestPerHour: initial.agents.maxRunsPerPullRequestPerHour,
-        providers: { codex: { model: 'gpt-review', effort: 'high' as const } },
       },
       statusUpdate: initial.statusUpdate,
     };
@@ -154,8 +179,11 @@ describe('Barbarian config', () => {
     const saved = readFileSync(filename, 'utf8');
     expect(saved).toContain('# keep this operator note');
     expect(saved).toContain('command: codex');
+    expect(saved).toContain('codeReview:');
     expect(saved).toContain('model: gpt-review');
-    expect(saved).toContain('effort: high');
+    expect(saved).toContain('chat:');
+    expect(saved).toContain('model: gpt-chat');
+    expect(saved).not.toContain('default: codex');
     expect(readFileSync(`${filename}.bak`, 'utf8')).toContain('# keep this operator note');
     writeFileSync(filename, `${saved}\n# external edit\n`, { mode: 0o600 });
     await expect(store.update(submitted, store.revision)).rejects.toBeInstanceOf(ConfigConflictError);
