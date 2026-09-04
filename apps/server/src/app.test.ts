@@ -15,6 +15,8 @@ afterEach(() => { for (const directory of directories.splice(0)) rmSync(director
 
 const config: BarbarianConfig = {
   version: 1,
+  server: { bindAddress: '127.0.0.1', port: 4142 },
+  desktop: { launchAtLogin: false, globalShortcut: 'CommandOrControl+Shift+Space' },
   profile: { name: 'Chris', reviewName: '', timezone: 'America/Chicago', githubLogin: 'cb1kenobi' },
   appearance: { theme: 'dark', fontSize: 'small', weapon: 'double-axe' },
   monitor: { intervalMinutes: 20, runOnStartup: true, includeDraftPullRequests: false },
@@ -29,6 +31,31 @@ const config: BarbarianConfig = {
   },
   statusUpdate: { enabled: false, workdays: [], daysOff: [] },
 };
+
+describe('browser origin policy', () => {
+  it('allows the dashboard on a VPN host without granting unrelated websites CORS access', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-cors-test-'));
+    directories.push(directory);
+    const database = new BarbarianDatabase(path.join(directory, 'test.db'));
+    const app = await createApp(database, new ConfigStore(config));
+    try {
+      const dashboard = await app.inject({
+        method: 'GET', url: '/api/health',
+        headers: { host: 'barbarian.vpn:4142', origin: 'http://barbarian.vpn:4142' },
+      });
+      expect(dashboard.headers['access-control-allow-origin']).toBe('http://barbarian.vpn:4142');
+
+      const unrelated = await app.inject({
+        method: 'GET', url: '/api/health',
+        headers: { host: '127.0.0.1:4142', origin: 'https://untrusted.example' },
+      });
+      expect(unrelated.headers['access-control-allow-origin']).toBeUndefined();
+    } finally {
+      await app.close();
+      database.close();
+    }
+  });
+});
 
 describe('agent runs', () => {
   it('stops the running agent represented by the side-panel record', async () => {
@@ -815,9 +842,12 @@ describe('settings API', () => {
             chat: { provider: 'codex', model: '', effort: '' },
           },
         },
-        advanced: { providers: [{ name: 'codex', supportsModel: true, supportsEffort: true }] },
+        advanced: {
+          server: { active: { bindAddress: '127.0.0.1', port: 4142 }, restartRequired: false },
+          providers: [{ name: 'codex', supportsModel: true, supportsEffort: true }],
+        },
         revision: 'memory:1',
-        configFile: 'config/barbarian.yaml',
+        configFile: expect.stringContaining('/Barbarian/config/barbarian.yaml'),
       });
       expect(before.body).not.toContain('envFile');
       expect(before.body).not.toContain('/secret/codex');
@@ -826,6 +856,7 @@ describe('settings API', () => {
       const editable = (before.json() as { config: Record<string, unknown> }).config;
       const next = {
         ...editable,
+        server: { bindAddress: '127.0.0.1', port: 5150 },
         profile: { ...current.profile, name: 'Barbarian' },
         appearance: { theme: 'slayer', fontSize: 'normal', weapon: 'double-axe' },
         agents: {
@@ -854,6 +885,11 @@ describe('settings API', () => {
 
       const saved = await app.inject({ method: 'PUT', url: '/api/settings', payload: { revision: 'memory:1', config: next } });
       expect(saved.statusCode).toBe(200);
+      expect(saved.json()).toMatchObject({
+        advanced: {
+          server: { active: { bindAddress: '127.0.0.1', port: 4142 }, restartRequired: true },
+        },
+      });
       expect(persisted).toHaveLength(1);
       expect(persisted[0]).toMatchObject(next);
       expect(persisted[0]!.agents.codeReview.codex).toEqual({ enabled: true, model: 'gpt-review', effort: 'high' });

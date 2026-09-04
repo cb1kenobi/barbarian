@@ -1,6 +1,5 @@
 import { open, readFile, stat, unlink } from 'node:fs/promises';
-import path from 'node:path';
-import { projectRoot } from './config.js';
+import { paths } from './paths.js';
 
 export interface InstanceLock {
   release(): Promise<void>;
@@ -15,7 +14,7 @@ function processExists(pid: number): boolean {
   }
 }
 
-export async function acquireInstanceLock(filename = path.join(projectRoot, 'data/barbarian.lock')): Promise<InstanceLock> {
+export async function acquireInstanceLock(filename = paths.lockPath): Promise<InstanceLock> {
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
       const handle = await open(filename, 'wx', 0o600);

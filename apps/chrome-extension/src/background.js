@@ -1,6 +1,6 @@
 import { githubPageContext, githubPullRequestKey, isAllowedApiMessage } from './api-policy.js';
+import { loadServerUrl } from './connection.js';
 
-const endpoint = 'http://127.0.0.1:4142';
 const panelPath = 'src/sidepanel.html';
 const recentNavigationRefreshes = new Map();
 
@@ -32,6 +32,7 @@ async function proxyApi(message, sender) {
   }
 
   try {
+    const endpoint = await loadServerUrl();
     const response = await fetch(`${endpoint}${message.path}`, request);
     const text = await response.text();
     let body = null;
@@ -56,6 +57,7 @@ async function activeSelection(sender) {
 async function panelAppearance(sender) {
   if (!isSidePanelSender(sender)) return null;
   try {
+    const endpoint = await loadServerUrl();
     const response = await fetch(`${endpoint}/api/settings`);
     if (!response.ok) return null;
     const body = await response.json();
@@ -115,6 +117,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'barbarian-api') void proxyApi(message, sender).then(sendResponse);
   else if (message?.type === 'barbarian-active-selection') void activeSelection(sender).then(sendResponse);
   else if (message?.type === 'barbarian-appearance') void panelAppearance(sender).then(sendResponse);
+  else if (message?.type === 'barbarian-connection') void loadServerUrl().then((serverUrl) => sendResponse({ serverUrl }));
   else if ((message?.type === 'barbarian-issue-updated' || message?.type === 'barbarian-pull-request-updated') && sender.tab) {
     const page = githubPageContext(sender.tab.url || '');
     const expectedKind = message.type === 'barbarian-issue-updated' ? 'issue' : 'pullRequest';

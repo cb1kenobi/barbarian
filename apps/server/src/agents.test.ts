@@ -32,6 +32,8 @@ function setup(command: string): { database: BarbarianDatabase; config: Barbaria
   `).run(now, now, now, now);
   const config: BarbarianConfig = {
     version: 1,
+    server: { bindAddress: '127.0.0.1', port: 4142 },
+    desktop: { launchAtLogin: false, globalShortcut: 'CommandOrControl+Shift+Space' },
     profile: { name: 'Chris', reviewName: '', timezone: 'UTC', githubLogin: 'cb1kenobi' },
     appearance: { theme: 'dark', fontSize: 'small', weapon: 'double-axe' },
     monitor: { intervalMinutes: 20, runOnStartup: true, includeDraftPullRequests: false },

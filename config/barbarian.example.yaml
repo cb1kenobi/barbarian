@@ -1,5 +1,13 @@
 version: 1
 
+server:
+  bindAddress: 127.0.0.1
+  port: 4142
+
+desktop:
+  launchAtLogin: false
+  globalShortcut: CommandOrControl+Shift+Space
+
 profile:
   name: Developer
   reviewName: ""

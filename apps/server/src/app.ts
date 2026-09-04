@@ -8,7 +8,8 @@ import fastifyStatic from '@fastify/static';
 import { z, ZodError } from 'zod';
 import type { BarbarianDatabase } from './database.js';
 import type { BarbarianConfig, ReviewStatus } from './types.js';
-import { ConfigConflictError, ConfigStore, projectRoot, type WritableConfig } from './config.js';
+import { ConfigConflictError, ConfigStore, type WritableConfig } from './config.js';
+import { paths } from './paths.js';
 import { refreshGithubIssue, synchronize, trackGithubPullRequest } from './sync.js';
 import { askAgent, askIssueAgent } from './agents.js';
 import { AgentRuntime } from './agent-runtime.js';
@@ -119,9 +120,10 @@ function workItemView(row: Record<string, unknown>, activeBranches: ActiveLocalB
   };
 }
 
-function settingsView(config: BarbarianConfig): {
+function settingsView(config: BarbarianConfig, activeServer: BarbarianConfig['server']): {
   config: WritableConfig;
   advanced: {
+    server: { active: BarbarianConfig['server']; restartRequired: boolean };
     workspaceRoot: string;
     linear: { enabled: boolean; configured: boolean };
     providers: Array<{
@@ -136,6 +138,8 @@ function settingsView(config: BarbarianConfig): {
 } {
   return {
     config: {
+      server: config.server,
+      desktop: config.desktop,
       profile: config.profile,
       appearance: config.appearance,
       monitor: config.monitor,
@@ -157,6 +161,10 @@ function settingsView(config: BarbarianConfig): {
       statusUpdate: config.statusUpdate,
     },
     advanced: {
+      server: {
+        active: activeServer,
+        restartRequired: activeServer.bindAddress !== config.server.bindAddress || activeServer.port !== config.server.port,
+      },
       workspaceRoot: config.review.workspaceRoot,
       linear: { enabled: config.linear.enabled, configured: config.linear.command.length > 0 },
       providers: Object.entries(config.agents.providers).map(([name, provider]) => {
@@ -417,7 +425,7 @@ function dashboardApiAllowed(origin: string | undefined, host: string | undefine
   if (!origin) return true;
   try {
     const parsed = new URL(origin);
-    return /^(127\.0\.0\.1|localhost)$/.test(parsed.hostname) && parsed.host === host;
+    return /^https?:$/.test(parsed.protocol) && parsed.host === host;
   } catch {
     return false;
   }
@@ -478,12 +486,14 @@ export async function createApp(
     refreshReview?: typeof refreshReviewContext;
     refreshIssue?: typeof refreshGithubIssue;
     trackReview?: typeof trackGithubPullRequest;
+    activeServer?: BarbarianConfig['server'];
   } = {},
 ) {
   const app = Fastify({ logger: true, bodyLimit: 2 * 1024 * 1024 });
   try { refreshStoredReviewSummaries(database); }
   catch (error) { app.log.warn(error, 'could not refresh stored pull request summaries'); }
   const initialConfig = configStore.get();
+  const activeServer = services.activeServer || initialConfig.server;
   const runtime = services.runtime || new AgentRuntime(initialConfig.agents.maxConcurrent);
   const dispatcher = services.dispatcher || new ReviewDispatcher(database, () => configStore.get(), runtime, app.log);
   const refreshReview = services.refreshReview || refreshReviewContext;
@@ -500,14 +510,21 @@ export async function createApp(
   };
   dispatcher.setReviewChangedListener(publishReviewUpdated);
   await app.register(cors, {
-    origin(origin, callback) {
-      const allowed = !origin || /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin)
-        || origin.startsWith('chrome-extension://') || origin.startsWith('vscode-webview://');
-      callback(allowed ? null : new Error('Origin not allowed'), allowed);
+    delegator(request, callback) {
+      const origin = request.headers.origin;
+      const allowed = dashboardApiAllowed(origin, request.headers.host)
+        || Boolean(origin?.startsWith('chrome-extension://'))
+        || Boolean(origin?.startsWith('vscode-webview://'));
+      callback(null, { origin: allowed });
     },
   });
 
-  app.get('/api/health', async () => ({ ok: true, now: new Date().toISOString() }));
+  app.get('/api/health', async () => ({
+    ok: true,
+    service: 'barbarian',
+    now: new Date().toISOString(),
+    server: activeServer,
+  }));
 
   app.get('/api/events', (request, reply) => {
     reply.hijack();
@@ -1124,8 +1141,8 @@ export async function createApp(
   });
 
   app.get('/api/settings', async () => ({
-    ...settingsView(configStore.get()), revision: configStore.revision,
-    warning: configStore.warning, configFile: 'config/barbarian.yaml',
+    ...settingsView(configStore.get(), activeServer), revision: configStore.revision,
+    warning: configStore.warning, configFile: paths.configPath,
   }));
 
   app.get('/api/settings/agent-models', async () => ({
@@ -1147,7 +1164,7 @@ export async function createApp(
       runtime.setMaxConcurrent(updated.config.agents.maxConcurrent);
       await services.onConfigUpdated?.(previous, updated.config);
       void dispatcher.pump();
-      return { ok: true, ...settingsView(updated.config), revision: updated.revision };
+      return { ok: true, ...settingsView(updated.config, activeServer), revision: updated.revision };
     } catch (error) {
       if (error instanceof ConfigConflictError) return reply.code(409).send({ error: error.message });
       if (error instanceof ZodError) {
@@ -1188,7 +1205,7 @@ export async function createApp(
     return { ok: true, status };
   });
 
-  const webRoot = path.join(projectRoot, 'dist/web');
+  const webRoot = paths.webRoot;
   if (existsSync(webRoot)) {
     await app.register(fastifyStatic, { root: webRoot });
     app.setNotFoundHandler((request, reply) => {

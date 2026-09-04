@@ -2,18 +2,29 @@
   "name": "barbarian-vscode-extension",
   "displayName": "Barbarian Branch Review",
   "description": "Review the current git branch with Barbarian, with optional pull request context.",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "private": true,
   "license": "UNLICENSED",
   "publisher": "local",
   "engines": { "vscode": "^1.96.0" },
   "categories": ["Other"],
-  "activationEvents": ["onView:barbarian.branchReview", "onCommand:barbarian.refreshBranch"],
+  "activationEvents": ["onView:barbarian.branchReview", "onCommand:barbarian.refreshBranch", "onCommand:barbarian.configureConnection"],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
-      { "command": "barbarian.refreshBranch", "title": "Barbarian: Show Branch Review" }
+      { "command": "barbarian.refreshBranch", "title": "Barbarian: Show Branch Review" },
+      { "command": "barbarian.configureConnection", "title": "Barbarian: Configure Server Connection" }
     ],
+    "configuration": {
+      "title": "Barbarian",
+      "properties": {
+        "barbarian.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:4142",
+          "description": "Complete URL of the Barbarian server. Remote clients should use the server Mac's VPN hostname or VPN IP address."
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         { "id": "barbarian", "title": "Barbarian", "icon": "media/barbarian.svg" }

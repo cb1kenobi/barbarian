@@ -1,11 +1,11 @@
-import { chmod, copyFile, mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
+import { chmod, copyFile, open, readFile, rename, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
-import process from 'node:process';
 import { parse, parseDocument, stringify } from 'yaml';
 import { z } from 'zod';
 import type { BarbarianConfig } from './types.js';
+import { ensureRuntimeDirectories, migrateLegacyState, paths } from './paths.js';
 
 function validTimezone(value: string): boolean {
   try {
@@ -55,6 +55,14 @@ const agentsSchema = z.object({
 
 export const configSchema = z.object({
   version: z.literal(1),
+  server: z.object({
+    bindAddress: z.enum(['127.0.0.1', '0.0.0.0']).default('127.0.0.1'),
+    port: z.number().int().min(1024).max(65535).default(4142),
+  }).default({ bindAddress: '127.0.0.1', port: 4142 }),
+  desktop: z.object({
+    launchAtLogin: z.boolean().default(false),
+    globalShortcut: z.string().trim().max(100).default('CommandOrControl+Shift+Space'),
+  }).default({ launchAtLogin: false, globalShortcut: 'CommandOrControl+Shift+Space' }),
   profile: z.object({
     name: z.string().default('Developer'),
     reviewName: z.string().trim().max(80).regex(/^[^\r\n]*$/, 'Review name must be a single line').default(''),
@@ -103,6 +111,8 @@ export const configSchema = z.object({
 });
 
 export const writableConfigSchema = z.object({
+  server: configSchema.shape.server.unwrap().strict(),
+  desktop: configSchema.shape.desktop.unwrap().strict(),
   profile: configSchema.shape.profile.strict(),
   appearance: configSchema.shape.appearance.unwrap().strict(),
   monitor: configSchema.shape.monitor.strict(),
@@ -122,19 +132,21 @@ export const writableConfigSchema = z.object({
 
 export type WritableConfig = z.infer<typeof writableConfigSchema>;
 
-export const projectRoot = path.resolve(process.env.BARBARIAN_ROOT || process.cwd());
-export const configPath = path.join(projectRoot, 'config/barbarian.yaml');
-export const envPath = path.join(projectRoot, '.env');
+export const projectRoot = paths.resourceRoot;
+export const userDataRoot = paths.userDataRoot;
+export const cacheRoot = paths.cacheRoot;
+export const configPath = paths.configPath;
+export const envPath = paths.envPath;
 
 export async function ensureLocalFiles(): Promise<void> {
-  await mkdir(path.dirname(configPath), { recursive: true });
-  await mkdir(path.join(projectRoot, 'data'), { recursive: true });
+  await migrateLegacyState();
+  await ensureRuntimeDirectories();
   if (!existsSync(configPath)) {
     const backup = `${configPath}.bak`;
-    await copyFile(existsSync(backup) ? backup : path.join(projectRoot, 'config/barbarian.example.yaml'), configPath);
+    await copyFile(existsSync(backup) ? backup : path.join(paths.resourceRoot, 'config/barbarian.example.yaml'), configPath);
   }
   if (!existsSync(envPath)) {
-    await copyFile(path.join(projectRoot, '.env.example'), envPath);
+    await copyFile(path.join(paths.resourceRoot, '.env.example'), envPath);
   }
   await Promise.all([chmod(configPath, 0o600), chmod(envPath, 0o600)]);
 }
@@ -233,6 +245,8 @@ export async function saveConfig(config: BarbarianConfig, filename = configPath)
 function safeUpdate(current: BarbarianConfig, submitted: WritableConfig): BarbarianConfig {
   return parseConfig({
     ...current,
+    server: submitted.server,
+    desktop: submitted.desktop,
     profile: submitted.profile,
     appearance: submitted.appearance,
     monitor: submitted.monitor,
@@ -259,6 +273,8 @@ function safeUpdate(current: BarbarianConfig, submitted: WritableConfig): Barbar
 }
 
 const writablePaths: Array<{ path: Array<string>; value: (config: BarbarianConfig) => unknown }> = [
+  { path: ['server'], value: (config) => config.server },
+  { path: ['desktop'], value: (config) => config.desktop },
   { path: ['profile'], value: (config) => config.profile },
   { path: ['appearance'], value: (config) => config.appearance },
   { path: ['monitor'], value: (config) => config.monitor },
@@ -386,12 +402,12 @@ export class ConfigStore {
 }
 
 export function resolveProjectPath(candidate: string): string {
-  return path.isAbsolute(candidate) ? candidate : path.join(projectRoot, candidate);
+  return path.isAbsolute(candidate) ? candidate : path.join(cacheRoot, candidate);
 }
 
-export function serverAddress(): { host: string; port: number } {
+export function serverAddress(config: BarbarianConfig): { host: string; port: number } {
   return {
-    host: process.env.BARBARIAN_HOST || '127.0.0.1',
-    port: Number(process.env.BARBARIAN_PORT || 4142),
+    host: config.server.bindAddress,
+    port: config.server.port,
   };
 }

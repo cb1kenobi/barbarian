@@ -40,6 +40,8 @@ describe('local branch agent review', () => {
     const output = 'BARBARIAN_RESULT: {"findings":2,"verdict":"issues","summary":"The changed values need attention.","comments":[{"path":"value.ts","line":1,"side":"RIGHT","body":"**Medium: value changed**\\n\\nThis changes observable behavior; confirm callers expect 2."},{"path":"new-value.ts","line":1,"side":"RIGHT","body":"**Medium: new value is unused**\\n\\nThis file is not connected to any caller."}]}';
     const config: BarbarianConfig = {
       version: 1,
+      server: { bindAddress: '127.0.0.1', port: 4142 },
+      desktop: { launchAtLogin: false, globalShortcut: 'CommandOrControl+Shift+Space' },
       profile: { name: 'Test', reviewName: '', timezone: 'UTC', githubLogin: 'test' },
       appearance: { theme: 'dark', fontSize: 'normal', weapon: 'double-axe' },
       monitor: { intervalMinutes: 20, runOnStartup: false, includeDraftPullRequests: false },

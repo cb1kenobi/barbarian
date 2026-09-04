@@ -10,6 +10,8 @@ afterEach(() => { for (const directory of directories.splice(0)) rmSync(director
 
 const base = {
   version: 1 as const,
+  server: { bindAddress: '127.0.0.1' as const, port: 4142 },
+  desktop: { launchAtLogin: false, globalShortcut: 'CommandOrControl+Shift+Space' },
   profile: { name: 'Chris', timezone: 'America/Chicago', githubLogin: 'cb1kenobi' },
   monitor: { intervalMinutes: 20, runOnStartup: true, includeDraftPullRequests: false },
   repositories: [],
@@ -26,6 +28,8 @@ const base = {
 describe('Barbarian config', () => {
   it('defaults older files to the primary axe, dark theme, and normal font size', () => {
     expect(parseConfig(base)).toMatchObject({
+      server: { bindAddress: '127.0.0.1', port: 4142 },
+      desktop: { launchAtLogin: false, globalShortcut: 'CommandOrControl+Shift+Space' },
       appearance: { theme: 'dark', fontSize: 'normal', weapon: 'double-axe' },
       profile: { reviewName: '' },
       agents: {
@@ -75,6 +79,8 @@ describe('Barbarian config', () => {
       ...base,
       agents: { ...base.agents, codeReview: { missing: { enabled: true, model: '', effort: '' } } },
     })).toThrow();
+    expect(() => parseConfig({ ...base, server: { bindAddress: '192.168.1.20', port: 4142 } })).toThrow();
+    expect(() => parseConfig({ ...base, server: { bindAddress: '127.0.0.1', port: 70000 } })).toThrow();
   });
 
   it('atomically writes private YAML that round-trips through the schema', async () => {
@@ -98,6 +104,8 @@ describe('Barbarian config', () => {
       return 'memory:2';
     }, 'Config recovery warning');
     const submitted = {
+      server: initial.server,
+      desktop: initial.desktop,
       appearance: { theme: 'slayer' as const, fontSize: 'normal' as const, weapon: 'double-axe' as const },
       profile: initial.profile,
       monitor: initial.monitor,
@@ -155,6 +163,8 @@ describe('Barbarian config', () => {
     const store = await ConfigStore.load(filename);
     const revision = store.revision;
     const submitted = {
+      server: initial.server,
+      desktop: initial.desktop,
       profile: { ...initial.profile, name: 'Updated' },
       appearance: { theme: 'light' as const, fontSize: 'normal' as const, weapon: 'sword' as const },
       monitor: initial.monitor,

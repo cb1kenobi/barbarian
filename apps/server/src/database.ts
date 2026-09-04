@@ -1,14 +1,14 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { projectRoot } from './config.js';
+import { paths } from './paths.js';
 
 export type SqlValue = string | number | bigint | null | Uint8Array;
 
 export class BarbarianDatabase {
   readonly connection: DatabaseSync;
 
-  constructor(filename = path.join(projectRoot, 'data/barbarian.db')) {
+  constructor(filename = paths.databasePath) {
     mkdirSync(path.dirname(filename), { recursive: true });
     this.connection = new DatabaseSync(filename);
     this.connection.exec('PRAGMA journal_mode = WAL');
