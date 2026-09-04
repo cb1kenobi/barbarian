@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { formatLastSync, formatNextSync, formatSyncTimestamp, type SyncRun } from './sync-time';
 import { sortReviews, type ReviewSort } from './review-sort';
 import { countReviewsNeedingApproval, reviewDisplayStatus, reviewStatusGuide, statusLabel, statusTone } from './review-display';
@@ -175,6 +175,35 @@ function useCloseOnEscape(onClose: () => void): void {
   }, [onClose]);
 }
 
+function useScrollableViewport() {
+  const [viewport, setViewport] = useState<HTMLDivElement | null>(null);
+  const [scrollable, setScrollable] = useState(false);
+  useLayoutEffect(() => {
+    if (!viewport) return;
+    const update = () => setScrollable(viewport.scrollHeight > viewport.clientHeight + 1);
+    const resizeObserver = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(update);
+    const observeSizes = () => {
+      resizeObserver?.disconnect();
+      resizeObserver?.observe(viewport);
+      for (const child of viewport.children) resizeObserver?.observe(child);
+    };
+    const mutationObserver = typeof MutationObserver === 'undefined' ? undefined : new MutationObserver(() => {
+      observeSizes();
+      update();
+    });
+    observeSizes();
+    mutationObserver?.observe(viewport, { childList: true, subtree: true, characterData: true });
+    window.addEventListener('resize', update);
+    update();
+    return () => {
+      resizeObserver?.disconnect();
+      mutationObserver?.disconnect();
+      window.removeEventListener('resize', update);
+    };
+  }, [viewport]);
+  return [setViewport, scrollable] as const;
+}
+
 export function App() {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [error, setError] = useState<AppError | null>(null);
@@ -189,6 +218,9 @@ export function App() {
   const [workSort, setWorkSort] = useState<WorkSort>('in-progress');
   const [workRepository, setWorkRepository] = useState('all');
   const [queueSearch, setQueueSearch] = useState('');
+  const [feedbackViewportRef, feedbackScrollable] = useScrollableViewport();
+  const [reviewViewportRef, reviewsScrollable] = useScrollableViewport();
+  const [issueViewportRef, issuesScrollable] = useScrollableViewport();
 
   const load = useCallback(async () => {
     try {
@@ -341,7 +373,7 @@ export function App() {
 
         <section id="feedback" className="panel feedback-panel">
           <div className="panel-head"><div><span className="section-label">YOUR PULL REQUESTS</span><div className="review-heading"><h2>Feedback</h2><span className="review-count" aria-label={`${feedback.length} matching pull requests have feedback or approval`}>{feedback.length} PR{feedback.length === 1 ? '' : 's'}</span></div></div></div>
-          <div className="review-grid queue-viewport feedback-viewport">
+          <div ref={feedbackViewportRef} className={`review-grid queue-viewport feedback-viewport${feedbackScrollable ? ' is-scrollable' : ''}`}>
             {feedback.map((review) => <button className="review-card feedback-card" key={review.id} onClick={() => setSelectedReview(review.id)}>
               <div className="review-card-head"><span><span className="repo">{repositoryName(review.repository)}</span><span className="pr">#{review.number}</span></span><FeedbackBadges review={review} /></div>
               <h3>{review.title}</h3><p><InlineCode text={review.simple_summary} /></p>
@@ -361,7 +393,7 @@ export function App() {
             <label className="review-sort queue-repository"><span>Repo</span><select value={reviewRepository} onChange={(event) => setReviewRepository(event.target.value)}><option value="all">All repositories</option>{reviewRepositories.map((repository) => <option value={repository} key={repository}>{repositoryName(repository)}</option>)}</select></label>
             <label className="review-sort"><span>Sort</span><select value={reviewSort} onChange={(event) => setReviewSort(event.target.value as ReviewSort)}><option value="priority">Priority</option><option value="pain">Pain</option><option value="oldest">Oldest</option><option value="newest">Newest</option><option value="repository">Repo name</option></select></label>
           </div></div>
-          <div className="review-grid queue-viewport review-viewport">
+          <div ref={reviewViewportRef} className={`review-grid queue-viewport review-viewport${reviewsScrollable ? ' is-scrollable' : ''}`}>
             {reviews.map((review) => <button className="review-card" key={review.id} onClick={() => setSelectedReview(review.id)}>
               <div className="review-card-head"><span><span className="repo">{repositoryName(review.repository)}</span><span className="pr">#{review.number}</span></span><ReviewStatusBadge status={reviewDisplayStatus(review)} /></div>
               <h3>{review.title}</h3><p><InlineCode text={review.simple_summary} /></p>
@@ -376,7 +408,7 @@ export function App() {
             <label className="review-sort queue-repository"><span>Repo</span><select value={workRepository} onChange={(event) => setWorkRepository(event.target.value)}><option value="all">All repositories</option>{workRepositories.map((repository) => <option value={repository} key={repository}>{repositoryName(repository)}</option>)}</select></label>
             <label className="review-sort"><span>Sort</span><select value={workSort} onChange={(event) => setWorkSort(event.target.value as WorkSort)}><option value="in-progress">In progress</option><option value="priority">Priority</option><option value="updated">Recently updated</option></select></label>
           </div></div>
-          <div className="rows queue-viewport issue-viewport">
+          <div ref={issueViewportRef} className={`rows queue-viewport issue-viewport${issuesScrollable ? ' is-scrollable' : ''}`}>
             {visibleWork.map((item, index) => {
               const assignee = issueAssignee(item, dashboard?.profile.githubLogin);
               const progress = issueProgress(item);

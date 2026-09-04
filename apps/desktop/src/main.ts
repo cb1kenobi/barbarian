@@ -202,7 +202,7 @@ async function createWindow(options: { showOnReady?: boolean; startupError?: str
     show: false,
     title: 'Barbarian',
     titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 16, y: 16 },
+    trafficLightPosition: { x: 16, y: 15 },
     backgroundColor: '#11120f',
     webPreferences: {
       contextIsolation: true,
