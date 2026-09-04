@@ -15,7 +15,7 @@ afterEach(() => { for (const directory of directories.splice(0)) rmSync(director
 
 const config: BarbarianConfig = {
   version: 1,
-  server: { bindAddress: '127.0.0.1', port: 4142 },
+  server: { bindAddress: '127.0.0.1', port: 4142, trustedHosts: [] },
   desktop: { launchAtLogin: false, globalShortcut: 'CommandOrControl+Shift+Space' },
   profile: { name: 'Chris', reviewName: '', timezone: 'America/Chicago', githubLogin: 'cb1kenobi' },
   appearance: { theme: 'dark', fontSize: 'small', weapon: 'double-axe' },
@@ -37,7 +37,9 @@ describe('browser origin policy', () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-cors-test-'));
     directories.push(directory);
     const database = new BarbarianDatabase(path.join(directory, 'test.db'));
-    const app = await createApp(database, new ConfigStore(config));
+    const app = await createApp(database, new ConfigStore(config), undefined, {
+      activeServer: { bindAddress: '0.0.0.0', port: 4142, trustedHosts: ['barbarian.vpn'] },
+    });
     try {
       const dashboard = await app.inject({
         method: 'GET', url: '/api/health',
@@ -47,9 +49,21 @@ describe('browser origin policy', () => {
 
       const unrelated = await app.inject({
         method: 'GET', url: '/api/health',
-        headers: { host: '127.0.0.1:4142', origin: 'https://untrusted.example' },
+        headers: { host: 'untrusted.example:4142', origin: 'http://untrusted.example:4142' },
       });
+      expect(unrelated.statusCode).toBe(403);
       expect(unrelated.headers['access-control-allow-origin']).toBeUndefined();
+
+      const rebindingAttack = await app.inject({
+        method: 'POST', url: '/api/reviews/github%3AAcme%2Fstorage%2399/track',
+        headers: { host: 'untrusted.example:4142', origin: 'http://untrusted.example:4142' },
+      });
+      expect(rebindingAttack.statusCode).toBe(403);
+
+      const forgedHost = await app.inject({
+        method: 'GET', url: '/api/health', headers: { host: 'untrusted.example:4142' },
+      });
+      expect(forgedHost.statusCode).toBe(403);
     } finally {
       await app.close();
       database.close();
@@ -847,7 +861,7 @@ describe('settings API', () => {
           providers: [{ name: 'codex', supportsModel: true, supportsEffort: true }],
         },
         revision: 'memory:1',
-        configFile: expect.stringContaining('/Barbarian/config/barbarian.yaml'),
+        configFile: expect.stringMatching(/config[\\/]barbarian\.yaml$/),
       });
       expect(before.body).not.toContain('envFile');
       expect(before.body).not.toContain('/secret/codex');
@@ -856,7 +870,7 @@ describe('settings API', () => {
       const editable = (before.json() as { config: Record<string, unknown> }).config;
       const next = {
         ...editable,
-        server: { bindAddress: '127.0.0.1', port: 5150 },
+        server: { bindAddress: '127.0.0.1', port: 5150, trustedHosts: [] },
         profile: { ...current.profile, name: 'Barbarian' },
         appearance: { theme: 'slayer', fontSize: 'normal', weapon: 'double-axe' },
         agents: {

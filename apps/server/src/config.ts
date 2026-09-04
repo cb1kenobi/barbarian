@@ -58,7 +58,8 @@ export const configSchema = z.object({
   server: z.object({
     bindAddress: z.enum(['127.0.0.1', '0.0.0.0']).default('127.0.0.1'),
     port: z.number().int().min(1024).max(65535).default(4142),
-  }).default({ bindAddress: '127.0.0.1', port: 4142 }),
+    trustedHosts: z.array(z.string().trim().min(1).max(253).regex(/^[A-Za-z0-9.:[\]-]+$/)).default([]),
+  }).default({ bindAddress: '127.0.0.1', port: 4142, trustedHosts: [] }),
   desktop: z.object({
     launchAtLogin: z.boolean().default(false),
     globalShortcut: z.string().trim().max(100).default('CommandOrControl+Shift+Space'),

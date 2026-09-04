@@ -10,8 +10,12 @@ function apiPort(): number {
     ? paths.configPath
     : `${paths.resourceRoot}/config/barbarian.yaml`;
   if (!existsSync(filename)) return 4142;
-  const value = parse(readFileSync(filename, 'utf8')) as { server?: { port?: unknown } };
-  return typeof value.server?.port === 'number' ? value.server.port : 4142;
+  try {
+    const value = parse(readFileSync(filename, 'utf8')) as { server?: { port?: unknown } };
+    return typeof value.server?.port === 'number' ? value.server.port : 4142;
+  } catch {
+    return 4142;
+  }
 }
 
 export default defineConfig({

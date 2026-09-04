@@ -40,7 +40,7 @@ Runtime state is outside the checkout, so an installed `Barbarian.app` does not 
 - `~/Library/Application Support/Barbarian/.env` — optional API keys.
 - `~/Library/Caches/Barbarian` — prepared worktrees, logs, and Electron cache data.
 
-The files are created from their committed examples the first time the server or `pnpm configure` runs. If an older checkout contains `config/barbarian.yaml`, `.env`, and `data/barbarian.db`, Barbarian copies them to Application Support once, without deleting or overwriting the originals. Stop an older running server before that first migration so SQLite can be copied consistently.
+The files are created from their committed examples the first time the server, `pnpm configure`, or `pnpm desktop:package` runs. If an older checkout contains `config/barbarian.yaml`, `.env`, and `data/barbarian.db`, Barbarian copies them to Application Support once, without deleting or overwriting the originals. Stop an older running server before that first migration so SQLite can be copied consistently. Legacy `BARBARIAN_HOST` and `BARBARIAN_PORT` values in `.env` are no longer read; set the listener in Settings before restarting.
 
 ## Requirements
 
@@ -96,7 +96,7 @@ The app starts the server as a managed child process, opens the dashboard, and s
 
 The **Extensions** app menu can install the bundled VS Code or Cursor VSIX. It also prepares a stable Chrome extension directory and reveals it for Chrome's **Load unpacked** flow.
 
-Server address changes are made in Settings and stored in YAML. They do not affect a running listener until restart. The Electron app offers to restart the child server immediately; with `pnpm start`, restart the Node process. Use `127.0.0.1` unless remote access is required. Choosing `0.0.0.0` exposes the unauthenticated API on every interface, so restrict it with a trusted VPN and host firewall.
+Server address changes are made in Settings and stored in YAML. They do not affect a running listener until restart. The Electron app offers to restart the child server immediately; with `pnpm start`, restart the Node process. Use `127.0.0.1` unless remote access is required. Choosing `0.0.0.0` exposes the unauthenticated API on every interface, so restrict it with a trusted VPN and host firewall, and list every VPN hostname or IP address clients will use under **Trusted remote hosts**. Requests with any other Host value are rejected.
 
 ### Resume after restart or wake (macOS)
 

@@ -28,7 +28,7 @@ const base = {
 describe('Barbarian config', () => {
   it('defaults older files to the primary axe, dark theme, and normal font size', () => {
     expect(parseConfig(base)).toMatchObject({
-      server: { bindAddress: '127.0.0.1', port: 4142 },
+  server: { bindAddress: '127.0.0.1', port: 4142, trustedHosts: [] },
       desktop: { launchAtLogin: false, globalShortcut: 'CommandOrControl+Shift+Space' },
       appearance: { theme: 'dark', fontSize: 'normal', weapon: 'double-axe' },
       profile: { reviewName: '' },

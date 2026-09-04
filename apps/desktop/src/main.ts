@@ -27,8 +27,12 @@ let serverOwned = false;
 let stoppingServer = false;
 let quitting = false;
 let quitAfterShutdown = false;
+let bootstrapping = true;
+let focusAfterBootstrap = false;
 let currentServerUrl = 'http://127.0.0.1:4142';
 let registeredShortcut = '';
+let restartOperation: Promise<void> | undefined;
+const failurePageLoads = new WeakSet<BrowserWindow>();
 
 function resourceRoot(): string {
   return app.getAppPath();
@@ -90,12 +94,14 @@ async function startServer(): Promise<string> {
   });
   serverProcess = child;
   serverOwned = true;
+  let childReady = false;
   child.stdout?.on('data', (chunk) => process.stdout.write(`[server] ${String(chunk)}`));
   child.stderr?.on('data', (chunk) => process.stderr.write(`[server] ${String(chunk)}`));
   child.once('exit', (code) => {
-    if (serverProcess === child) serverProcess = undefined;
-    if (stoppingServer || quitting) return;
+    if (serverProcess !== child) return;
+    serverProcess = undefined;
     serverOwned = false;
+    if (stoppingServer || quitting || !childReady) return;
     void dialog.showMessageBox({
       type: 'error',
       title: 'Barbarian server stopped',
@@ -104,6 +110,7 @@ async function startServer(): Promise<string> {
     });
   });
   await waitForServer(currentServerUrl, child);
+  childReady = true;
   return currentServerUrl;
 }
 
@@ -111,20 +118,35 @@ async function stopServer(): Promise<void> {
   const child = serverProcess;
   if (!child || !serverOwned) return;
   stoppingServer = true;
-  await new Promise<void>((resolve) => {
-    const timeout = setTimeout(resolve, 5_000);
-    child.once('exit', () => {
-      clearTimeout(timeout);
-      resolve();
+  try {
+    let exited = false;
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(resolve, 5_000);
+      child.once('exit', () => {
+        exited = true;
+        clearTimeout(timeout);
+        resolve();
+      });
+      if (!child.kill()) {
+        clearTimeout(timeout);
+        resolve();
+      }
     });
-    if (!child.kill()) {
-      clearTimeout(timeout);
-      resolve();
+    if (!exited && child.pid) {
+      try { process.kill(child.pid, 'SIGKILL'); } catch {}
+      await new Promise<void>((resolve) => {
+        const timeout = setTimeout(resolve, 2_000);
+        child.once('exit', () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+      });
     }
-  });
-  if (serverProcess === child) serverProcess = undefined;
-  serverOwned = false;
-  stoppingServer = false;
+  } finally {
+    if (serverProcess === child) serverProcess = undefined;
+    serverOwned = false;
+    stoppingServer = false;
+  }
 }
 
 async function loadDashboard(window: BrowserWindow): Promise<void> {
@@ -134,6 +156,10 @@ async function loadDashboard(window: BrowserWindow): Promise<void> {
 }
 
 function focusWindow(): void {
+  if (bootstrapping) {
+    focusAfterBootstrap = true;
+    return;
+  }
   if (!mainWindow || mainWindow.isDestroyed()) {
     void createWindow();
     return;
@@ -144,7 +170,23 @@ function focusWindow(): void {
   app.focus({ steal: true });
 }
 
-async function createWindow(): Promise<BrowserWindow> {
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;',
+  })[character]!);
+}
+
+async function loadFailurePage(window: BrowserWindow, message: string): Promise<void> {
+  failurePageLoads.add(window);
+  try {
+    await window.loadURL(`data:text/html,${encodeURIComponent(`<body style="margin:40px;background:#11120f;color:#f4f5f0;font:16px system-ui"><h1>Barbarian could not start</h1><pre>${escapeHtml(message)}</pre><p>Use Barbarian → Restart Server to try again.</p></body>`)}`);
+  } finally {
+    failurePageLoads.delete(window);
+  }
+}
+
+async function createWindow(options: { showOnReady?: boolean; startupError?: string } = {}): Promise<BrowserWindow> {
+  const showOnReady = options.showOnReady !== false;
   const window = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -161,34 +203,55 @@ async function createWindow(): Promise<BrowserWindow> {
     },
   });
   mainWindow = window;
-  window.once('ready-to-show', () => window.show());
+  window.once('ready-to-show', () => { if (showOnReady) window.show(); });
   window.on('close', (event) => {
     if (quitting) return;
     event.preventDefault();
     window.hide();
   });
   window.on('closed', () => { if (mainWindow === window) mainWindow = undefined; });
+  window.webContents.on('will-navigate', (event, url) => {
+    if (failurePageLoads.has(window) && url.startsWith('data:text/html,')) return;
+    try {
+      if (new URL(url).origin === new URL(devUrl || currentServerUrl).origin) return;
+    } catch {}
+    event.preventDefault();
+  });
   window.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    try {
+      if (['http:', 'https:', 'mailto:'].includes(new URL(url).protocol)) void shell.openExternal(url);
+    } catch {}
     return { action: 'deny' };
   });
+  if (options.startupError) {
+    await loadFailurePage(window, options.startupError);
+    if (showOnReady) window.show();
+    return window;
+  }
   try {
     await loadDashboard(window);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await window.loadURL(`data:text/html,${encodeURIComponent(`<body style="margin:40px;background:#11120f;color:#f4f5f0;font:16px system-ui"><h1>Barbarian could not start</h1><pre>${message}</pre><p>Use Barbarian → Restart Server to try again.</p></body>`)}`);
-    window.show();
+    await loadFailurePage(window, message);
+    if (showOnReady) window.show();
   }
   return window;
 }
 
-async function restartServer(): Promise<void> {
+async function performRestartServer(): Promise<void> {
   if (!serverOwned && await health(currentServerUrl)) {
     throw new Error('Barbarian is connected to an externally managed server. Restart that Node process directly.');
   }
   await stopServer();
   await startServer();
   if (mainWindow && !mainWindow.isDestroyed()) await loadDashboard(mainWindow);
+}
+
+function restartServer(): Promise<void> {
+  if (!restartOperation) {
+    restartOperation = performRestartServer().finally(() => { restartOperation = undefined; });
+  }
+  return restartOperation;
 }
 
 async function installEditorExtension(editor: 'code' | 'cursor'): Promise<void> {
@@ -323,13 +386,20 @@ else {
     process.env.BARBARIAN_HOME = app.getPath('userData');
     process.env.BARBARIAN_CACHE_HOME = cacheRoot();
     process.env.BARBARIAN_RESOURCE_ROOT = resourceRoot();
-    await startServer();
-    await applyPreferences();
-    await syncChromeExtension(false);
+    buildMenu(false);
+    let startupError = '';
+    try { await startServer(); }
+    catch (error) { startupError = error instanceof Error ? error.message : String(error); }
+    try { await applyPreferences(); }
+    catch (error) {
+      void dialog.showMessageBox({ type: 'warning', message: 'Some desktop preferences could not be applied.', detail: error instanceof Error ? error.message : String(error) });
+    }
+    void syncChromeExtension(false).catch((error) => console.error('Could not prepare the Chrome extension', error));
     const openedAsHidden = app.getLoginItemSettings().wasOpenedAtLogin;
-    const window = await createWindow();
-    if (openedAsHidden) window.hide();
+    await createWindow({ showOnReady: !openedAsHidden || focusAfterBootstrap, ...(startupError ? { startupError } : {}) });
+    bootstrapping = false;
   }).catch((error) => {
+    bootstrapping = false;
     void dialog.showErrorBox('Barbarian could not start', error instanceof Error ? error.stack || error.message : String(error));
   });
 }

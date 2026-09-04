@@ -59,11 +59,24 @@ async function copyAtomically(source: string, destination: string): Promise<void
   await rename(temporary, destination);
 }
 
-async function copyDirectoryFiles(sourceDirectory: string, destinationDirectory: string): Promise<void> {
+async function copyDirectoryFiles(
+  sourceDirectory: string,
+  destinationDirectory: string,
+  copyLast: string[] = [],
+): Promise<void> {
   if (!existsSync(sourceDirectory)) return;
   await mkdir(destinationDirectory, { recursive: true });
-  for (const entry of await readdir(sourceDirectory, { withFileTypes: true })) {
-    if (!entry.isFile() || entry.name === 'barbarian.lock') continue;
+  const entries = (await readdir(sourceDirectory, { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && entry.name !== 'barbarian.lock' && entry.name !== 'barbarian.db-shm')
+    .sort((left, right) => {
+      const leftIndex = copyLast.indexOf(left.name);
+      const rightIndex = copyLast.indexOf(right.name);
+      if (leftIndex === -1 && rightIndex === -1) return left.name.localeCompare(right.name);
+      if (leftIndex === -1) return -1;
+      if (rightIndex === -1) return 1;
+      return leftIndex - rightIndex;
+    });
+  for (const entry of entries) {
     await copyAtomically(path.join(sourceDirectory, entry.name), path.join(destinationDirectory, entry.name));
   }
 }
@@ -94,13 +107,19 @@ export async function migrateLegacyState(runtime = paths): Promise<boolean> {
   const legacyDatabase = path.join(runtime.resourceRoot, 'data/barbarian.db');
   const needsConfig = existsSync(legacyConfig) && !existsSync(runtime.configPath);
   const needsDatabase = existsSync(legacyDatabase) && !existsSync(runtime.databasePath);
-  if (!needsConfig && !needsDatabase) return false;
+  const legacyEnv = path.join(runtime.resourceRoot, '.env');
+  const needsEnv = existsSync(legacyEnv) && !existsSync(runtime.envPath);
+  if (!needsConfig && !needsDatabase && !needsEnv) return false;
 
   if (needsDatabase) await assertLegacyDatabaseIsIdle(runtime);
 
-  await copyDirectoryFiles(path.join(runtime.resourceRoot, 'config'), path.join(runtime.userDataRoot, 'config'));
-  await copyDirectoryFiles(path.join(runtime.resourceRoot, 'data'), runtime.dataDirectory);
-  await copyAtomically(path.join(runtime.resourceRoot, '.env'), runtime.envPath);
+  if (needsConfig) {
+    await copyDirectoryFiles(path.join(runtime.resourceRoot, 'config'), path.join(runtime.userDataRoot, 'config'));
+  }
+  if (needsDatabase) {
+    await copyDirectoryFiles(path.join(runtime.resourceRoot, 'data'), runtime.dataDirectory, ['barbarian.db']);
+  }
+  if (needsEnv) await copyAtomically(legacyEnv, runtime.envPath);
   return true;
 }
 

@@ -5,7 +5,7 @@ import { configuredAgentEffort, configuredAgentModel } from './agent-display.js'
 function config(provider: BarbarianConfig['agents']['providers'][string]): BarbarianConfig {
   return {
     version: 1,
-    server: { bindAddress: '127.0.0.1', port: 4142 },
+  server: { bindAddress: '127.0.0.1', port: 4142, trustedHosts: [] },
     desktop: { launchAtLogin: false, globalShortcut: 'CommandOrControl+Shift+Space' },
     profile: { name: 'Chris', reviewName: '', timezone: 'UTC', githubLogin: 'cb1kenobi' },
     appearance: { theme: 'dark', fontSize: 'normal', weapon: 'double-axe' },

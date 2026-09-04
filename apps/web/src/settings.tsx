@@ -16,7 +16,7 @@ export interface RepositoryConfig {
   labels: Record<string, number>;
 }
 export interface SettingsConfig {
-  server: { bindAddress: '127.0.0.1' | '0.0.0.0'; port: number };
+  server: { bindAddress: '127.0.0.1' | '0.0.0.0'; port: number; trustedHosts: string[] };
   desktop: { launchAtLogin: boolean; globalShortcut: string };
   profile: { name: string; reviewName: string; timezone: string; githubLogin: string };
   appearance: AppearanceConfig;
@@ -344,6 +344,10 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
             <div className="settings-description-row">
               <label><span>Port</span><input type="number" min="1024" max="65535" required value={draft.server.port} onChange={(event) => setDraft({ ...draft, server: { ...draft.server, port: Number(event.target.value) } })} /></label>
               <p>Changing the address or port takes effect after the server restarts.</p>
+            </div>
+            <div className="settings-description-row">
+              <label><span>Trusted remote hosts</span><input placeholder="barbarian.example.vpn, 100.64.0.10" value={draft.server.trustedHosts.join(', ')} onChange={(event) => setDraft({ ...draft, server: { ...draft.server, trustedHosts: splitItems(event.target.value) } })} /></label>
+              <p>Required when listening on all interfaces. Enter only the VPN hostnames or IP addresses people will use to open Barbarian.</p>
             </div>
             {advanced?.server && <div className="settings-description-row">
               <span className="field-label">Currently running</span>

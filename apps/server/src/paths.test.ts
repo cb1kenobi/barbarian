@@ -66,4 +66,26 @@ describe('runtime paths', () => {
     await expect(migrateLegacyState(paths)).rejects.toThrow(/Stop the existing Barbarian server/);
     expect(() => readFileSync(paths.databasePath)).toThrow();
   });
+
+  it('does not mix legacy database sidecars into existing destination state', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-paths-test-'));
+    directories.push(directory);
+    const resourceRoot = path.join(directory, 'source');
+    const paths = runtimePaths({
+      BARBARIAN_RESOURCE_ROOT: resourceRoot,
+      BARBARIAN_HOME: path.join(directory, 'destination'),
+      BARBARIAN_CACHE_HOME: path.join(directory, 'cache'),
+    });
+    await mkdir(path.join(resourceRoot, 'config'), { recursive: true });
+    await mkdir(path.join(resourceRoot, 'data'), { recursive: true });
+    await mkdir(paths.dataDirectory, { recursive: true });
+    writeFileSync(path.join(resourceRoot, 'config/barbarian.yaml'), 'version: 1\n');
+    writeFileSync(path.join(resourceRoot, 'data/barbarian.db'), 'legacy');
+    writeFileSync(path.join(resourceRoot, 'data/barbarian.db-wal'), 'legacy wal');
+    writeFileSync(paths.databasePath, 'current');
+
+    await expect(migrateLegacyState(paths)).resolves.toBe(true);
+    expect(readFileSync(paths.databasePath, 'utf8')).toBe('current');
+    expect(() => readFileSync(`${paths.databasePath}-wal`)).toThrow();
+  });
 });

@@ -28,13 +28,18 @@ async function testConnection() {
 form.addEventListener('submit', (event) => {
   event.preventDefault();
   void (async () => {
+    let savedUrl = '';
     try {
       const serverUrl = normalizeServerUrl(input.value);
       if (!await requestAccess(serverUrl)) throw new Error('Chrome did not grant access to that server');
       await saveServerUrl(serverUrl);
+      savedUrl = serverUrl;
       await testConnection();
       report(`Saved ${serverUrl}`);
-    } catch (error) { report(error instanceof Error ? error.message : String(error), true); }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      report(savedUrl ? `Saved ${savedUrl}, but the connection test failed: ${message}` : message, true);
+    }
   })();
 });
 

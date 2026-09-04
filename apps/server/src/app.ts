@@ -163,7 +163,9 @@ function settingsView(config: BarbarianConfig, activeServer: BarbarianConfig['se
     advanced: {
       server: {
         active: activeServer,
-        restartRequired: activeServer.bindAddress !== config.server.bindAddress || activeServer.port !== config.server.port,
+        restartRequired: activeServer.bindAddress !== config.server.bindAddress
+          || activeServer.port !== config.server.port
+          || activeServer.trustedHosts.join('\n') !== config.server.trustedHosts.join('\n'),
       },
       workspaceRoot: config.review.workspaceRoot,
       linear: { enabled: config.linear.enabled, configured: config.linear.command.length > 0 },
@@ -421,18 +423,47 @@ const agentRunDetailSelect = `
   ${agentRunJoins}
 `;
 
-function dashboardApiAllowed(origin: string | undefined, host: string | undefined): boolean {
+function normalizedHostname(host: string): string | null {
+  try { return new URL(`http://${host}`).hostname.replace(/^\[|\]$/g, '').toLowerCase(); }
+  catch { return null; }
+}
+
+function requestHostAllowed(host: string | undefined, server: BarbarianConfig['server']): boolean {
+  if (!host) return false;
+  const hostname = normalizedHostname(host);
+  if (!hostname) return false;
+  if (hostname === 'localhost' || hostname === '::1' || hostname.startsWith('127.')) return true;
+  return server.bindAddress === '0.0.0.0'
+    && server.trustedHosts.some((trustedHost) => normalizedHostname(trustedHost) === hostname);
+}
+
+function dashboardApiAllowed(
+  origin: string | undefined,
+  host: string | undefined,
+  server: BarbarianConfig['server'],
+): boolean {
+  if (!requestHostAllowed(host, server)) return false;
   if (!origin) return true;
   try {
     const parsed = new URL(origin);
-    return /^https?:$/.test(parsed.protocol) && parsed.host === host;
+    if (!/^https?:$/.test(parsed.protocol) || !host || parsed.host.toLowerCase() !== host.toLowerCase()) return false;
+    return true;
   } catch {
     return false;
   }
 }
 
-function localAgentApiAllowed(origin: string | undefined, host: string | undefined): boolean {
-  return dashboardApiAllowed(origin, host);
+function extensionOriginAllowed(origin: string | undefined): boolean {
+  return Boolean(origin?.startsWith('chrome-extension://') || origin?.startsWith('vscode-webview://'));
+}
+
+function apiOriginAllowed(origin: string | undefined, host: string | undefined, server: BarbarianConfig['server']): boolean {
+  return dashboardApiAllowed(origin, host, server)
+    || requestHostAllowed(host, server) && extensionOriginAllowed(origin);
+}
+
+function localAgentApiAllowed(origin: string | undefined, host: string | undefined, server: BarbarianConfig['server']): boolean {
+  return dashboardApiAllowed(origin, host, server);
 }
 
 function refreshStoredReviewSummaries(database: BarbarianDatabase): void {
@@ -512,11 +543,15 @@ export async function createApp(
   await app.register(cors, {
     delegator(request, callback) {
       const origin = request.headers.origin;
-      const allowed = dashboardApiAllowed(origin, request.headers.host)
-        || Boolean(origin?.startsWith('chrome-extension://'))
-        || Boolean(origin?.startsWith('vscode-webview://'));
+      const allowed = apiOriginAllowed(origin, request.headers.host, activeServer);
       callback(null, { origin: allowed });
     },
+  });
+  app.addHook('onRequest', async (request, reply) => {
+    if (request.url.startsWith('/api/')
+      && !apiOriginAllowed(request.headers.origin, request.headers.host, activeServer)) {
+      return reply.code(403).send({ error: 'Origin not allowed' });
+    }
   });
 
   app.get('/api/health', async () => ({
@@ -619,7 +654,7 @@ export async function createApp(
   });
 
   app.get('/api/agent-runs/:id/status', async (request, reply) => {
-    if (!dashboardApiAllowed(request.headers.origin, request.headers.host)) return reply.code(403).send({ error: 'Dashboard access required' });
+    if (!dashboardApiAllowed(request.headers.origin, request.headers.host, activeServer)) return reply.code(403).send({ error: 'Dashboard access required' });
     const id = z.coerce.number().int().positive().safeParse((request.params as { id: string }).id);
     if (!id.success) return reply.code(400).send({ error: 'Invalid agent run id' });
     const row = database.connection.prepare(`
@@ -630,7 +665,7 @@ export async function createApp(
   });
 
   app.get('/api/agent-runs/:id', async (request, reply) => {
-    if (!dashboardApiAllowed(request.headers.origin, request.headers.host)) return reply.code(403).send({ error: 'Dashboard access required' });
+    if (!dashboardApiAllowed(request.headers.origin, request.headers.host, activeServer)) return reply.code(403).send({ error: 'Dashboard access required' });
     const id = z.coerce.number().int().positive().safeParse((request.params as { id: string }).id);
     if (!id.success) return reply.code(400).send({ error: 'Invalid agent run id' });
     const row = database.connection.prepare(`${agentRunDetailSelect} WHERE agent_runs.id=?`)
@@ -645,7 +680,7 @@ export async function createApp(
   });
 
   app.delete('/api/agent-runs/:id', async (request, reply) => {
-    if (!dashboardApiAllowed(request.headers.origin, request.headers.host)) return reply.code(403).send({ error: 'Dashboard access required' });
+    if (!dashboardApiAllowed(request.headers.origin, request.headers.host, activeServer)) return reply.code(403).send({ error: 'Dashboard access required' });
     const id = z.coerce.number().int().positive().safeParse((request.params as { id: string }).id);
     if (!id.success) return reply.code(400).send({ error: 'Invalid agent run id' });
     const run = database.connection.prepare(`
@@ -963,7 +998,7 @@ export async function createApp(
   });
 
   app.post('/api/local/branches/context', async (request, reply) => {
-    if (!localAgentApiAllowed(request.headers.origin, request.headers.host)) return reply.code(403).send({ error: 'Editor access required' });
+    if (!localAgentApiAllowed(request.headers.origin, request.headers.host, activeServer)) return reply.code(403).send({ error: 'Editor access required' });
     const config = configStore.get();
     try {
       const branch = await upsertLocalBranch(database, localBranchBody.parse(request.body));
@@ -1047,7 +1082,7 @@ export async function createApp(
   });
 
   app.post('/api/local/branches/:id/run-review', async (request, reply) => {
-    if (!localAgentApiAllowed(request.headers.origin, request.headers.host)) return reply.code(403).send({ error: 'Editor access required' });
+    if (!localAgentApiAllowed(request.headers.origin, request.headers.host, activeServer)) return reply.code(403).send({ error: 'Editor access required' });
     const id = decodeURIComponent((request.params as { id: string }).id);
     const branch = database.connection.prepare('SELECT * FROM local_branches WHERE id=?').get(id) as unknown as LocalBranchRow | undefined;
     if (!branch) return reply.code(404).send({ error: 'Local branch is not tracked' });
@@ -1076,7 +1111,7 @@ export async function createApp(
   });
 
   app.delete('/api/local/branches/:id/run-review', async (request, reply) => {
-    if (!localAgentApiAllowed(request.headers.origin, request.headers.host)) return reply.code(403).send({ error: 'Editor access required' });
+    if (!localAgentApiAllowed(request.headers.origin, request.headers.host, activeServer)) return reply.code(403).send({ error: 'Editor access required' });
     const id = decodeURIComponent((request.params as { id: string }).id);
     const branch = database.connection.prepare('SELECT * FROM local_branches WHERE id=?').get(id) as unknown as LocalBranchRow | undefined;
     if (!branch) return reply.code(404).send({ error: 'Local branch is not tracked' });
@@ -1093,7 +1128,7 @@ export async function createApp(
   });
 
   app.post('/api/local/branches/:id/chat', async (request, reply) => {
-    if (!localAgentApiAllowed(request.headers.origin, request.headers.host)) return reply.code(403).send({ error: 'Editor access required' });
+    if (!localAgentApiAllowed(request.headers.origin, request.headers.host, activeServer)) return reply.code(403).send({ error: 'Editor access required' });
     const id = decodeURIComponent((request.params as { id: string }).id);
     const branch = database.connection.prepare('SELECT * FROM local_branches WHERE id=?').get(id) as unknown as LocalBranchRow | undefined;
     if (!branch) return reply.code(404).send({ error: 'Local branch is not tracked' });

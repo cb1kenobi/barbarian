@@ -5,6 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 const execute = promisify(execFile);
+if (process.platform !== 'darwin') process.exit(0);
 const source = path.resolve('assets/branding/barbarian-app-icon.png');
 const output = path.resolve('dist/desktop/Barbarian.icns');
 const temporary = await mkdtemp(path.join(os.tmpdir(), 'barbarian-icon-'));

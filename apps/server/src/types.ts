@@ -44,7 +44,7 @@ export interface CodeReviewAgentConfig {
 
 export interface BarbarianConfig {
   version: number;
-  server: { bindAddress: '127.0.0.1' | '0.0.0.0'; port: number };
+  server: { bindAddress: '127.0.0.1' | '0.0.0.0'; port: number; trustedHosts: string[] };
   desktop: { launchAtLogin: boolean; globalShortcut: string };
   profile: { name: string; reviewName: string; timezone: string; githubLogin: string };
   appearance: { theme: 'light' | 'dark' | 'slayer'; fontSize: 'small' | 'normal'; weapon: BrandWeapon };

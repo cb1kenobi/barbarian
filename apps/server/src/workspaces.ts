@@ -20,6 +20,11 @@ function assertWithin(root: string, candidate: string): void {
   if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Refusing to operate outside the configured workspace root');
 }
 
+function isWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
 function getReview(database: BarbarianDatabase, id: string): ReviewWorkspaceRow {
   const row = database.connection.prepare(`
     SELECT id, repository, number, head_sha, workspace_path FROM review_queue WHERE id=?
@@ -89,9 +94,16 @@ export async function cleanupWorkspace(
   const root = resolveProjectPath(config.review.workspaceRoot);
   const [owner, repo] = review.repository.split('/');
   if (!owner || !repo) throw new Error('Invalid repository name');
+  if (!isWithin(root, review.workspace_path)) {
+    database.connection.prepare('UPDATE review_queue SET workspace_path=NULL, updated_at=? WHERE id=?')
+      .run(new Date().toISOString(), reviewId);
+    recordActivity(database, 'workspace_abandoned', `Cleared legacy workspace pointer for ${review.repository}#${review.number}`, reviewId, {
+      workspace: review.workspace_path,
+    });
+    return;
+  }
   const clone = path.join(root, 'repos', owner, repo);
   assertWithin(root, clone);
-  assertWithin(root, review.workspace_path);
   if (existsSync(path.join(clone, '.git')) && existsSync(review.workspace_path)) {
     await checked('git', ['worktree', 'remove', '--force', review.workspace_path], clone);
   }
