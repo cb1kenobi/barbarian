@@ -78,7 +78,6 @@ export const configSchema = z.object({
   monitor: z.object({
     intervalMinutes: z.number().int().min(20).default(20),
     runOnStartup: z.boolean().default(true),
-    includeDraftPullRequests: z.boolean().default(false),
   }),
   repositories: z.array(repositorySchema).refine(
     (repositories) => new Set(repositories.map((repository) => repository.name.toLowerCase())).size === repositories.length,

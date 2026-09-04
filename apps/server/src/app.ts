@@ -225,7 +225,7 @@ function rowToReview(
   };
   return {
     ...review,
-    display_status: displayReviewStatus(reviewState),
+    display_status: review.is_draft ? 'draft' : displayReviewStatus(reviewState),
     repository_priority: repositoryPriority,
     priority_score: reviewPriorityScore(reviewState, repositoryPriority),
     remote_created_at: row.remote_created_at ? String(row.remote_created_at) : String(row.first_seen_at),
@@ -618,10 +618,10 @@ export async function createApp(
     const agentWorking = activeAgents.length;
     const waiting = Number((database.connection.prepare(`
       SELECT COUNT(*) AS total FROM review_queue
-      WHERE status IN ('issues_found','awaiting_feedback') AND remote_state='OPEN'
+      WHERE status IN ('issues_found','awaiting_feedback') AND remote_state='OPEN' AND is_draft=0
     `).get() as { total: number }).total);
     const queuedIssues = workQueue.length;
-    const reviewsNeedingApproval = reviews.filter((review) => review.display_status !== 'approved').length;
+    const reviewsNeedingApproval = reviews.filter((review) => !review.is_draft && review.display_status !== 'approved').length;
     const needsAttention = queuedIssues + reviewsNeedingApproval;
     const draft = buildStatusDraft(database, config);
     const savedStatus = database.connection.prepare('SELECT * FROM daily_statuses WHERE workday=?')
@@ -815,17 +815,26 @@ export async function createApp(
     if (!match) return reply.code(400).send({ error: 'Invalid GitHub pull request id' });
     const trackedId = await trackReview(database, config, match[1]!, Number(match[2]));
     if (trackedId !== id) return reply.code(409).send({ error: 'GitHub returned a different pull request' });
+    const tracked = database.connection.prepare('SELECT is_draft FROM review_queue WHERE id=?').get(id) as
+      { is_draft: number } | undefined;
+    if (tracked?.is_draft) {
+      publishReviewUpdated(id);
+      publishDashboardUpdated(id);
+      return reply.code(202).send({ accepted: true, id, reviewStarted: false });
+    }
     if (!dispatcher.requestManual(id)) return reply.code(500).send({ error: 'Pull request was added, but its review could not be started' });
     publishReviewUpdated(id);
     publishDashboardUpdated(id);
-    return reply.code(202).send({ accepted: true, id });
+    return reply.code(202).send({ accepted: true, id, reviewStarted: true });
   });
 
   app.post('/api/reviews/:id/run-review', async (request, reply) => {
     const id = decodeURIComponent((request.params as { id: string }).id);
     const body = z.object({ provider: z.string().optional() }).parse(request.body || {});
-    const review = database.connection.prepare('SELECT id FROM review_queue WHERE id=?').get(id);
+    const review = database.connection.prepare('SELECT id, is_draft FROM review_queue WHERE id=?').get(id) as
+      { id: string; is_draft: number } | undefined;
     if (!review) return reply.code(404).send({ error: 'Review not found' });
+    if (review.is_draft) return reply.code(409).send({ error: 'Draft pull requests cannot be reviewed' });
     if (!dispatcher.requestManual(id, body.provider)) return reply.code(404).send({ error: 'Review not found' });
     return reply.code(202).send({ accepted: true });
   });
@@ -1088,8 +1097,16 @@ export async function createApp(
     if (!branch) return reply.code(404).send({ error: 'Local branch is not tracked' });
     const body = z.object({ provider: z.string().optional() }).parse(request.body || {});
     if (branch.status === 'agent_working') return reply.code(409).send({ error: 'An agent review is already running' });
-    if (branch.review_id && !branch.is_dirty && dispatcher.requestManual(branch.review_id, body.provider)) {
-      return reply.code(202).send({ accepted: true, target: 'pull_request' });
+    if (branch.review_id && !branch.is_dirty) {
+      const linkedReview = database.connection.prepare(`
+        SELECT is_draft FROM review_queue WHERE id=? AND remote_state='OPEN'
+      `).get(branch.review_id) as { is_draft: number } | undefined;
+      if (linkedReview?.is_draft) {
+        return reply.code(409).send({ error: 'Draft pull requests cannot be reviewed' });
+      }
+      if (dispatcher.requestManual(branch.review_id, body.provider)) {
+        return reply.code(202).send({ accepted: true, target: 'pull_request' });
+      }
     }
     database.connection.prepare(`
       UPDATE local_branches SET status='agent_working', last_agent_error=NULL, updated_at=? WHERE id=?

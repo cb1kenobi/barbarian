@@ -28,6 +28,7 @@ interface Review {
   pending_reason: string | null; display_status?: string; priority_score: number;
   remote_created_at: string; remote_updated_at: string; last_agent_review_at: string | null;
   new_commit_count: number; review_round_count: number;
+  is_draft: boolean;
   issue_counts: { high: number; medium: number; low: number };
   linked_issues?: number[];
   fixed_issues?: FixedIssueReference[];
@@ -215,6 +216,7 @@ export function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [reviewSort, setReviewSort] = useState<ReviewSort>('priority');
   const [reviewRepository, setReviewRepository] = useState('all');
+  const [showDraftReviews, setShowDraftReviews] = useState(false);
   const [workSort, setWorkSort] = useState<WorkSort>('in-progress');
   const [workRepository, setWorkRepository] = useState('all');
   const [queueSearch, setQueueSearch] = useState('');
@@ -275,15 +277,19 @@ export function App() {
     () => allFeedback.filter((review) => matchesQueueSearch(review, queueSearch)),
     [allFeedback, queueSearch],
   );
+  const displayedReviews = useMemo(
+    () => allReviews.filter((review) => showDraftReviews || !review.is_draft),
+    [allReviews, showDraftReviews],
+  );
   const reviewRepositories = useMemo(() => [...new Set(allReviews.map((review) => review.repository))].sort(), [allReviews]);
   const reviews = useMemo(() => sortReviews(
-    allReviews.filter((review) => (reviewRepository === 'all' || review.repository === reviewRepository)
+    displayedReviews.filter((review) => (reviewRepository === 'all' || review.repository === reviewRepository)
       && matchesQueueSearch(review, queueSearch)),
     reviewSort,
-  ), [allReviews, queueSearch, reviewRepository, reviewSort]);
+  ), [displayedReviews, queueSearch, reviewRepository, reviewSort]);
   const repositories = useMemo(() => sortRepositoryBookmarks(dashboard?.repositories || []), [dashboard?.repositories]);
-  const visibleReviewsNeedingApproval = countReviewsNeedingApproval(reviews);
-  const visibleApprovedReviews = reviews.filter((review) => reviewDisplayStatus(review) === 'approved').length;
+  const visibleReviewsNeedingApproval = countReviewsNeedingApproval(reviews.filter((review) => !review.is_draft));
+  const visibleApprovedReviews = reviews.filter((review) => !review.is_draft && reviewDisplayStatus(review) === 'approved').length;
   const allWork = dashboard?.workQueue || [];
   const workRepositories = useMemo(() => [...new Set(allWork.map((item) => item.repository))].sort(), [allWork]);
   const visibleWork = useMemo(() => sortWorkItems(
@@ -291,7 +297,8 @@ export function App() {
     workSort,
   ), [allWork, queueSearch, workRepository, workSort]);
   const queuedIssueCount = dashboard?.metrics.queuedIssues ?? allWork.length;
-  const reviewCount = dashboard?.metrics.reviewsNeedingApproval ?? countReviewsNeedingApproval(dashboard?.reviews || []);
+  const reviewCount = dashboard?.metrics.reviewsNeedingApproval
+    ?? countReviewsNeedingApproval((dashboard?.reviews || []).filter((review) => !review.is_draft));
   const attentionCount = queuedIssueCount + reviewCount;
   const hasPlan = Boolean(dashboard?.statusDraft.lines.length);
   const name = dashboard?.profile.name?.split(' ')[0] || 'Developer';
@@ -372,7 +379,7 @@ export function App() {
         </div>
 
         <section id="feedback" className="panel feedback-panel">
-          <div className="panel-head"><div><span className="section-label">YOUR PULL REQUESTS</span><div className="review-heading"><h2>Feedback</h2><span className="review-count" aria-label={`${feedback.length} matching pull requests have feedback or approval`}>{feedback.length} PR{feedback.length === 1 ? '' : 's'}</span></div></div></div>
+          <div className="panel-head"><div><span className="section-label">YOUR PULL REQUESTS</span><div className="review-heading"><h2>Feedback</h2><span className="review-count" aria-label={`${feedback.length} matching open pull requests authored by you`}>{feedback.length} PR{feedback.length === 1 ? '' : 's'}</span></div></div></div>
           <div ref={feedbackViewportRef} className={`review-grid queue-viewport feedback-viewport${feedbackScrollable ? ' is-scrollable' : ''}`}>
             {feedback.map((review) => <button className="review-card feedback-card" key={review.id} onClick={() => setSelectedReview(review.id)}>
               <div className="review-card-head"><span><span className="repo">{repositoryName(review.repository)}</span><span className="pr">#{review.number}</span></span><FeedbackBadges review={review} /></div>
@@ -384,12 +391,13 @@ export function App() {
                 </small>
               </footer>
             </button>)}
-            {!feedback.length && <Empty message={queueSearch && allFeedback.length ? 'No feedback matches this search.' : 'No pull requests currently have new feedback or approval.'} />}
+            {!feedback.length && <Empty message={queueSearch && allFeedback.length ? 'No authored pull requests match this search.' : 'You have no open pull requests in the watched repositories.'} />}
           </div>
         </section>
 
         <section id="reviews" className="panel reviews">
           <div className="panel-head"><div><span className="section-label">CODE REVIEWS</span><div className="review-heading"><h2>Review queue</h2><span className="review-count" aria-label={`${visibleReviewsNeedingApproval} matching non-approved pull requests need your review`}>{visibleReviewsNeedingApproval} to review</span><span className="review-count approved-count" aria-label={`${visibleApprovedReviews} matching pull requests are approved`}>{visibleApprovedReviews} approved</span><ReviewStatusInfo /></div></div><div className="queue-controls">
+            <label className="review-drafts"><span>Drafts</span><input type="checkbox" checked={showDraftReviews} onChange={(event) => setShowDraftReviews(event.target.checked)} /></label>
             <label className="review-sort queue-repository"><span>Repo</span><select value={reviewRepository} onChange={(event) => setReviewRepository(event.target.value)}><option value="all">All repositories</option>{reviewRepositories.map((repository) => <option value={repository} key={repository}>{repositoryName(repository)}</option>)}</select></label>
             <label className="review-sort"><span>Sort</span><select value={reviewSort} onChange={(event) => setReviewSort(event.target.value as ReviewSort)}><option value="priority">Priority</option><option value="pain">Pain</option><option value="oldest">Oldest</option><option value="newest">Newest</option><option value="repository">Repo name</option></select></label>
           </div></div>
@@ -399,7 +407,7 @@ export function App() {
               <h3>{review.title}</h3><p><InlineCode text={review.simple_summary} /></p>
               <footer className="review-card-footer"><ReviewMetadata review={review} timezone={dashboard?.profile.timezone} now={now} /></footer>
             </button>)}
-            {!reviews.length && <Empty message={queueSearch || reviewRepository !== 'all' ? 'No code reviews match these filters.' : 'No pull requests currently need your review.'} />}
+            {!reviews.length && <Empty message={queueSearch || reviewRepository !== 'all' || showDraftReviews ? 'No code reviews match these filters.' : 'No pull requests currently need your review.'} />}
           </div>
         </section>
 
@@ -437,6 +445,7 @@ function FeedbackBadges({ review }: { review: FeedbackReview }) {
   return <span className="feedback-badges">
     {review.has_new_feedback && <span className="tag feedback">New feedback</span>}
     {review.approved && <ReviewStatusBadge status="approved" />}
+    {!review.has_new_feedback && !review.approved && <span className="tag quiet">Awaiting review</span>}
   </span>;
 }
 
@@ -602,7 +611,7 @@ function ReviewDrawer({ id, timezone, now, onClose, onChanged }: { id: string; t
   return <div className="drawer-backdrop" onMouseDown={onClose}><aside className="drawer" onMouseDown={(event) => event.stopPropagation()}><button className="drawer-close" onClick={onClose}>×</button>
     {!review ? <p>Loading review…</p> : <><div className="drawer-details"><div className="drawer-review-heading"><span className="section-label">{review.repository} · #{review.number} · BY {review.author.startsWith('@') ? review.author : `@${review.author}`}</span><div className="drawer-status"><ReviewStatusBadge status={reviewDisplayStatus(review)} />{review.pending_reason && <span>Queued: {review.pending_reason.replaceAll('_', ' ')}</span>}</div></div><h2>{review.title}</h2><p className="plain-summary"><InlineCode text={review.simple_summary} /></p><FixedIssues review={review} />
       <div className="drawer-review-metadata"><ReviewMetadata review={review} timezone={timezone} now={now} /></div>
-      <div className="drawer-actions"><button disabled={!!busy} onClick={() => void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: '{}' }))}>{busy === 'review' ? 'Starting…' : '▶ Agent review'}</button><button disabled={!!busy} onClick={() => void action('workspace', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'POST', body: '{}' }))}>{busy === 'workspace' ? 'Cloning & building…' : review.workspace_path ? 'Rebuild workspace' : 'Prepare locally'}</button>{review.workspace_path && <button disabled={!!busy} onClick={() => void action('cleanup', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'DELETE' }))}>Clean up</button>}<a href={review.url} target="_blank">Open GitHub ↗</a></div>
+      <div className="drawer-actions"><button disabled={!!busy || review.is_draft} onClick={() => void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: '{}' }))}>{review.is_draft ? 'Draft — no review' : busy === 'review' ? 'Starting…' : '▶ Agent review'}</button><button disabled={!!busy} onClick={() => void action('workspace', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'POST', body: '{}' }))}>{busy === 'workspace' ? 'Cloning & building…' : review.workspace_path ? 'Rebuild workspace' : 'Prepare locally'}</button>{review.workspace_path && <button disabled={!!busy} onClick={() => void action('cleanup', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'DELETE' }))}>Clean up</button>}<a href={review.url} target="_blank">Open GitHub ↗</a></div>
       {review.workspace_path && <code className="workspace-path">{review.workspace_path}</code>}{error && <p className="inline-error">{error}</p>}</div>
       <div className="drawer-tabs" role="tablist" aria-label="Pull request details">
         <button type="button" role="tab" aria-selected={tab === 'review-room'} className={tab === 'review-room' ? 'active' : ''} onClick={() => setTab('review-room')}>Review Room</button>

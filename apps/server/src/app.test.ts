@@ -19,7 +19,7 @@ const config: BarbarianConfig = {
   desktop: { launchAtLogin: false, globalShortcut: 'CommandOrControl+Shift+Space' },
   profile: { name: 'Chris', reviewName: '', timezone: 'America/Chicago', githubLogin: 'cb1kenobi' },
   appearance: { theme: 'dark', fontSize: 'small', weapon: 'double-axe' },
-  monitor: { intervalMinutes: 20, runOnStartup: true, includeDraftPullRequests: false },
+  monitor: { intervalMinutes: 20, runOnStartup: true },
   repositories: [{ name: 'Acme/storage', priority: 10, watchIssues: true, watchPullRequests: true, reviewSkill: 'cb1-code-review', labels: {} }],
   review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
   linear: { enabled: false, command: [] },
@@ -72,6 +72,33 @@ describe('browser origin policy', () => {
 });
 
 describe('agent runs', () => {
+  it('rejects a manual agent review for a draft pull request', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-draft-review-test-'));
+    directories.push(directory);
+    const database = new BarbarianDatabase(path.join(directory, 'test.db'));
+    const now = new Date().toISOString();
+    database.connection.prepare(`
+      INSERT INTO review_queue(
+        id, repository, number, title, url, author, head_sha, head_ref_name, base_ref_name,
+        is_draft, first_seen_at, updated_at, last_seen_at
+      ) VALUES ('github:Acme/storage#6', 'Acme/storage', 6, 'Draft review',
+        'https://example.test/6', 'author', 'head', 'feature', 'main', 1, ?, ?, ?)
+    `).run(now, now, now);
+    const app = await createApp(database, new ConfigStore(config));
+    try {
+      const response = await app.inject({
+        method: 'POST', url: '/api/reviews/github%3AAcme%2Fstorage%236/run-review', payload: {},
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toEqual({ error: 'Draft pull requests cannot be reviewed' });
+      expect(database.connection.prepare('SELECT manual_requested_at FROM review_queue WHERE number=6').get())
+        .toEqual({ manual_requested_at: null });
+    } finally {
+      await app.close();
+      database.close();
+    }
+  });
+
   it('stops the running agent represented by the side-panel record', async () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-agent-run-test-'));
     directories.push(directory);
@@ -341,7 +368,7 @@ describe('dashboard reviews', () => {
     }
   });
 
-  it('separates authored PRs with feedback or approval from the review queue', async () => {
+  it('separates all open authored PRs from the review queue', async () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-feedback-test-'));
     directories.push(directory);
     const database = new BarbarianDatabase(path.join(directory, 'test.db'));
@@ -362,6 +389,7 @@ describe('dashboard reviews', () => {
       );
     };
     addReview(1, 'another-author', 'unreviewed', null, '', null);
+    addReview(8, 'another-author', 'ready_to_merge', null, '', null, true);
     addReview(2, 'cb1kenobi', 'unreviewed', 'APPROVED', '', null);
     addReview(3, 'CB1Kenobi', 'unreviewed', null, '2026-01-02T03:00:00Z', '2026-01-01T03:00:00Z');
     addReview(4, 'cb1kenobi', 'unreviewed', 'APPROVED', '', null, true);
@@ -378,10 +406,14 @@ describe('dashboard reviews', () => {
         feedback: Array<{ number: number; approved: boolean; has_new_feedback: boolean }>;
         metrics: { reviewsNeedingApproval: number };
       };
-      expect(payload.reviews).toEqual([expect.objectContaining({ number: 1 })]);
+      expect(payload.reviews).toEqual([
+        expect.objectContaining({ number: 8, is_draft: true, display_status: 'draft' }),
+        expect.objectContaining({ number: 1, is_draft: false, display_status: 'unreviewed' }),
+      ]);
       expect(payload.feedback).toEqual([
         expect.objectContaining({ number: 7, approved: false, has_new_feedback: true }),
         expect.objectContaining({ number: 6, approved: true, has_new_feedback: true }),
+        expect.objectContaining({ number: 5, approved: false, has_new_feedback: false }),
         expect.objectContaining({ number: 3, approved: false, has_new_feedback: true }),
         expect.objectContaining({ number: 2, approved: true, has_new_feedback: false }),
       ]);
@@ -398,7 +430,7 @@ describe('dashboard reviews', () => {
       expect(opened.statusCode).toBe(200);
       const afterOpen = await app.inject({ method: 'GET', url: '/api/dashboard' });
       expect((afterOpen.json() as { feedback: Array<{ number: number }> }).feedback)
-        .not.toContainEqual(expect.objectContaining({ number: 7 }));
+        .toContainEqual(expect.objectContaining({ number: 7, has_new_feedback: false }));
     } finally {
       await app.close();
       database.close();
@@ -747,7 +779,17 @@ describe('local branch context', () => {
       expect(database.connection.prepare('SELECT review_id, content FROM chat_messages').get())
         .toEqual({ review_id: 'github:Acme/storage#2', content: 'Carry this into the PR room.' });
       database.connection.prepare(`
-        UPDATE review_queue SET remote_state='MERGED', status='merged' WHERE id='github:Acme/storage#2'
+        UPDATE review_queue SET is_draft=1 WHERE id='github:Acme/storage#2'
+      `).run();
+      const draftReview = await app.inject({
+        method: 'POST',
+        url: `/api/local/branches/${encodeURIComponent(branch.id)}/run-review`,
+        payload: {},
+      });
+      expect(draftReview.statusCode).toBe(409);
+      expect(draftReview.json()).toEqual({ error: 'Draft pull requests cannot be reviewed' });
+      database.connection.prepare(`
+        UPDATE review_queue SET remote_state='MERGED', status='merged', is_draft=0 WHERE id='github:Acme/storage#2'
       `).run();
       const merged = await app.inject({
         method: 'POST', url: '/api/local/branches/context', payload: branchPayload(directory),

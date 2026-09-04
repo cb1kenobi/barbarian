@@ -15,7 +15,7 @@ const config: BarbarianConfig = {
   desktop: { launchAtLogin: false, globalShortcut: 'CommandOrControl+Shift+Space' },
   profile: { name: 'Chris', reviewName: '', timezone: 'America/Chicago', githubLogin: 'cb1kenobi' },
   appearance: { theme: 'dark', fontSize: 'small', weapon: 'double-axe' },
-  monitor: { intervalMinutes: 20, runOnStartup: true, includeDraftPullRequests: false },
+  monitor: { intervalMinutes: 20, runOnStartup: true },
   repositories: [
     { name: 'Acme/secondary', priority: 10, watchIssues: true, watchPullRequests: true, reviewSkill: 'cb1-code-review', labels: {} },
     { name: 'Acme/primary', priority: 100, watchIssues: true, watchPullRequests: true, reviewSkill: 'cb1-code-review', labels: {} },

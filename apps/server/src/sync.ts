@@ -265,7 +265,6 @@ export async function applyDiscovery(
   const seenReviewIds = new Set<string>();
   for (const pr of discovery.pullRequests) {
     seenReviewIds.add(reviewId(pr));
-    if (pr.isDraft && !config.monitor.includeDraftPullRequests) continue;
     if (shouldTrackReview(database, config, pr, discovery.githubLogin)) {
       upsertReview(database, config, pr, discovery.discoveredAt);
     }

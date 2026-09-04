@@ -23,7 +23,6 @@ appearance:
 monitor:
   intervalMinutes: 20
   runOnStartup: true
-  includeDraftPullRequests: false
 
 repositories: []
 # Example:

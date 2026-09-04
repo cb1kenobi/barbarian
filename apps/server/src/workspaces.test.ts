@@ -15,7 +15,7 @@ const config = {
   desktop: { launchAtLogin: false, globalShortcut: '' },
   profile: { name: 'Developer', reviewName: '', timezone: 'UTC', githubLogin: '' },
   appearance: { theme: 'dark', fontSize: 'normal', weapon: 'double-axe' },
-  monitor: { intervalMinutes: 20, runOnStartup: false, includeDraftPullRequests: false },
+  monitor: { intervalMinutes: 20, runOnStartup: false },
   repositories: [],
   review: { requestedReviewer: '', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
   linear: { enabled: false, command: [] },

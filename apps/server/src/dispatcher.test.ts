@@ -18,7 +18,7 @@ function config(maxConcurrent = 2): BarbarianConfig {
     desktop: { launchAtLogin: false, globalShortcut: 'CommandOrControl+Shift+Space' },
   profile: { name: 'Chris', reviewName: '', timezone: 'UTC', githubLogin: 'cb1kenobi' },
     appearance: { theme: 'dark', fontSize: 'small', weapon: 'double-axe' },
-    monitor: { intervalMinutes: 20, runOnStartup: true, includeDraftPullRequests: false },
+    monitor: { intervalMinutes: 20, runOnStartup: true },
     repositories: [],
     review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
     linear: { enabled: false, command: [] },
@@ -72,6 +72,26 @@ describe('reviewTrigger', () => {
 });
 
 describe('ReviewDispatcher', () => {
+  it('does not queue or claim draft pull requests', async () => {
+    const db = database();
+    const id = seedReview(db, 6);
+    db.connection.prepare('UPDATE review_queue SET is_draft=1 WHERE id=?').run(id);
+    let claimed = false;
+    const dispatcher = new ReviewDispatcher(
+      db, config(1), new AgentRuntime(1), { error: () => undefined },
+      async () => { claimed = true; },
+    );
+
+    expect(dispatcher.requestManual(id)).toBe(false);
+    await dispatcher.pump();
+    expect(claimed).toBe(false);
+    expect(db.connection.prepare('SELECT status, claim_owner, manual_requested_at FROM review_queue WHERE id=?').get(id))
+      .toEqual({ status: 'unreviewed', claim_owner: null, manual_requested_at: null });
+
+    dispatcher.stop();
+    db.close();
+  });
+
   it('does not automatically review pull requests authored by the configured user', async () => {
     const db = database();
     const id = seedReview(db, 7);

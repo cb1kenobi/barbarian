@@ -20,7 +20,7 @@ export interface SettingsConfig {
   desktop: { launchAtLogin: boolean; globalShortcut: string };
   profile: { name: string; reviewName: string; timezone: string; githubLogin: string };
   appearance: AppearanceConfig;
-  monitor: { intervalMinutes: number; runOnStartup: boolean; includeDraftPullRequests: boolean };
+  monitor: { intervalMinutes: number; runOnStartup: boolean };
   repositories: RepositoryConfig[];
   review: { requestedReviewer: string; fallbackTeams: string[]; autoCleanup: boolean };
   agents: {
@@ -366,10 +366,9 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
             </div>
           </div></fieldset>
 
-          <fieldset className="settings-section"><legend>Monitoring</legend><div className="settings-grid three">
+          <fieldset className="settings-section"><legend>Monitoring</legend><div className="settings-grid two">
             <label><span>Interval (minutes)</span><input type="number" min="20" required value={draft.monitor.intervalMinutes} onChange={(event) => setDraft({ ...draft, monitor: { ...draft.monitor, intervalMinutes: Number(event.target.value) } })} /></label>
             <label className="check-field"><input type="checkbox" checked={draft.monitor.runOnStartup} onChange={(event) => setDraft({ ...draft, monitor: { ...draft.monitor, runOnStartup: event.target.checked } })} /><span>Sync when server starts</span></label>
-            <label className="check-field"><input type="checkbox" checked={draft.monitor.includeDraftPullRequests} onChange={(event) => setDraft({ ...draft, monitor: { ...draft.monitor, includeDraftPullRequests: event.target.checked } })} /><span>Include draft PRs</span></label>
           </div></fieldset>
 
           <fieldset className="settings-section repositories-section"><legend>Repositories</legend>

@@ -18,7 +18,7 @@ const config: BarbarianConfig = {
   desktop: { launchAtLogin: false, globalShortcut: 'CommandOrControl+Shift+Space' },
   profile: { name: 'Chris', reviewName: '', timezone: 'America/Chicago', githubLogin: 'cb1kenobi' },
   appearance: { theme: 'dark', fontSize: 'small', weapon: 'double-axe' },
-  monitor: { intervalMinutes: 20, runOnStartup: true, includeDraftPullRequests: false },
+  monitor: { intervalMinutes: 20, runOnStartup: true },
   repositories: [{ name: 'Acme/storage', priority: 10, watchIssues: true, watchPullRequests: true, reviewSkill: 'cb1-code-review', labels: {} }],
   review: { requestedReviewer: 'cb1kenobi', fallbackTeams: ['Developers'], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
   linear: { enabled: false, command: [] },
@@ -147,7 +147,7 @@ describe('applyDiscovery', () => {
     db.close();
   });
 
-  it('reviews a matching PR when it becomes ready and re-reviews each new head', async () => {
+  it('tracks draft transitions but only reviews ready pull requests', async () => {
     const db = database();
     const runtime = new AgentRuntime(1);
     const automaticConfig: BarbarianConfig = {
@@ -192,7 +192,10 @@ describe('applyDiscovery', () => {
     };
 
     await applyDiscovery(db, automaticConfig, discovery);
-    expect(db.connection.prepare('SELECT id FROM review_queue WHERE number=797').get()).toBeUndefined();
+    expect(db.connection.prepare('SELECT id, is_draft FROM review_queue WHERE number=797').get()).toEqual({
+      id: 'github:Acme/storage#797',
+      is_draft: 1,
+    });
 
     const claims: ReviewClaim[] = [];
     const dispatcher = new ReviewDispatcher(
@@ -208,6 +211,9 @@ describe('applyDiscovery', () => {
         `).run(claim.headSha, claim.discussionWatermark, claim.reviewId, claim.owner);
       },
     );
+    await dispatcher.pump();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(claims).toHaveLength(0);
 
     discovery.discoveredAt = '2026-09-02T23:05:00Z';
     discovery.pullRequests = [{
@@ -231,6 +237,23 @@ describe('applyDiscovery', () => {
     await dispatcher.pump();
     await waitFor(() => claims.length === 2 && runtime.availableSlots === 1);
     expect(claims[1]).toMatchObject({ reviewId: 'github:Acme/storage#797', trigger: 'new_commits', headSha: 'second-head' });
+
+    discovery.discoveredAt = '2026-09-03T00:05:00Z';
+    discovery.pullRequests = [{
+      ...discovery.pullRequests[0]!,
+      isDraft: true,
+      headSha: 'draft-head',
+      commitCount: 3,
+      updatedAt: '2026-09-03T00:04:16Z',
+    }];
+    await applyDiscovery(db, automaticConfig, discovery);
+    expect(db.connection.prepare('SELECT is_draft, head_sha FROM review_queue WHERE number=797').get()).toEqual({
+      is_draft: 1,
+      head_sha: 'draft-head',
+    });
+    await dispatcher.pump();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(claims).toHaveLength(2);
 
     dispatcher.stop();
     await runtime.shutdown();

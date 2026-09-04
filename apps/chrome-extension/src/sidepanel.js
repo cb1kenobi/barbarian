@@ -184,9 +184,10 @@ function renderContext(context) {
   const summary = pullRequestSummary(review);
   const counts = assessment?.counts || { open: review.findings_count || 0, resolved: 0, outdated: 0, total: review.findings_count || 0 };
   const reviewRunning = review.status === 'agent_working' || Boolean(review.manual_requested_at);
+  const draft = Boolean(review.is_draft);
   main.innerHTML = `
     <div class="status ${escapeHtml(assessment?.tone || 'attention')}">${escapeHtml(assessment?.label || 'Needs Review')}</div>
-    <section class="review-actions"><h2>Review actions</h2><div class="actions"><button class="agent-review${reviewRunning ? ' running' : ''}" data-running="${reviewRunning}"><span class="button-icon" aria-hidden="true">${reviewRunning ? '■' : '▶'}</span><span>${reviewRunning ? 'Stop agent review' : 'Agent review'}</span></button><button class="secondary test-locally">Test locally</button></div><p class="action-status"></p>${review.workspace_path ? `<code class="workspace-path">${escapeHtml(review.workspace_path)}</code>` : ''}</section>
+    <section class="review-actions"><h2>Review actions</h2><div class="actions"><button class="agent-review${reviewRunning ? ' running' : ''}" data-running="${reviewRunning}" ${draft ? 'disabled' : ''}><span class="button-icon" aria-hidden="true">${reviewRunning ? '■' : '▶'}</span><span>${draft ? 'Draft — no review' : reviewRunning ? 'Stop agent review' : 'Agent review'}</span></button><button class="secondary test-locally">Test locally</button></div><p class="action-status"></p>${review.workspace_path ? `<code class="workspace-path">${escapeHtml(review.workspace_path)}</code>` : ''}</section>
     <section><h2>Summary</h2><div class="summary markdown">${renderMarkdown(summary)}</div>${renderFixedIssues(review)}</section>
     <section class="findings-panel"><div class="findings-heading"><h2>Findings</h2><label class="finding-filter"><input type="checkbox" ${suppressResolvedFindings ? 'checked' : ''}> Hide resolved</label></div><div class="assessment"><p class="assessment-message">${escapeHtml(assessment?.message || 'Waiting for an AI review.')}</p>${assessment?.stale ? '<p class="stale">⚠ This assessment is older than the latest commit.</p>' : ''}<div class="counts"><div class="count"><strong>${Number(counts.open) || 0}</strong><span>Open</span></div><div class="count"><strong>${Number(counts.resolved) || 0}</strong><span>Resolved</span></div><div class="count"><strong>${Number(counts.outdated) || 0}</strong><span>Outdated</span></div><div class="count"><strong>${Number(counts.total) || 0}</strong><span>Total</span></div></div></div><div class="findings-content">${renderFindings(findings)}</div></section>
     <section class="review-room"><h2>Review Room</h2><div class="conversation">${renderMessages(messages)}</div><p class="selection"></p><textarea placeholder="Ask what changed, why it works, what could break, or how to test it…"></textarea><div class="actions"><button class="secondary ask-selection" disabled>Ask about selection</button></div><p class="error"></p></section>`;
@@ -222,10 +223,12 @@ async function trackCurrentReview() {
   status.textContent = 'Fetching the pull request and starting an agent review…';
   status.classList.remove('error');
   try {
-    await api(`/api/reviews/${encodeURIComponent(currentContext.id)}/track`, {
+    const result = await api(`/api/reviews/${encodeURIComponent(currentContext.id)}/track`, {
       method: 'POST', body: '{}',
     });
-    status.textContent = 'Added. The review agent is starting…';
+    status.textContent = result.reviewStarted === false
+      ? 'Added as a draft. Agent review is disabled until it is ready for review.'
+      : 'Added. The review agent is starting…';
     await refresh({ quiet: true });
   } catch (caught) {
     status.textContent = caught.message;

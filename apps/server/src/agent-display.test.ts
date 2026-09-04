@@ -9,7 +9,7 @@ function config(provider: BarbarianConfig['agents']['providers'][string]): Barba
     desktop: { launchAtLogin: false, globalShortcut: 'CommandOrControl+Shift+Space' },
     profile: { name: 'Chris', reviewName: '', timezone: 'UTC', githubLogin: 'cb1kenobi' },
     appearance: { theme: 'dark', fontSize: 'normal', weapon: 'double-axe' },
-    monitor: { intervalMinutes: 20, runOnStartup: true, includeDraftPullRequests: false },
+    monitor: { intervalMinutes: 20, runOnStartup: true },
     repositories: [],
     review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '', autoCleanup: true },
     linear: { enabled: false, command: [] },

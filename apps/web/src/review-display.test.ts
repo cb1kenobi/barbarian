@@ -26,18 +26,19 @@ describe('review display status', () => {
     expect(statusLabel('approved')).toBe('Approved');
   });
 
-  it('counts every review except PRs approved by the current user', () => {
+  it('counts every ready review except drafts and PRs approved by the current user', () => {
     expect(countReviewsNeedingApproval([
       { status: 'unreviewed' },
       { status: 'ready_to_merge' },
       { status: 'approved' },
+      { status: 'unreviewed', display_status: 'draft' },
       { status: 'approved', display_status: 'unreviewed' },
     ])).toBe(3);
   });
 
   it('documents every PR status shown by the dashboard', () => {
     expect(reviewStatusGuide.map(({ status }) => status)).toEqual([
-      'unreviewed', 'agent_working', 'agent_failed', 'issues_found', 'awaiting_feedback',
+      'draft', 'unreviewed', 'agent_working', 'agent_failed', 'issues_found', 'awaiting_feedback',
       'ready_to_merge', 'partially_reviewed', 'approved', 'merged', 'closed',
     ]);
     expect(reviewStatusGuide.every(({ status, description }) => statusLabel(status) && description.length > 10)).toBe(true);

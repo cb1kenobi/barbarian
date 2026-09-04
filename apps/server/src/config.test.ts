@@ -13,7 +13,7 @@ const base = {
   server: { bindAddress: '127.0.0.1' as const, port: 4142 },
   desktop: { launchAtLogin: false, globalShortcut: 'CommandOrControl+Shift+Space' },
   profile: { name: 'Chris', timezone: 'America/Chicago', githubLogin: 'cb1kenobi' },
-  monitor: { intervalMinutes: 20, runOnStartup: true, includeDraftPullRequests: false },
+  monitor: { intervalMinutes: 20, runOnStartup: true },
   repositories: [],
   review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
   linear: { enabled: false, command: [] },

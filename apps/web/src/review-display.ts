@@ -4,6 +4,7 @@ export interface ReviewStatusSource {
 }
 
 const labels: Record<string, string> = {
+  draft: 'Draft',
   unreviewed: 'Needs review',
   agent_working: 'Agent reviewing',
   agent_failed: 'Agent failed',
@@ -17,6 +18,7 @@ const labels: Record<string, string> = {
 };
 
 export const reviewStatusGuide = [
+  { status: 'draft', description: 'The pull request is not ready for review; agent reviews are disabled.' },
   { status: 'unreviewed', description: 'No completed review exists for the current PR head.' },
   { status: 'agent_working', description: 'A Barbarian agent is actively reviewing the PR.' },
   { status: 'agent_failed', description: 'The last agent attempt failed and may be retried.' },
@@ -36,7 +38,7 @@ export function reviewDisplayStatus(review: ReviewStatusSource): string {
 }
 
 export function countReviewsNeedingApproval(reviews: ReviewStatusSource[]): number {
-  return reviews.filter((review) => reviewDisplayStatus(review) !== 'approved').length;
+  return reviews.filter((review) => !['approved', 'draft'].includes(reviewDisplayStatus(review))).length;
 }
 
 export function statusLabel(status: unknown): string {

@@ -128,7 +128,7 @@ export class ReviewDispatcher {
         manual_requested_at=CASE WHEN claim_owner IS NULL THEN ? ELSE manual_requested_at END,
         manual_provider=CASE WHEN claim_owner IS NULL THEN ? ELSE manual_provider END,
         review_paused=0, status=CASE WHEN claim_owner IS NULL THEN 'unreviewed' ELSE status END, updated_at=?
-      WHERE id=? AND remote_state='OPEN'
+      WHERE id=? AND remote_state='OPEN' AND is_draft=0
     `).run(now, provider || null, now, reviewId);
     if (result.changes) void this.pump();
     return Boolean(result.changes);

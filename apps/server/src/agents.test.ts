@@ -36,7 +36,7 @@ function setup(command: string): { database: BarbarianDatabase; config: Barbaria
     desktop: { launchAtLogin: false, globalShortcut: 'CommandOrControl+Shift+Space' },
     profile: { name: 'Chris', reviewName: '', timezone: 'UTC', githubLogin: 'cb1kenobi' },
     appearance: { theme: 'dark', fontSize: 'small', weapon: 'double-axe' },
-    monitor: { intervalMinutes: 20, runOnStartup: true, includeDraftPullRequests: false },
+    monitor: { intervalMinutes: 20, runOnStartup: true },
     repositories: [],
     review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
     linear: { enabled: false, command: [] },

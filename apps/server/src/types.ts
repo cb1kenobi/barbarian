@@ -48,7 +48,7 @@ export interface BarbarianConfig {
   desktop: { launchAtLogin: boolean; globalShortcut: string };
   profile: { name: string; reviewName: string; timezone: string; githubLogin: string };
   appearance: { theme: 'light' | 'dark' | 'slayer'; fontSize: 'small' | 'normal'; weapon: BrandWeapon };
-  monitor: { intervalMinutes: number; runOnStartup: boolean; includeDraftPullRequests: boolean };
+  monitor: { intervalMinutes: number; runOnStartup: boolean };
   repositories: RepositoryConfig[];
   review: {
     requestedReviewer: string;
