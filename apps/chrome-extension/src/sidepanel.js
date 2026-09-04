@@ -8,6 +8,7 @@ import { selectionLabel } from './selection-context.js';
 import {
   rememberSuppressResolved, restoreSuppressResolved, suppressResolvedStorageKey, visibleFindings,
 } from './finding-visibility.js';
+import { serverUrlStorageKey } from './connection.js';
 
 let currentTab;
 let currentPageKey = '';
@@ -413,9 +414,18 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
       wireGitHubLinks(content);
     }
   }
+  if (areaName === 'local' && serverUrlStorageKey in changes) {
+    const dashboard = document.querySelector('.dashboard');
+    if (dashboard && changes[serverUrlStorageKey].newValue) {
+      dashboard.href = `${changes[serverUrlStorageKey].newValue}/#reviews`;
+    }
+  }
 });
 setInterval(() => { if (!document.hidden && !busy && !document.querySelector('textarea')?.value) void refresh({ quiet: true }); }, 30_000);
 void (async () => {
+  const connection = await chrome.runtime.sendMessage({ type: 'barbarian-connection' }).catch(() => null);
+  const dashboard = document.querySelector('.dashboard');
+  if (dashboard && connection?.serverUrl) dashboard.href = `${connection.serverUrl}/#reviews`;
   suppressResolvedFindings = await restoreSuppressResolved(chrome.storage.local);
   const restored = await restoreAppearance(chrome.storage.local);
   const synced = await syncAppearance();

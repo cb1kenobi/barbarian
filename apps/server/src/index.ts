@@ -1,8 +1,8 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import os from 'node:os';
 import path from 'node:path';
 import { BarbarianDatabase } from './database.js';
-import { ConfigStore, serverAddress } from './config.js';
+import { ConfigStore, envPath, serverAddress } from './config.js';
 import { createApp, type MonitorRuntime } from './app.js';
 import { synchronize } from './sync.js';
 import { cleanupCompletedWorkspaces } from './workspaces.js';
@@ -22,6 +22,7 @@ for (const candidate of [
 process.env.PATH = currentPath.join(path.delimiter);
 
 const configStore = await ConfigStore.load();
+dotenv.config({ path: envPath });
 const startupConfig = configStore.get();
 const instanceLock = await acquireInstanceLock();
 const database = new BarbarianDatabase();
@@ -49,7 +50,7 @@ const app = await createApp(database, configStore, monitorRuntime, {
   },
 });
 appLogger = app.log;
-const address = serverAddress();
+const address = serverAddress(startupConfig);
 
 let timer: NodeJS.Timeout | undefined;
 let manualSyncsInProgress = 0;

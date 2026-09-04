@@ -1,6 +1,7 @@
 node_modules/
 .pnpm-store/
 dist/
+out/
 .env
 config/barbarian.yaml
 config/barbarian.yaml.bak

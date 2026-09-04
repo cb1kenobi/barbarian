@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Barbarian Connection</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <img src="../icons/icon-128.png" alt="" width="64" height="64">
+    <div><span class="eyebrow">BARBARIAN</span><h1>Connection</h1></div>
+    <form>
+      <label for="server-url">Barbarian server URL</label>
+      <input id="server-url" name="serverUrl" type="url" required placeholder="http://127.0.0.1:4142">
+      <p>For remote access, use the Barbarian Mac's VPN hostname or VPN IP address. Do not enter <code>0.0.0.0</code>.</p>
+      <div class="actions"><button type="button" id="test">Test connection</button><button type="submit">Save</button></div>
+      <output aria-live="polite"></output>
+    </form>
+  </main>
+  <script type="module" src="options.js"></script>
+</body>
+</html>

@@ -16,6 +16,8 @@ export interface RepositoryConfig {
   labels: Record<string, number>;
 }
 export interface SettingsConfig {
+  server: { bindAddress: '127.0.0.1' | '0.0.0.0'; port: number; trustedHosts: string[] };
+  desktop: { launchAtLogin: boolean; globalShortcut: string };
   profile: { name: string; reviewName: string; timezone: string; githubLogin: string };
   appearance: AppearanceConfig;
   monitor: { intervalMinutes: number; runOnStartup: boolean; includeDraftPullRequests: boolean };
@@ -33,6 +35,10 @@ export interface SettingsConfig {
   statusUpdate: { enabled: boolean; workdays: string[]; daysOff: string[] };
 }
 interface AdvancedSettings {
+  server: {
+    active: SettingsConfig['server'];
+    restartRequired: boolean;
+  };
   workspaceRoot: string;
   linear: { enabled: boolean; configured: boolean };
   providers: Array<{
@@ -187,6 +193,7 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
   const [modelsLoading, setModelsLoading] = useState(true);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [restartRequired, setRestartRequired] = useState(false);
   const originalAppearance = useRef<AppearanceConfig | null>(null);
   const saved = useRef(false);
   const savingRef = useRef(false);
@@ -270,10 +277,24 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
       const response = await fetch('/api/settings', {
         method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ revision, config }),
       });
-      const body = await response.json().catch(() => ({}));
+      const body = await response.json().catch(() => ({})) as {
+        revision?: string;
+        advanced?: AdvancedSettings;
+      };
       if (!response.ok) throw new Error(messageFromResponse(body, response.statusText));
       saved.current = true;
       await onSaved();
+      await window.barbarianDesktop?.applyPreferences();
+      if (body.advanced?.server.restartRequired) {
+        setRevision(body.revision || revision);
+        setAdvanced(body.advanced);
+        setRestartRequired(true);
+        if (window.barbarianDesktop) {
+          await window.barbarianDesktop.restartServer();
+          return;
+        }
+        return;
+      }
       onClose();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -310,9 +331,44 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
             <div className="weapon-choice-group"><span className="field-label">Weapon</span><div className="weapon-choice-row">{weaponOptions.map((weapon) => <label className="choice-card weapon-choice" key={weapon.id} title={weapon.label}><input type="radio" name="weapon" checked={draft.appearance.weapon === weapon.id} onChange={() => setDraft({ ...draft, appearance: { ...draft.appearance, weapon: weapon.id } })} /><i className="weapon-option-mark" aria-hidden="true" style={{ '--weapon-option': `url("${weaponAssetPath(weapon.id)}")` } as CSSProperties} /><span>{weapon.label}</span></label>)}</div></div>
           </div></fieldset>
 
+          <fieldset className="settings-section"><legend>Server</legend><div className="settings-description-list">
+            <div className="settings-description-row">
+              <label><span>Listen on</span><select value={draft.server.bindAddress} onChange={(event) => setDraft({ ...draft, server: { ...draft.server, bindAddress: event.target.value as SettingsConfig['server']['bindAddress'] } })}>
+                <option value="127.0.0.1">This Mac only — 127.0.0.1</option>
+                <option value="0.0.0.0">All network interfaces — 0.0.0.0</option>
+              </select></label>
+              <p>{draft.server.bindAddress === '0.0.0.0'
+                ? 'Remote access is enabled on every IPv4 interface. Restrict access with your VPN and macOS firewall; Barbarian does not authenticate requests.'
+                : 'Only applications running on this Mac can connect.'}</p>
+            </div>
+            <div className="settings-description-row">
+              <label><span>Port</span><input type="number" min="1024" max="65535" required value={draft.server.port} onChange={(event) => setDraft({ ...draft, server: { ...draft.server, port: Number(event.target.value) } })} /></label>
+              <p>Changing the address or port takes effect after the server restarts.</p>
+            </div>
+            <div className="settings-description-row">
+              <label><span>Trusted remote hosts</span><input placeholder="barbarian.example.vpn, 100.64.0.10" value={draft.server.trustedHosts.join(', ')} onChange={(event) => setDraft({ ...draft, server: { ...draft.server, trustedHosts: splitItems(event.target.value) } })} /></label>
+              <p>Required when listening on all interfaces. Enter only the VPN hostnames or IP addresses people will use to open Barbarian.</p>
+            </div>
+            {advanced?.server && <div className="settings-description-row">
+              <span className="field-label">Currently running</span>
+              <code className="readonly-value">{advanced.server.active.bindAddress}:{advanced.server.active.port}</code>
+            </div>}
+          </div></fieldset>
+
+          <fieldset className="settings-section"><legend>Desktop app</legend><div className="settings-description-list">
+            <div className="settings-description-row">
+              <label className="check-field"><input type="checkbox" checked={draft.desktop.launchAtLogin} onChange={(event) => setDraft({ ...draft, desktop: { ...draft.desktop, launchAtLogin: event.target.checked } })} /><span>Launch Barbarian when I log in</span></label>
+              <p>Starts the desktop shell and server in the background after you sign in to this Mac.</p>
+            </div>
+            <div className="settings-description-row">
+              <label><span>Focus shortcut</span><input placeholder="CommandOrControl+Shift+Space" value={draft.desktop.globalShortcut} onChange={(event) => setDraft({ ...draft, desktop: { ...draft.desktop, globalShortcut: event.target.value } })} /></label>
+              <p>Global Electron accelerator used to show and focus Barbarian. Leave blank to disable it.</p>
+            </div>
+          </div></fieldset>
+
           <fieldset className="settings-section"><legend>Monitoring</legend><div className="settings-grid three">
             <label><span>Interval (minutes)</span><input type="number" min="20" required value={draft.monitor.intervalMinutes} onChange={(event) => setDraft({ ...draft, monitor: { ...draft.monitor, intervalMinutes: Number(event.target.value) } })} /></label>
-            <label className="check-field"><input type="checkbox" checked={draft.monitor.runOnStartup} onChange={(event) => setDraft({ ...draft, monitor: { ...draft.monitor, runOnStartup: event.target.checked } })} /><span>Run on startup</span></label>
+            <label className="check-field"><input type="checkbox" checked={draft.monitor.runOnStartup} onChange={(event) => setDraft({ ...draft, monitor: { ...draft.monitor, runOnStartup: event.target.checked } })} /><span>Sync when server starts</span></label>
             <label className="check-field"><input type="checkbox" checked={draft.monitor.includeDraftPullRequests} onChange={(event) => setDraft({ ...draft, monitor: { ...draft.monitor, includeDraftPullRequests: event.target.checked } })} /><span>Include draft PRs</span></label>
           </div></fieldset>
 
@@ -385,7 +441,7 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
             <div><span className="field-label">Linear integration <small>edit in YAML</small></span><code className="readonly-value command-value">{advanced?.linear.enabled ? advanced.linear.configured ? 'Enabled and configured' : 'Enabled without a command' : 'Disabled'}</code></div>
           </div></fieldset>
         </div>
-        <footer className="settings-footer">{error && <p className="settings-error">{error}</p>}<span /><button type="button" className="muted-button" onClick={onClose} disabled={saving}>Cancel</button><button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</button></footer>
+        <footer className="settings-footer">{error && <p className="settings-error">{error}</p>}{restartRequired && <p className="settings-warning">Settings saved. Restart the standalone server to use {draft.server.bindAddress}:{draft.server.port}.</p>}<span /><button type="button" className="muted-button" onClick={onClose} disabled={saving}>{restartRequired ? 'Close' : 'Cancel'}</button><button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</button></footer>
       </form>}
     </section>
   </div>;

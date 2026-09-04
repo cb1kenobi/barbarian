@@ -10,6 +10,7 @@ const exec = promisify(execFile);
 const root = path.resolve(import.meta.dirname, '..');
 const directory = path.join(process.env.HOME, 'Library/LaunchAgents');
 const plist = path.join(directory, 'io.barbarian.local.plist');
+const logDirectory = path.join(process.env.HOME, 'Library/Caches/Barbarian');
 const escape = (value) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 const document = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -19,12 +20,11 @@ const document = `<?xml version="1.0" encoding="UTF-8"?>
   <key>WorkingDirectory</key><string>${escape(root)}</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>${escape(path.join(root, 'data/barbarian.log'))}</string>
-  <key>StandardErrorPath</key><string>${escape(path.join(root, 'data/barbarian-error.log'))}</string>
+  <key>StandardOutPath</key><string>${escape(path.join(logDirectory, 'barbarian.log'))}</string>
+  <key>StandardErrorPath</key><string>${escape(path.join(logDirectory, 'barbarian-error.log'))}</string>
 </dict></plist>\n`;
-await mkdir(directory, { recursive: true });
+await Promise.all([mkdir(directory, { recursive: true }), mkdir(logDirectory, { recursive: true })]);
 await writeFile(plist, document, { mode: 0o600 });
 await exec('launchctl', ['bootout', `gui/${process.getuid()}/io.barbarian.local`]).catch(() => undefined);
 await exec('launchctl', ['bootstrap', `gui/${process.getuid()}`, plist]);
 console.log(`Installed and started ${plist}. Barbarian will resume after login and wake.`);
-

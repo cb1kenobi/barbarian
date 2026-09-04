@@ -3,9 +3,13 @@ import { execFile, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { defaultServerUrl, normalizeServerUrl } from './connection.js';
 
 const exec = promisify(execFile);
-const endpoint = 'http://127.0.0.1:4142';
+
+function serverEndpoint(): string {
+  return normalizeServerUrl(vscode.workspace.getConfiguration('barbarian').get('serverUrl', defaultServerUrl));
+}
 
 interface GitContext {
   folder: vscode.WorkspaceFolder;
@@ -193,7 +197,7 @@ async function discoverPullRequest(context: GitContext): Promise<PullRequestMeta
 }
 
 async function api<T>(apiPath: string, options?: RequestInit, timeoutMs = 30_000): Promise<T> {
-  const response = await fetch(`${endpoint}${apiPath}`, {
+  const response = await fetch(`${serverEndpoint()}${apiPath}`, {
     ...options,
     signal: options?.signal || AbortSignal.timeout(timeoutMs),
     headers: { 'content-type': 'application/json', ...options?.headers },
@@ -253,6 +257,10 @@ class BranchReviewProvider implements vscode.WebviewViewProvider, vscode.Disposa
     clearInterval(this.timer);
     if (this.selectionTimer) clearTimeout(this.selectionTimer);
     for (const subscription of this.subscriptions) subscription.dispose();
+  }
+
+  refreshConnection(): Promise<void> {
+    return this.refresh();
   }
 
   private async onMessage(message: { type?: string; question?: string; includeSelection?: boolean; finding?: Finding }): Promise<void> {
@@ -471,6 +479,32 @@ export function activate(extensionContext: vscode.ExtensionContext): void {
     provider,
     vscode.window.registerWebviewViewProvider('barbarian.branchReview', provider, { webviewOptions: { retainContextWhenHidden: true } }),
     vscode.commands.registerCommand('barbarian.refreshBranch', () => vscode.commands.executeCommand('barbarian.branchReview.focus')),
+    vscode.commands.registerCommand('barbarian.configureConnection', async () => {
+      const configuration = vscode.workspace.getConfiguration('barbarian');
+      const current = configuration.get('serverUrl', defaultServerUrl);
+      const value = await vscode.window.showInputBox({
+        title: 'Barbarian server connection',
+        prompt: 'Enter the Barbarian server URL. For remote access, use its VPN hostname or VPN IP address.',
+        value: current,
+        validateInput(candidate) {
+          try { normalizeServerUrl(candidate); return undefined; }
+          catch (error) { return error instanceof Error ? error.message : String(error); }
+        },
+      });
+      if (value === undefined) return;
+      const serverUrl = normalizeServerUrl(value);
+      await configuration.update('serverUrl', serverUrl, vscode.ConfigurationTarget.Global);
+      try {
+        const health = await api<{ service?: string }>('/api/health');
+        if (health.service !== 'barbarian') throw new Error('The address did not respond as a Barbarian server');
+        await vscode.window.showInformationMessage(`Connected to Barbarian at ${serverUrl}`);
+      } catch (error) {
+        await vscode.window.showWarningMessage(`Saved ${serverUrl}, but the connection test failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration('barbarian.serverUrl')) void provider.refreshConnection();
+    }),
   );
 }
 

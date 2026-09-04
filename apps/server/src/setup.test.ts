@@ -4,6 +4,8 @@ import { parseConfig } from './config.js';
 
 const config = parseConfig({
   version: 1,
+  server: { bindAddress: '127.0.0.1', port: 4142, trustedHosts: [] },
+  desktop: { launchAtLogin: false, globalShortcut: 'CommandOrControl+Shift+Space' },
   profile: { name: 'Developer', timezone: 'America/Chicago', githubLogin: 'old-login' },
   monitor: { intervalMinutes: 20, runOnStartup: true, includeDraftPullRequests: false },
   repositories: [],

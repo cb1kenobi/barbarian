@@ -1,8 +1,8 @@
 # <img src="assets/branding/barbarian-axe.png" alt="" width="32" height="32" align="absmiddle"> BARBARIAN
 
-Barbarian is a local-only command center for developer work. It turns assigned issues, requested pull-request reviews, AI review runs, local checkouts, and daily status notes into one durable workflow.
+Barbarian is a personal command center for developer work. It turns assigned issues, requested pull-request reviews, AI review runs, local checkouts, and daily status notes into one durable workflow.
 
-The server binds to `127.0.0.1`, stores state in SQLite, and talks to GitHub through your existing authenticated `gh` CLI. No Barbarian account or hosted service is involved.
+The server binds to `127.0.0.1` by default, stores state in SQLite, and talks to GitHub through your existing authenticated `gh` CLI. No Barbarian account or hosted service is involved. It can explicitly bind to `0.0.0.0` for access over a trusted VPN, but Barbarian has no built-in authentication.
 
 ## What works
 
@@ -24,34 +24,37 @@ The server binds to `127.0.0.1`, stores state in SQLite, and talks to GitHub thr
 ```text
 apps/web                 React/Vite dashboard
 apps/server              Fastify API, monitor, SQLite, agent/worktree orchestration
+apps/desktop             Electron main process and secure renderer bridge
 apps/chrome-extension    unpacked Manifest V3 GitHub companion
 apps/vscode-extension    Cursor/VS Code review companion
-config                   committed example + ignored machine-local YAML
-data                     ignored SQLite database and service logs
+config                   committed configuration example
+data                     legacy repo-local state, migrated on first launch
 scripts                  sync, configuration, skill linking, cleanup, launchd
 skills/cb1-code-review   generic review skill and curated GitHub scripts
 ```
 
-SQLite is at `data/barbarian.db` and uses WAL mode. Configuration and secrets remain outside git:
+Runtime state is outside the checkout, so an installed `Barbarian.app` does not depend on the repository:
 
-- `config/barbarian.yaml` — watched repositories, priorities, monitor, agent commands, days off.
-- `.env` — optional API keys and local bind settings.
+- `~/Library/Application Support/Barbarian/config/barbarian.yaml` — watched repositories, server address, desktop preferences, priorities, monitor, agent commands, and days off.
+- `~/Library/Application Support/Barbarian/data/barbarian.db` — SQLite database in WAL mode.
+- `~/Library/Application Support/Barbarian/.env` — optional API keys.
+- `~/Library/Caches/Barbarian` — prepared worktrees, logs, and Electron cache data.
 
-Both files are created from their committed examples the first time the server or `pnpm configure` runs.
+The files are created from their committed examples the first time the server, `pnpm configure`, or `pnpm desktop:package` runs. If an older checkout contains `config/barbarian.yaml`, `.env`, and `data/barbarian.db`, Barbarian copies them to Application Support once, without deleting or overwriting the originals. Stop an older running server before that first migration so SQLite can be copied consistently. Legacy `BARBARIAN_HOST` and `BARBARIAN_PORT` values in `.env` are no longer read; set the listener in Settings before restarting.
 
 ## Requirements
 
 - Node.js 24 or newer (Barbarian uses the built-in `node:sqlite` module).
 - pnpm.
 - GitHub CLI, authenticated with `gh auth status`.
-- Any AI CLIs you enable in `config/barbarian.yaml`.
+- Any AI CLIs you enable in Barbarian Settings.
 
 ## Start
 
 ```bash
 pnpm install
 pnpm configure
-# Add repositories to config/barbarian.yaml and optional keys to .env
+# Add repositories in Settings and optional keys to the Application Support .env
 pnpm dev
 ```
 
@@ -59,7 +62,7 @@ pnpm dev
 
 If requested, the wizard builds and packages the Cursor/VS Code extension. It installs the resulting VSIX automatically into every detected `cursor` or `code` CLI; if neither command is available, it prints the VSIX path for **Extensions: Install from VSIX...**. Chrome does not allow a local unpacked extension to install itself, so the wizard validates the extension and prints its absolute directory plus the `chrome://extensions` steps.
 
-The startup question controls the initial sync after the server launches. To launch the Barbarian server automatically when you log into macOS, build it and install the separate LaunchAgent described below.
+The startup question controls the initial sync after the server launches. To launch the standalone Node server automatically when you log into macOS, build it and install the separate LaunchAgent described below.
 
 Open [http://127.0.0.1:4141](http://127.0.0.1:4141) in development.
 
@@ -72,6 +75,29 @@ pnpm start
 
 The built server serves the dashboard at [http://127.0.0.1:4142](http://127.0.0.1:4142).
 
+### Electron app (macOS)
+
+The Electron app and standalone Node server are two front ends for the same code and data; adopting Electron is not a one-way migration. For development, run:
+
+```bash
+pnpm install
+pnpm desktop:dev
+```
+
+To create an unsigned, self-contained macOS application:
+
+```bash
+pnpm desktop:package
+```
+
+The result is `out/mac-arm64/Barbarian.app` on Apple silicon (or the corresponding architecture directory). Copy it to `/Applications` if desired. This local build is intentionally not signed or notarized. After verifying the app sees your data, the source checkout can be deleted; persistent data and the stable unpacked Chrome extension copy live under Application Support.
+
+The app starts the server as a managed child process, opens the dashboard, and stops that child when the app quits. Closing the window hides it; use the app menu or the configurable global shortcut (default <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd>) to bring it back. **Launch at Login** uses the normal macOS login-item setting and starts the app hidden. If the configured server is already running as a standalone Node process, the app attaches to it instead of starting a second copy; in that case, restart that Node process yourself after changing its listener settings.
+
+The **Extensions** app menu can install the bundled VS Code or Cursor VSIX. It also prepares a stable Chrome extension directory and reveals it for Chrome's **Load unpacked** flow.
+
+Server address changes are made in Settings and stored in YAML. They do not affect a running listener until restart. The Electron app offers to restart the child server immediately; with `pnpm start`, restart the Node process. Use `127.0.0.1` unless remote access is required. Choosing `0.0.0.0` exposes the unauthenticated API on every interface, so restrict it with a trusted VPN and host firewall, and list every VPN hostname or IP address clients will use under **Trusted remote hosts**. Requests with any other Host value are rejected.
+
 ### Resume after restart or wake (macOS)
 
 After `pnpm build`, install the included user launch agent:
@@ -80,7 +106,7 @@ After `pnpm build`, install the included user launch agent:
 pnpm service:install
 ```
 
-It runs at login, stays alive, and writes logs under `data/`. The database is the source of truth, so an overnight shutdown does not lose review SHAs, chat, queue status, or the last sweep. On launch, Barbarian immediately synchronizes and then returns to the configured interval.
+It runs at login, stays alive, and writes logs under `~/Library/Caches/Barbarian`. The database is the source of truth, so an overnight shutdown does not lose review SHAs, chat, queue status, or the last sweep. On launch, Barbarian immediately synchronizes and then returns to the configured interval.
 
 The service is installed as the macOS LaunchAgent `io.barbarian.local` with `KeepAlive` enabled. If you kill the server process directly, `launchd` starts it again. Stop the LaunchAgent before running Barbarian manually:
 
@@ -107,11 +133,11 @@ launchctl bootout gui/$(id -u)/io.barbarian.local
 rm ~/Library/LaunchAgents/io.barbarian.local.plist
 ```
 
-Service output is written to `data/barbarian.log` and errors to `data/barbarian-error.log`.
+Service output is written to `~/Library/Caches/Barbarian/barbarian.log` and errors to `~/Library/Caches/Barbarian/barbarian-error.log`.
 
 ## Configure repositories and priority
 
-`config/barbarian.yaml` is deliberately generic. Add every repository Barbarian should watch:
+The generated `barbarian.yaml` is deliberately generic. Add every repository Barbarian should watch:
 
 ```yaml
 profile:
@@ -253,8 +279,10 @@ This keeps the core independent of a particular Linear authentication or MCP imp
 1. Start Barbarian.
 2. Open `chrome://extensions`.
 3. Enable **Developer mode**.
-4. Click **Load unpacked** and choose `apps/chrome-extension`.
+4. Click **Load unpacked** and choose `apps/chrome-extension`, or the stable directory revealed by the Electron app's **Extensions → Prepare Chrome Extension…** menu item.
 5. Open a GitHub pull request tracked by Barbarian.
+
+Open the extension's **Details → Extension options** page to set the Barbarian server URL and test the connection. The default is `http://127.0.0.1:4142`; a client on another machine should use the server Mac's VPN hostname or VPN address. Chrome asks for permission to reach a non-default origin when you save it.
 
 Click Barbarian’s toolbar icon once to open Chrome’s native side panel. Chrome requires this initial user gesture; after opening, the panel remains beside the webpage while you move between Conversation, Commits, Checks, and Files changed. Because it uses Chrome’s panel instead of injecting an overlay into GitHub, it does not cover the PR content. The panel shows the PR’s workflow state, the latest AI assessment, unresolved and resolved review-comment counts, a plain-language problem/solution summary, and links that jump to each AI review comment.
 
@@ -312,10 +340,10 @@ Or install it from this repository in a terminal:
 
 ```bash
 # Cursor
-cursor --install-extension apps/vscode-extension/barbarian-vscode-extension-0.2.3.vsix --force
+cursor --install-extension apps/vscode-extension/barbarian-vscode-extension-0.3.0.vsix --force
 
 # VS Code
-code --install-extension apps/vscode-extension/barbarian-vscode-extension-0.2.3.vsix --force
+code --install-extension apps/vscode-extension/barbarian-vscode-extension-0.3.0.vsix --force
 ```
 
 After changing the extension, rebuild, package, reinstall with `--force`, and reload the editor window. If the `cursor` or `code` command is unavailable, use the editor UI method above.
@@ -328,7 +356,7 @@ Open the Barbarian icon in the Activity Bar to use the dockable **Branch Review*
 - A shared review room. Once the branch is attached to a tracked PR, its conversation is the same one shown in the dashboard and Chrome extension.
 - Inline editor selection context in the question composer, without a separate send-selection command.
 
-Use **Barbarian: Show Branch Review** from the Command Palette to focus the view. VS Code can move the Barbarian view container between the primary and secondary sidebars.
+Use **Barbarian: Show Branch Review** from the Command Palette to focus the view. Use **Barbarian: Configure Server Connection** (or the `barbarian.serverUrl` setting) when Barbarian is not running at the default local address. VS Code can move the Barbarian view container between the primary and secondary sidebars.
 
 ## Skills
 
@@ -343,14 +371,14 @@ Sources are applied in that order, so Barbarian’s generic `cb1-code-review` wi
 
 ## Data and safety
 
-- Back up `data/barbarian.db` if you want to retain workflow history.
-- Prepared checkouts live under `.barbarian/workspaces` by default and are gitignored.
+- Back up `~/Library/Application Support/Barbarian` if you want to retain configuration, secrets, and workflow history. A copied legacy `config` and `data` directory remains a useful migration backup.
+- Prepared checkouts live under `~/Library/Caches/Barbarian/.barbarian/workspaces` by default.
 - Cleanup validates every path is below that configured root and removes worktrees through git.
 - VS Code review-room agents run in the open Git checkout so they can carry out an explicit editing request. Barbarian verifies that the checkout's `origin` matches the repository reported by the extension before starting the agent.
 - Active agent prompts are retained only while the agent is running and are available only to the dashboard's own origin; completed, failed, interrupted, and cancelled runs clear the prompt.
-- The API accepts only localhost, Chrome-extension, and VS Code webview origins and binds to loopback by default.
+- Browser API access accepts the dashboard's exact origin, Chrome extensions, and VS Code webviews. The server binds to loopback by default.
 - Barbarian does not post the daily status to Slack; it saves and copies an editable draft.
-- Do not expose port 4142 to another machine. There is intentionally no authentication for this local-only application.
+- Binding to `0.0.0.0` is an explicit opt-in for trusted VPN access. There is intentionally no authentication, so do not expose the port directly to an untrusted LAN or the public internet.
 
 ## Verify
 

@@ -14,6 +14,8 @@ afterEach(() => { for (const directory of directories.splice(0)) rmSync(director
 function config(maxConcurrent = 2): BarbarianConfig {
   return {
     version: 1,
+  server: { bindAddress: '127.0.0.1', port: 4142, trustedHosts: [] },
+    desktop: { launchAtLogin: false, globalShortcut: 'CommandOrControl+Shift+Space' },
   profile: { name: 'Chris', reviewName: '', timezone: 'UTC', githubLogin: 'cb1kenobi' },
     appearance: { theme: 'dark', fontSize: 'small', weapon: 'double-axe' },
     monitor: { intervalMinutes: 20, runOnStartup: true, includeDraftPullRequests: false },
