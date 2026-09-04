@@ -267,8 +267,11 @@ export function App() {
   const date = new Intl.DateTimeFormat('en-US', { timeZone: timezone, weekday: 'long', month: 'short', day: 'numeric' }).format(now).toUpperCase();
   const greeting = greetingForTime(now, timezone);
 
-  return (
-    <div className="shell">
+  const desktop = Boolean(window.barbarianDesktop);
+
+  return (<>
+    {desktop && <div className="desktop-titlebar" aria-hidden="true" />}
+    <div className={`shell${desktop ? ' desktop-shell' : ''}`}>
       <aside className="rail">
         <a className="brand" href="#command" aria-label="Scroll to the top"><span aria-hidden="true" /><strong>BARBARIAN</strong></a>
         <nav aria-label="Primary">
@@ -393,7 +396,7 @@ export function App() {
       {showStatus && dashboard && <StatusDialog dashboard={dashboard} onClose={() => setShowStatus(false)} onSaved={load} />}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} onSaved={load} />}
     </div>
-  );
+  </>);
 }
 
 function Empty({ message }: { message: string }) { return <div className="empty"><span>∅</span><p>{message}</p></div>; }

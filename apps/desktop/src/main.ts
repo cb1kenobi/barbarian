@@ -63,10 +63,17 @@ async function health(url: string): Promise<boolean> {
 
 async function waitForServer(url: string, child?: UtilityProcess): Promise<void> {
   const deadline = Date.now() + 20_000;
-  while (Date.now() < deadline) {
-    if (await health(url)) return;
-    if (child && child.pid === undefined) throw new Error('The Barbarian server exited before it became ready.');
-    await new Promise((resolve) => setTimeout(resolve, 200));
+  let childExited = false;
+  const onChildExit = () => { childExited = true; };
+  child?.once('exit', onChildExit);
+  try {
+    while (Date.now() < deadline) {
+      if (await health(url)) return;
+      if (child && (childExited || serverProcess !== child)) throw new Error('The Barbarian server exited before it became ready.');
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  } finally {
+    child?.off('exit', onChildExit);
   }
   throw new Error(`Timed out waiting for Barbarian at ${url}`);
 }
@@ -194,6 +201,8 @@ async function createWindow(options: { showOnReady?: boolean; startupError?: str
     minHeight: 620,
     show: false,
     title: 'Barbarian',
+    titleBarStyle: 'hiddenInset',
+    trafficLightPosition: { x: 16, y: 16 },
     backgroundColor: '#11120f',
     webPreferences: {
       contextIsolation: true,
