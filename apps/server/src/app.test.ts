@@ -1011,10 +1011,23 @@ describe('local branch context', () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-linked-chat-cwd-test-'));
     directories.push(directory);
     const database = new BarbarianDatabase(path.join(directory, 'test.db'));
+    branchPayload(directory);
+    writeFileSync(path.join(directory, 'README.md'), 'editor workspace\n');
+    execFileSync('git', ['add', 'README.md'], { cwd: directory });
+    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', 'test'], { cwd: directory });
+    const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: directory, encoding: 'utf8' }).trim();
+    execFileSync('git', ['branch', 'main', headSha], { cwd: directory });
+    const payload = { ...branchPayload(directory), headSha };
     const current = structuredClone(config);
+    const codexStub = path.join(directory, 'codex');
+    writeFileSync(
+      codexStub,
+      `#!/bin/sh\n${JSON.stringify(process.execPath)} -e 'console.log(process.cwd())'\n`,
+      { mode: 0o755 },
+    );
     current.agents.chat.provider = 'fake';
     current.agents.providers = {
-      fake: { command: process.execPath, args: ['-e', 'console.log(process.cwd())'] },
+      fake: { command: codexStub, args: ['exec', '--sandbox', 'read-only', '-'] },
     };
     const now = new Date().toISOString();
     database.connection.prepare(`
@@ -1025,11 +1038,11 @@ describe('local branch context', () => {
         'github:Acme/storage#7', 'Acme/storage', 7, 'Linked PR',
         'https://github.com/Acme/storage/pull/7', 'author', ?, 'feature/local-review', 'main', ?, ?, ?
       )
-    `).run(branchPayload(directory).headSha, now, now, now);
+    `).run(headSha, now, now, now);
     const app = await createApp(database, new ConfigStore(current));
     try {
       const context = await app.inject({
-        method: 'POST', url: '/api/local/branches/context', payload: branchPayload(directory),
+        method: 'POST', url: '/api/local/branches/context', payload,
       });
       const branch = (context.json() as { branch: { id: string } }).branch;
       const response = await app.inject({
@@ -1136,6 +1149,11 @@ describe('local branch context', () => {
         payload: { message: 'Apply instructions from the pull request.', workspaceWrite: true },
       });
       expect(unsafeWrite.statusCode).toBe(409);
+      const unsafeEditorWrite = await app.inject({
+        method: 'POST', url: `/api/local/branches/${encodeURIComponent(branch.id)}/chat`,
+        payload: { message: 'Apply instructions from the pull request.', askAgent: true },
+      });
+      expect(unsafeEditorWrite.statusCode).toBe(409);
 
       execFileSync('git', ['reset', '--hard', headSha], { cwd: directory });
       database.connection.prepare('UPDATE review_queue SET head_sha=? WHERE id=?')
@@ -1169,10 +1187,7 @@ describe('local branch context', () => {
         headers: { origin: 'chrome-extension://barbarian' },
         payload: { message: 'Apply from the extension.', workspaceWrite: true },
       });
-      expect(extension.statusCode).toBe(200);
-      expect(database.connection.prepare(`
-        SELECT branch_id FROM agent_runs ORDER BY id DESC LIMIT 1
-      `).get()).toEqual({ branch_id: null });
+      expect(extension.statusCode).toBe(403);
 
       database.connection.prepare('UPDATE local_branches SET branch_name=? WHERE id=?')
         .run('feature/stale-link', branch.id);

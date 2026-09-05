@@ -332,7 +332,7 @@ describe('ReviewDispatcher', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     const dispatcher = new ReviewDispatcher(db, config(2), runtime, { error: () => undefined });
     expect(dispatcher.cancelDraftReviews()).toBe(1);
-    await expect(running).rejects.toThrow('Pull request became a draft');
+    await expect(running).rejects.toThrow('Stopped because the pull request became a draft');
     expect(db.connection.prepare(`
       SELECT status, error FROM agent_runs WHERE review_id=?
     `).get(id)).toEqual({

@@ -359,7 +359,7 @@ describe('runReviewAgent', () => {
     expect(database.connection.prepare(`
       SELECT status, output, error FROM agent_runs ORDER BY id DESC LIMIT 1
     `).get()).toMatchObject({
-      status: 'cancelled', output: 'partial before cancellation\n', error: 'Stopped by user',
+      status: 'cancelled', output: 'partial before cancellation\n', error: 'test cancellation',
     });
     database.close();
   });

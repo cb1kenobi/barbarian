@@ -429,8 +429,10 @@ export function App() {
             <label className="review-sort"><span>Sort</span><select value={reviewSort} onChange={(event) => setReviewSort(event.target.value as ReviewSort)}><option value="priority">Priority</option><option value="pain">Pain</option><option value="oldest">Oldest</option><option value="newest">Newest</option><option value="repository">Repo name</option></select></label>
           </div></div>
           <div ref={reviewViewportRef} className={`review-grid queue-viewport review-viewport${reviewsScrollable ? ' is-scrollable' : ''}`}>
-            {reviews.map((review) => <article className="review-card" key={review.id}>
-              <button type="button" className="review-card-open" aria-label={`Open review ${review.repository} #${review.number}: ${review.title}`} onClick={() => setSelectedReview(review.id)} />
+            {reviews.map((review) => <article className="review-card" key={review.id} onClick={() => {
+              if (!window.getSelection()?.toString()) setSelectedReview(review.id);
+            }}>
+              <button type="button" className="review-card-open" aria-label={`Open review ${review.repository} #${review.number}: ${review.title}`} />
               <div className="review-card-head"><span><span className="repo">{repositoryName(review.repository)}</span><span className="pr">#{review.number}</span></span><ReviewStatusBadge status={reviewDisplayStatus(review)} onAgentFailed={() => setFailedReview(review.id)} /></div>
               <h3>{review.title}</h3><p><InlineCode text={review.simple_summary} /></p>
               <footer className="review-card-footer"><ReviewMetadata review={review} timezone={dashboard?.profile.timezone} now={now} /></footer>
@@ -501,6 +503,7 @@ function ReviewStatusBadge({ status, onAgentFailed }: { status: unknown; onAgent
     role="button"
     tabIndex={0}
     aria-haspopup="dialog"
+    aria-label="View agent failure details"
     onClick={(event) => { event.stopPropagation(); onAgentFailed(); }}
     onKeyDown={(event) => {
       if (event.key !== 'Enter' && event.key !== ' ') return;

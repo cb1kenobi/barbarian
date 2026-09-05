@@ -30,7 +30,9 @@ import {
 import { discoverAgentModels, type AgentModelOption } from './agent-models.js';
 import { openAuthoredPullRequests } from './authored-pull-requests.js';
 import { authenticatedGithubLogin } from './github-identity.js';
-import { resolveReviewWorkspace, type ReviewWorkspace } from './review-workspace.js';
+import {
+  resolveLocalBranchWorkspace, resolveReviewWorkspace, type ReviewWorkspace,
+} from './review-workspace.js';
 import {
   askLocalBranchAgent,
   LocalBranchInputError,
@@ -887,8 +889,10 @@ export async function createApp(
     let agentWorkspace: ReviewWorkspace | null = null;
     const selectedProvider = body.provider || config.agents.chat.provider;
     const provider = config.agents.providers[selectedProvider];
-    if (body.askAgent && body.workspaceWrite
-      && localAgentApiAllowed(request.headers.origin, request.headers.host, activeServer)) {
+    if (body.askAgent && body.workspaceWrite) {
+      if (!localAgentApiAllowed(request.headers.origin, request.headers.host, activeServer)) {
+        return reply.code(403).send({ error: 'Editable local workspaces are available only in the dashboard' });
+      }
       if (!provider || !agentProviderSupportsWorkspaceWrite(provider.command)) {
         return reply.code(409).send({ error: 'The selected agent does not support editable local workspaces' });
       }
@@ -1285,6 +1289,20 @@ export async function createApp(
     const config = configStore.get();
     const body = chatBody.parse(request.body);
     const now = new Date().toISOString();
+    let agentWorkspace: ReviewWorkspace | null = null;
+    if (body.askAgent) {
+      const selectedProvider = body.provider || agentSelectionForTask(
+        config, branch.review_id ? 'chat' : 'local_branch_chat',
+      ).provider;
+      const provider = config.agents.providers[selectedProvider];
+      if (!provider || !agentProviderSupportsWorkspaceWrite(provider.command)) {
+        return reply.code(409).send({ error: 'The selected agent does not support editable local workspaces' });
+      }
+      agentWorkspace = await resolveLocalBranchWorkspace(database, id);
+      if (!agentWorkspace) {
+        return reply.code(409).send({ error: 'The local branch is no longer safe and available for agent edits' });
+      }
+    }
     if (body.askAgent && activeWritableBranches.has(id)) {
       return reply.code(409).send({ error: 'An agent is already working in this branch' });
     }
@@ -1299,13 +1317,21 @@ export async function createApp(
         if (!body.askAgent) return { message: null };
         const runtimeKey = `agent-run:${randomUUID()}`;
         const response = await runtime.run(
-          (signal) => askAgent(database, config, branch.review_id!, body.message, body.provider, signal, {
-            branchId: id,
-            cwd: branch.workspace_path,
-            workspaceWrite: true,
-            runtimeKey,
-            ...(body.selection ? { untrustedSelection: body.selection } : {}),
-          }),
+          async (signal) => {
+            const currentWorkspace = await resolveLocalBranchWorkspace(database, id);
+            if (!agentWorkspace || !currentWorkspace
+              || currentWorkspace.path !== agentWorkspace.path
+              || currentWorkspace.branchName !== agentWorkspace.branchName) {
+              throw new Error('The local branch changed before the agent started');
+            }
+            return askAgent(database, config, branch.review_id!, body.message, body.provider, signal, {
+              branchId: id,
+              cwd: agentWorkspace.path,
+              workspaceWrite: true,
+              runtimeKey,
+              ...(body.selection ? { untrustedSelection: body.selection } : {}),
+            });
+          },
           runtimeKey,
         );
         const inserted = database.connection.prepare(`
@@ -1319,9 +1345,17 @@ export async function createApp(
       if (!body.askAgent) return { message: null };
       const runtimeKey = `agent-run:${randomUUID()}`;
       const response = await runtime.run(
-        (signal) => askLocalBranchAgent(
-          database, config, id, body.message, body.provider, signal, runtimeKey, body.selection,
-        ),
+        async (signal) => {
+          const currentWorkspace = await resolveLocalBranchWorkspace(database, id);
+          if (!agentWorkspace || !currentWorkspace
+            || currentWorkspace.path !== agentWorkspace.path
+            || currentWorkspace.branchName !== agentWorkspace.branchName) {
+            throw new Error('The local branch changed before the agent started');
+          }
+          return askLocalBranchAgent(
+            database, config, id, body.message, body.provider, signal, runtimeKey, body.selection,
+          );
+        },
         runtimeKey,
       );
       const inserted = database.connection.prepare(`

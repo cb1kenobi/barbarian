@@ -63,6 +63,8 @@ export function runProcess(
     const executionError = (error: Error) => {
       const wrapped = new ProcessExecutionError(error.message, stdout.result(), stderr.result());
       wrapped.name = error.name;
+      wrapped.cause = error;
+      if (error.stack) wrapped.stack = `${wrapped.name}: ${wrapped.message}\nCaused by: ${error.stack}`;
       return wrapped;
     };
     let settled = false;

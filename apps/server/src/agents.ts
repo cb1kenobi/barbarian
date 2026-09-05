@@ -147,7 +147,9 @@ export async function executeAgent(
   } catch (error) {
     if (error instanceof ProcessExecutionError) capturedOutput = error.stdout;
     const cancelled = Boolean(signal?.aborted);
-    const message = cancelled ? 'Stopped by user' : error instanceof Error ? error.message : String(error);
+    const message = cancelled
+      ? signal?.reason instanceof Error ? signal.reason.message : String(signal?.reason || 'Stopped by user')
+      : error instanceof Error ? error.message : String(error);
     database.connection.prepare(`
       UPDATE agent_runs SET status=?, finished_at=?, output=?, error=?, prompt='' WHERE id=?
     `).run(cancelled ? 'cancelled' : 'failed', new Date().toISOString(), capturedOutput, message, runId);

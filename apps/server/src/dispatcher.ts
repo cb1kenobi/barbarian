@@ -188,7 +188,7 @@ export class ReviewDispatcher {
     if (!runs.length) return 0;
     const keys = new Set(runs.flatMap((run) => [run.review_id, run.runtime_key].filter(Boolean) as string[]));
     const cancelled = [...keys].reduce((total, key) => (
-      total + this.runtime.cancel(key, new Error('Pull request became a draft'))
+      total + this.runtime.cancel(key, new Error('Stopped because the pull request became a draft'))
     ), 0);
     const now = new Date().toISOString();
     const ids = runs.map((run) => run.id);
