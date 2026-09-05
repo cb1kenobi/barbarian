@@ -26,11 +26,11 @@ export function parseUsageOutput(source: string): number | null {
   }
 }
 
-function maxUsage(value: unknown): number | null {
+export function usagePercentFromPayload(value: unknown): number | null {
   if (!value || typeof value !== 'object') return null;
   const record = value as Record<string, unknown>;
   const direct = percentage(record.usedPercent) ?? percentage(record.utilization);
-  const children = Object.values(record).map(maxUsage).filter((item): item is number => item !== null);
+  const children = Object.values(record).map(usagePercentFromPayload).filter((item): item is number => item !== null);
   return [direct, ...children].filter((item): item is number => item !== null)
     .reduce<number | null>((maximum, item) => maximum === null ? item : Math.max(maximum, item), null);
 }
@@ -71,7 +71,7 @@ async function claudeUsage(
     signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) return { usedPercent: null, error: `Claude usage check returned ${response.status}` };
-  const usedPercent = maxUsage(await response.json());
+  const usedPercent = usagePercentFromPayload(await response.json());
   return usedPercent === null
     ? { usedPercent: null, error: 'Claude usage response did not include utilization' }
     : { usedPercent };
@@ -133,7 +133,7 @@ async function codexUsage(provider: AgentProviderConfig): Promise<AgentProviderU
     })}\n`);
   });
   if (response.error) return { usedPercent: null, error: String(response.error.message || 'Codex usage check failed') };
-  const usedPercent = maxUsage(response.result);
+  const usedPercent = usagePercentFromPayload(response.result);
   return usedPercent === null
     ? { usedPercent: null, error: 'Codex usage response did not include rate limits' }
     : { usedPercent };

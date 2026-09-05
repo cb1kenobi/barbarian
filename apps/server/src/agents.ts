@@ -436,8 +436,6 @@ export async function runReviewAgent(
   const refreshContextAfterReview = dependencies.refreshContext || refreshReviewContext;
   const currentConfig = dependencies.currentConfig || (() => config);
   const task = `code_review:${claim.trigger}`;
-  const criteria = criteriaForReviewAgent(config, claim.agentId);
-  if (config.agents.codeReview.length === 0) throw new Error('No code review agents are configured');
   recordActivity(database, 'review_started', `Agent started reviewing ${review.repository}#${review.number}`, claim.reviewId, {
     trigger: claim.trigger,
     headSha: claim.headSha,
@@ -447,6 +445,8 @@ export async function runReviewAgent(
   const attempted = new Set<string>();
   const attemptedProviders: string[] = [];
   try {
+    const criteria = criteriaForReviewAgent(config, claim.agentId);
+    if (config.agents.codeReview.length === 0) throw new Error('No code review agents are configured');
     const bundle = await fetchBundle(review.repository, review.number);
     if (bundle.metadata.headRefOid !== claim.headSha) {
       throw new Error('Pull request head changed before the review bundle was captured');
@@ -549,9 +549,6 @@ ${JSON.stringify(bundle)}`;
     );
     try { await refreshContextAfterReview(database, claim.reviewId); } catch {}
   } catch (error) {
-    const message = signal?.aborted
-      ? signal.reason instanceof Error ? signal.reason.message : String(signal.reason || 'Stopped by user')
-      : error instanceof Error ? error.message : String(error);
     if (!signal?.aborted) failClaim(database, config, claim, error);
     throw error;
   }

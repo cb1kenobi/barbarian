@@ -78,11 +78,21 @@ describe('configuration setup', () => {
     expect(updated.profile).toMatchObject({ name: 'Chris Barber', githubLogin: 'cb1kenobi' });
     expect(updated.review.requestedReviewer).toBe('cb1kenobi');
     expect(updated.monitor.runOnStartup).toBe(false);
+    expect(updated.agents.codeReview).toEqual(config.agents.codeReview);
+    expect(updated.agents.chat.provider).toBe('cursor');
+    expect(updated.agents.providers).toEqual(config.agents.providers);
+  });
+
+  it('seeds the selected agent only when the review pool is empty', () => {
+    const updated = applySetupAnswers({
+      ...config, agents: { ...config.agents, codeReview: [] },
+    }, {
+      name: 'Developer', githubLogin: 'old-login', runOnStartup: true, defaultAgent: 'cursor',
+      installEditorExtension: false, installChromeExtension: false,
+    });
     expect(updated.agents.codeReview).toEqual([
       { id: 'cursor', provider: 'cursor', model: '', effort: '', priority: 0 },
     ]);
-    expect(updated.agents.chat.provider).toBe('cursor');
-    expect(updated.agents.providers).toEqual(config.agents.providers);
   });
 
   it('formats selected extension guidance as numbered next steps', () => {

@@ -30,7 +30,7 @@ import {
 import { discoverAgentModels, type AgentModelOption } from './agent-models.js';
 import { openAuthoredPullRequests } from './authored-pull-requests.js';
 import { authenticatedGithubLogin } from './github-identity.js';
-import { reviewAgentAvailability } from './review-router.js';
+import { reviewAgentAvailability, type ReviewAgentAvailability } from './review-router.js';
 import {
   resolveLocalBranchWorkspace, resolveReviewWorkspace, type ReviewWorkspace,
 } from './review-workspace.js';
@@ -547,6 +547,11 @@ export async function createApp(
   const activeServer = services.activeServer || initialConfig.server;
   const runtime = services.runtime || new AgentRuntime(initialConfig.agents.maxConcurrent);
   const activeWritableBranches = new Set<string>();
+  let reviewOptionsCache: {
+    config: BarbarianConfig;
+    expiresAt: number;
+    agents: Promise<ReviewAgentAvailability[]>;
+  } | null = null;
   const dispatcher = services.dispatcher || new ReviewDispatcher(database, () => configStore.get(), runtime, app.log);
   const refreshReview = services.refreshReview || refreshReviewContext;
   const refreshIssue = services.refreshIssue || refreshGithubIssue;
@@ -1425,10 +1430,17 @@ export async function createApp(
 
   app.get('/api/agents/review-options', async () => {
     const config = configStore.get();
+    if (!reviewOptionsCache || reviewOptionsCache.config !== config || reviewOptionsCache.expiresAt <= Date.now()) {
+      reviewOptionsCache = {
+        config,
+        expiresAt: Date.now() + 30_000,
+        agents: reviewAgentAvailability(config),
+      };
+    }
     return {
       algorithm: config.agents.reviewRouting,
       usageHeadroomPercent: config.agents.usageHeadroomPercent,
-      agents: await reviewAgentAvailability(config),
+      agents: await reviewOptionsCache.agents,
     };
   });
 

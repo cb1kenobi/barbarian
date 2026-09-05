@@ -304,6 +304,7 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
 .drawer-actions .review-agent-menu button { display: grid; gap: 3px; padding: 9px 10px; border: 0; text-align: left; }
 .review-agent-menu button strong { color: var(--ink); }
 .review-agent-menu button span, .review-agent-menu p { margin: 0; color: var(--muted); font-size: .6875rem; font-weight: 400; text-transform: capitalize; }
+.review-agent-menu button span.usage-error { color: #ff9473; text-transform: none; }
 .workspace-path { display: block; overflow-x: auto; margin-top: 11px; padding: 9px; background: #0c0d0b; color: #7d8276; font-size: .6875rem; }
 .inline-error { color: #ff9473; font-size: .8125rem; }
 .agent-run-drawer { width: min(760px, 96vw); }

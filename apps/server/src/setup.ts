@@ -111,7 +111,7 @@ export function applySetupAnswers(current: BarbarianConfig, answers: SetupAnswer
     },
     agents: {
       ...current.agents,
-      codeReview: [{
+      codeReview: current.agents.codeReview.length ? current.agents.codeReview : [{
         ...(current.agents.codeReview.find((agent) => agent.provider === answers.defaultAgent) || {
           id: answers.defaultAgent, model: '', effort: '', priority: 0,
         }),

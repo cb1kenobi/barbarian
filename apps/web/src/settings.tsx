@@ -279,7 +279,7 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
     agents: {
       ...current.agents,
       codeReview: [...current.agents.codeReview, {
-        id: `review-${crypto.randomUUID()}`,
+        id: `review-${crypto.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`}`,
         provider: advanced?.providers[0]?.name || '', model: '', effort: '', priority: 0,
       }],
     },

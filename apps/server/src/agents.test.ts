@@ -396,6 +396,19 @@ describe('runReviewAgent', () => {
     database.close();
   });
 
+  it('releases a claim when its requested agent row was removed before execution', async () => {
+    const { database, config, claim } = setup("console.log('unused')");
+    claim.agentId = 'removed-row';
+    await expect(runReviewAgent(database, config, claim, undefined, dependencies))
+      .rejects.toThrow('is not configured');
+    expect(database.connection.prepare(`
+      SELECT status, claim_owner, last_agent_error FROM review_queue WHERE id=?
+    `).get(claim.reviewId)).toMatchObject({
+      status: 'agent_failed', claim_owner: null,
+    });
+    database.close();
+  });
+
   it('does not publish a review when the captured head changed', async () => {
     const { database, config, claim } = setup("console.log('should not run')");
     let posted = false;

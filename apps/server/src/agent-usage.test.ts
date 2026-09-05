@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseUsageOutput, readAgentProviderUsage } from './agent-usage.js';
+import { parseUsageOutput, readAgentProviderUsage, usagePercentFromPayload } from './agent-usage.js';
 
 describe('agent provider usage', () => {
   it('parses numeric and JSON usage command output', () => {
@@ -7,6 +7,23 @@ describe('agent provider usage', () => {
     expect(parseUsageOutput('{"usedPercent":42}')).toBe(42);
     expect(parseUsageOutput('{"utilization":19.5}')).toBe(19.5);
     expect(parseUsageOutput('unknown')).toBeNull();
+  });
+
+  it('reads the highest window from Codex and Claude response shapes', () => {
+    expect(usagePercentFromPayload({
+      rateLimits: { primary: { usedPercent: 42 }, secondary: { usedPercent: 79 } },
+      rateLimitsByLimitId: { codex: { primary: { usedPercent: 64 } } },
+    })).toBe(79);
+    expect(usagePercentFromPayload({
+      five_hour: { utilization: 31 }, seven_day: { utilization: 76 },
+    })).toBe(76);
+  });
+
+  it('supports a custom usage command for providers without a native probe', async () => {
+    expect(await readAgentProviderUsage({
+      command: 'custom-reviewer', args: [],
+      usageCommand: [process.execPath, '-e', 'console.log(JSON.stringify({ usedPercent: 62 }))'],
+    })).toEqual({ usedPercent: 62 });
   });
 
   it('reads the highest Claude subscription window without exposing the token', async () => {
