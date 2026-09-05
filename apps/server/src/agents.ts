@@ -504,12 +504,17 @@ ${JSON.stringify(bundle)}`;
         validateReviewCommentLocations(bundle.diff, parsed.comments);
         successful = { provider: selected.provider, agentId: selected.id, result: parsed };
       } catch (agentError) {
-        if (signal?.aborted) throw agentError;
+        const cancelled = agentError instanceof Error && agentError.name === 'AbortError';
         if (id !== undefined) {
           database.connection.prepare(`
-            UPDATE agent_runs SET status='failed', error=? WHERE id=? AND status='complete'
-          `).run(agentError instanceof Error ? agentError.message : String(agentError), id);
+            UPDATE agent_runs SET status=?, finished_at=COALESCE(finished_at, ?), error=?, prompt=''
+            WHERE id=? AND status IN ('running','complete')
+          `).run(
+            cancelled ? 'cancelled' : 'failed', new Date().toISOString(),
+            agentError instanceof Error ? agentError.message : String(agentError), id,
+          );
         }
+        if (signal?.aborted || cancelled) throw agentError;
         failures.push(`${selected.provider} failed: ${agentError instanceof Error ? agentError.message : String(agentError)}`);
       }
     }

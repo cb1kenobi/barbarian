@@ -80,7 +80,22 @@ describe('agent provider options', () => {
 
   it('inherits only the matching provider family credential', () => {
     expect(agentProviderEnvironment({ command: 'codex', args: ['exec', '-'] }, {
-      OPENAI_API_KEY: 'codex-key', CLAUDE_CODE_OAUTH_TOKEN: 'claude-token', PATH: '/bin',
-    })).toEqual({ OPENAI_API_KEY: 'codex-key', PATH: '/bin' });
+      OPENAI_API_KEY: 'codex-key', CODEX_API_KEY: 'codex-account',
+      CLAUDE_CODE_OAUTH_TOKEN: 'claude-token', CLAUDE_TWO: 'other-claude-account',
+      SSH_AUTH_SOCK: '/tmp/ssh.sock', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/tmp/dbus',
+      TERM_SESSION_ID: 'terminal-session', PATH: '/bin',
+    })).toEqual({
+      OPENAI_API_KEY: 'codex-key', CODEX_API_KEY: 'codex-account',
+      SSH_AUTH_SOCK: '/tmp/ssh.sock', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/tmp/dbus',
+      TERM_SESSION_ID: 'terminal-session', PATH: '/bin',
+    });
+  });
+
+  it('keeps a safe source variable when a provider adds an alias for it', () => {
+    expect(agentProviderEnvironment({
+      command: 'custom-reviewer', args: [], env: { REVIEW_PATH: '${PATH}' },
+    }, { PATH: '/usr/bin', OTHER_TOKEN: 'secret' })).toEqual({
+      PATH: '/usr/bin', REVIEW_PATH: '/usr/bin',
+    });
   });
 });

@@ -30,14 +30,20 @@ export function agentProviderSupportsWorkspaceWrite(command: string): boolean {
 
 const environmentReference = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
 
-const sensitiveEnvironmentName = /(?:AUTH|COOKIE|CREDENTIAL|DATABASE_URL|DSN|KEY|PASSWORD|SECRET|SESSION|TOKEN)/i;
+const sensitiveEnvironmentName = /^(?:(?:ANTHROPIC|AWS|AZURE|CLAUDE|CODEX|CURSOR|GEMINI|GOOGLE|OPENAI)_|DATABASE_URL$)|(?:^|_)(?:API_KEY|AUTH_TOKEN|ACCESS_KEY(?:_ID)?|SECRET(?:_ACCESS_KEY)?|PASSWORD|TOKEN|CREDENTIALS?|COOKIE|DSN)$/i;
 
 function inheritedProviderSecrets(command: string): Set<string> {
   switch (agentProviderFamily(command)) {
-    case 'claude': return new Set(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']);
-    case 'codex': return new Set(['OPENAI_API_KEY']);
+    case 'claude': return new Set([
+      'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CONFIG_DIR',
+      'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_PROFILE', 'AWS_REGION',
+      'GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CLOUD_PROJECT', 'CLOUD_ML_REGION',
+    ]);
+    case 'codex': return new Set(['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_HOME']);
     case 'cursor': return new Set(['CURSOR_API_KEY']);
-    case 'gemini': return new Set(['GEMINI_API_KEY', 'GOOGLE_API_KEY']);
+    case 'gemini': return new Set([
+      'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CLOUD_PROJECT',
+    ]);
     default: return new Set();
   }
 }
@@ -56,7 +62,9 @@ export function agentProviderEnvironment(
   for (const [name, configured] of Object.entries(provider.env || {})) {
     const reference = configured.match(environmentReference)?.[1];
     const value = reference ? base[reference] : configured;
-    if (reference && reference !== name) delete environment[reference];
+    if (reference && reference !== name && sensitiveEnvironmentName.test(reference)) {
+      delete environment[reference];
+    }
     if (value === undefined) delete environment[name];
     else environment[name] = value;
   }

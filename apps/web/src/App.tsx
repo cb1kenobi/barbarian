@@ -761,8 +761,7 @@ function ReviewDrawer({ id, timezone, now, onClose, onChanged, onAgentFailed }: 
   const [agentWorkspace, setAgentWorkspace] = useState<ReviewAgentWorkspace | null>(null);
   const [workspaceWrite, setWorkspaceWrite] = useState(false);
   const [reviewAgents, setReviewAgents] = useState<ReviewAgentOptions | null>(null);
-  const automaticReviewAvailable = reviewAgents === null
-    || reviewAgents.agents.some((agent) => agent.available);
+  const automaticReviewAvailable = Boolean(reviewAgents?.agents.some((agent) => agent.available));
   useCloseOnEscape(onClose);
   const load = useCallback(async () => { const detail = await api<{ review: Review; messages: ChatMessage[]; timeline?: ReviewTimelineEvent[]; agentWorkspace?: ReviewAgentWorkspace | null }>(`/api/reviews/${encodeURIComponent(id)}`); setReview(detail.review); setMessages(detail.messages); setTimeline(detail.timeline || []); setAgentWorkspace(detail.agentWorkspace || null); }, [id]);
   useEffect(() => { void load(); }, [load]);

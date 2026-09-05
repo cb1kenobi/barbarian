@@ -324,12 +324,17 @@ ${diff || '(No tracked changes from the base branch.)'}`;
         validateReviewCommentLocations(diff, parsed.comments);
         result = parsed;
       } catch (agentError) {
-        if (signal?.aborted) throw agentError;
+        const cancelled = agentError instanceof Error && agentError.name === 'AbortError';
         if (runId !== undefined) {
           database.connection.prepare(`
-            UPDATE agent_runs SET status='failed', error=? WHERE id=? AND status='complete'
-          `).run(agentError instanceof Error ? agentError.message : String(agentError), runId);
+            UPDATE agent_runs SET status=?, finished_at=COALESCE(finished_at, ?), error=?, prompt=''
+            WHERE id=? AND status IN ('running','complete')
+          `).run(
+            cancelled ? 'cancelled' : 'failed', new Date().toISOString(),
+            agentError instanceof Error ? agentError.message : String(agentError), runId,
+          );
         }
+        if (signal?.aborted || cancelled) throw agentError;
         failures.push(`${selected.provider} failed: ${agentError instanceof Error ? agentError.message : String(agentError)}`);
       }
     }

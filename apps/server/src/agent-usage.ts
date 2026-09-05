@@ -91,6 +91,21 @@ async function codexUsage(provider: AgentProviderConfig): Promise<AgentProviderU
     let terminalError: Error | undefined;
     let terminalValue: { result?: unknown; error?: { message?: unknown } } | undefined;
     let forceKillTimer: NodeJS.Timeout | undefined;
+    let hardStopTimer: NodeJS.Timeout | undefined;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      if (hardStopTimer) clearTimeout(hardStopTimer);
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+      child.unref();
+      if (terminalError) reject(terminalError);
+      else if (terminalValue) resolve(terminalValue);
+      else reject(new Error(stderr.trim() || 'Codex usage check stopped without a result'));
+    };
     const stop = (error?: Error, value?: { result?: unknown; error?: { message?: unknown } }) => {
       if (stopping || settled) return;
       stopping = true;
@@ -100,6 +115,8 @@ async function codexUsage(provider: AgentProviderConfig): Promise<AgentProviderU
       try { child.kill('SIGTERM'); } catch {}
       forceKillTimer = setTimeout(() => {
         try { child.kill('SIGKILL'); } catch {}
+        hardStopTimer = setTimeout(settle, 2_000);
+        hardStopTimer.unref();
       }, 1_000);
       forceKillTimer.unref();
     };
@@ -133,12 +150,10 @@ async function codexUsage(provider: AgentProviderConfig): Promise<AgentProviderU
     child.on('error', (error) => stop(error));
     child.on('close', (code) => {
       if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
-      if (terminalError) reject(terminalError);
-      else if (terminalValue) resolve(terminalValue);
-      else reject(new Error(stderr.trim() || `Codex usage check exited ${code ?? 1}`));
+      if (!terminalError && !terminalValue) {
+        terminalError = new Error(stderr.trim() || `Codex usage check exited ${code ?? 1}`);
+      }
+      settle();
     });
     child.stdin.write(`${JSON.stringify({
       id: 1,

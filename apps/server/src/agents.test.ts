@@ -183,6 +183,45 @@ describe('runReviewAgent', () => {
     database.close();
   });
 
+  it('repairs a run when scheduling fails before execution, then fails over', async () => {
+    const ready = 'BARBARIAN_RESULT: {"findings":0,"verdict":"ready","summary":"Clear."}';
+    const { database, config, claim } = setup(`console.log(${JSON.stringify(ready)})`);
+    config.agents.providers.second = { command: process.execPath, args: ['-e', `console.log(${JSON.stringify(ready)})`] };
+    config.agents.codeReview.push({ id: 'second', provider: 'second', model: '', effort: '', priority: 0 });
+    let scheduled = 0;
+    await runReviewAgent(database, config, claim, undefined, {
+      ...dependencies,
+      schedule: async (task) => {
+        scheduled += 1;
+        if (scheduled === 1) throw new Error('scheduler rejected the run');
+        return task(new AbortController().signal);
+      },
+    });
+    expect(database.connection.prepare('SELECT provider, status FROM agent_runs ORDER BY id').all()).toEqual([
+      { provider: 'fake', status: 'failed' },
+      { provider: 'second', status: 'complete' },
+    ]);
+    database.close();
+  });
+
+  it('does not fail over after the scheduled run is cancelled', async () => {
+    const { database, config, claim } = setup("console.log('unused')");
+    config.agents.providers.second = { command: process.execPath, args: ['-e', "console.log('unused')"] };
+    config.agents.codeReview.push({ id: 'second', provider: 'second', model: '', effort: '', priority: 0 });
+    const cancellation = new Error('review cancelled');
+    cancellation.name = 'AbortError';
+    let scheduled = 0;
+    await expect(runReviewAgent(database, config, claim, undefined, {
+      ...dependencies,
+      schedule: async () => { scheduled += 1; throw cancellation; },
+    })).rejects.toThrow('review cancelled');
+    expect(scheduled).toBe(1);
+    expect(database.connection.prepare('SELECT provider, status FROM agent_runs ORDER BY id').all()).toEqual([
+      { provider: 'fake', status: 'cancelled' },
+    ]);
+    database.close();
+  });
+
   it('keeps an issue status when the reported finding was already published', async () => {
     const finding = {
       path: 'file.ts', line: 1, side: 'RIGHT' as const,
