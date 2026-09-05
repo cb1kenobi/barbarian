@@ -373,12 +373,6 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
               <label><span>Trusted remote hosts</span><input placeholder="barbarian.example.vpn, 100.64.0.10" value={draft.server.trustedHosts.join(', ')} onChange={(event) => setDraft({ ...draft, server: { ...draft.server, trustedHosts: splitItems(event.target.value) } })} /></label>
               <p>Required when listening on all interfaces. Enter only the VPN hostnames or IP addresses people will use to open Barbarian.</p>
             </div>
-            {advanced?.server && <div className="settings-description-row">
-              <label><span>Host</span><input className="readonly-value" readOnly aria-describedby="server-host-description" value={`${advanced.server.active.bindAddress}:${advanced.server.active.port}`} /></label>
-              <p id="server-host-description">{advanced.server.restartRequired || draft.server.bindAddress !== advanced.server.active.bindAddress || draft.server.port !== advanced.server.active.port
-                ? 'Restart Barbarian to apply the Listen on or Port changes above. Until then, it continues running at this host.'
-                : 'Address and port currently used by Barbarian. Changing Listen on or Port requires a restart.'}</p>
-            </div>}
           </div></fieldset>
 
           <fieldset className="settings-section"><legend>Desktop app</legend><div className="settings-description-list">
