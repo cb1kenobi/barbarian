@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import type { AgentProviderConfig } from './types.js';
 import { agentProviderEnvironment, agentProviderFamily } from './agent-provider.js';
-import { resolveExecutable, runProcess } from './process.js';
+import { CappedOutput, resolveExecutable, runProcess } from './process.js';
 
 export interface AgentProviderUsage {
   usedPercent: number | null;
@@ -85,7 +85,7 @@ async function codexUsage(provider: AgentProviderConfig): Promise<AgentProviderU
       env: agentProviderEnvironment(provider), shell: false, stdio: ['pipe', 'pipe', 'pipe'],
     });
     let buffer = '';
-    let stderr = '';
+    const stderr = new CappedOutput(100_000);
     let settled = false;
     let stopping = false;
     let terminalError: Error | undefined;
@@ -104,7 +104,7 @@ async function codexUsage(provider: AgentProviderConfig): Promise<AgentProviderU
       child.unref();
       if (terminalError) reject(terminalError);
       else if (terminalValue) resolve(terminalValue);
-      else reject(new Error(stderr.trim() || 'Codex usage check stopped without a result'));
+      else reject(new Error(stderr.result().trim() || 'Codex usage check stopped without a result'));
     };
     const stop = (error?: Error, value?: { result?: unknown; error?: { message?: unknown } }) => {
       if (stopping || settled) return;
@@ -123,9 +123,13 @@ async function codexUsage(provider: AgentProviderConfig): Promise<AgentProviderU
     const timeout = setTimeout(() => stop(new Error('Codex usage check timed out')), 15_000);
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (chunk: string) => { stderr = `${stderr}${chunk}`.slice(-100_000); });
+    child.stderr.on('data', (chunk: string) => { stderr.append(chunk); });
     child.stdout.on('data', (chunk: string) => {
       buffer += chunk;
+      if (buffer.length > 100_000 && !buffer.includes('\n')) {
+        stop(new Error('Codex usage response contained an oversized JSON line'));
+        return;
+      }
       const lines = buffer.split(/\r?\n/);
       buffer = lines.pop() || '';
       for (const line of lines) {
@@ -151,7 +155,7 @@ async function codexUsage(provider: AgentProviderConfig): Promise<AgentProviderU
     child.on('close', (code) => {
       if (settled) return;
       if (!terminalError && !terminalValue) {
-        terminalError = new Error(stderr.trim() || `Codex usage check exited ${code ?? 1}`);
+        terminalError = new Error(stderr.result().trim() || `Codex usage check exited ${code ?? 1}`);
       }
       settle();
     });

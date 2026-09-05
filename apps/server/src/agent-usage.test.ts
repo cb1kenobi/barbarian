@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 import { parseUsageOutput, readAgentProviderUsage, usagePercentFromPayload } from './agent-usage.js';
+
+const directories: string[] = [];
+afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
 describe('agent provider usage', () => {
   it('parses numeric and JSON usage command output', () => {
@@ -45,5 +51,30 @@ describe('agent provider usage', () => {
       if (previous === undefined) delete process.env.CLAUDE_TEST_TOKEN;
       else process.env.CLAUDE_TEST_TOKEN = previous;
     }
+  });
+
+  it('performs the Codex app-server handshake and reads its highest rate limit', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-fake-codex-'));
+    directories.push(directory);
+    const command = path.join(directory, 'codex');
+    writeFileSync(command, `#!/usr/bin/env node
+let buffer = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  const lines = buffer.split(/\\r?\\n/);
+  buffer = lines.pop() || '';
+  for (const line of lines) {
+    const message = JSON.parse(line);
+    if (message.id === 1) console.log(JSON.stringify({ id: 1, result: {} }));
+    if (message.id === 2) console.log(JSON.stringify({
+      id: 2, result: { rateLimits: { primary: { usedPercent: 44 }, secondary: { usedPercent: 73 } } },
+    }));
+  }
+});
+setInterval(() => undefined, 1000);
+`);
+    chmodSync(command, 0o755);
+    await expect(readAgentProviderUsage({ command, args: [] })).resolves.toEqual({ usedPercent: 73 });
   });
 });

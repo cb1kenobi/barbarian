@@ -19,7 +19,7 @@ export class ProcessExecutionError extends Error {
   }
 }
 
-class CappedOutput {
+export class CappedOutput {
   private value = '';
   private dropped = 0;
 

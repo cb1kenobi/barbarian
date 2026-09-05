@@ -769,7 +769,7 @@ function ReviewDrawer({ id, timezone, now, onClose, onChanged, onAgentFailed }: 
     const controller = new AbortController();
     void api<ReviewAgentOptions>('/api/agents/review-options', { signal: controller.signal })
       .then(setReviewAgents)
-      .catch(() => undefined);
+      .catch(() => { if (!controller.signal.aborted) setError('Could not load review agent availability.'); });
     return () => controller.abort();
   }, [id]);
   useEffect(() => { setWorkspaceWrite(false); }, [id]);
