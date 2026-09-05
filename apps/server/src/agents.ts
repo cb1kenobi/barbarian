@@ -72,7 +72,7 @@ interface AgentExecutionOptions {
   agentSelection?: AgentSelectionConfig;
 }
 
-function createAgentRun(
+export function createAgentRun(
   database: BarbarianDatabase,
   config: BarbarianConfig,
   reviewId: string | null,

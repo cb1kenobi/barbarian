@@ -87,15 +87,23 @@ async function codexUsage(provider: AgentProviderConfig): Promise<AgentProviderU
     let buffer = '';
     let stderr = '';
     let settled = false;
-    const finish = (error?: Error, value?: { result?: unknown; error?: { message?: unknown } }) => {
-      if (settled) return;
-      settled = true;
+    let stopping = false;
+    let terminalError: Error | undefined;
+    let terminalValue: { result?: unknown; error?: { message?: unknown } } | undefined;
+    let forceKillTimer: NodeJS.Timeout | undefined;
+    const stop = (error?: Error, value?: { result?: unknown; error?: { message?: unknown } }) => {
+      if (stopping || settled) return;
+      stopping = true;
+      terminalError = error;
+      terminalValue = value;
       clearTimeout(timeout);
       try { child.kill('SIGTERM'); } catch {}
-      if (error) reject(error);
-      else resolve(value || {});
+      forceKillTimer = setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch {}
+      }, 1_000);
+      forceKillTimer.unref();
     };
-    const timeout = setTimeout(() => finish(new Error('Codex usage check timed out')), 15_000);
+    const timeout = setTimeout(() => stop(new Error('Codex usage check timed out')), 15_000);
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => { stderr = `${stderr}${chunk}`.slice(-100_000); });
@@ -108,23 +116,29 @@ async function codexUsage(provider: AgentProviderConfig): Promise<AgentProviderU
         try { message = JSON.parse(line) as typeof message; } catch { continue; }
         if (message.id === 1) {
           if (message.error) {
-            finish(new Error(String(message.error.message || 'Codex initialization failed')));
+            stop(new Error(String(message.error.message || 'Codex initialization failed')));
             return;
           }
           child.stdin.write(`${JSON.stringify({ method: 'initialized' })}\n`);
           child.stdin.write(`${JSON.stringify({ id: 2, method: 'account/rateLimits/read', params: null })}\n`);
         } else if (message.id === 2) {
-          finish(undefined, message);
+          stop(undefined, message);
           return;
         }
       }
     });
     child.stdin.on('error', (error: NodeJS.ErrnoException) => {
-      if (error.code !== 'EPIPE') finish(error);
+      if (error.code !== 'EPIPE') stop(error);
     });
-    child.on('error', (error) => finish(error));
+    child.on('error', (error) => stop(error));
     child.on('close', (code) => {
-      if (!settled) finish(new Error(stderr.trim() || `Codex usage check exited ${code ?? 1}`));
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      if (terminalError) reject(terminalError);
+      else if (terminalValue) resolve(terminalValue);
+      else reject(new Error(stderr.trim() || `Codex usage check exited ${code ?? 1}`));
     });
     child.stdin.write(`${JSON.stringify({
       id: 1,

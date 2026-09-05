@@ -50,11 +50,20 @@ describe('local branch agent review', () => {
       linear: { enabled: false, command: [] },
       agents: {
         autoReview: false, maxConcurrent: 1, maxAutomaticAttempts: 1,
-        codeReview: [{ id: 'fake', provider: 'fake', model: '', effort: '', priority: 0 }],
+        codeReview: [
+          { id: 'invalid', provider: 'invalid', model: '', effort: '', priority: 0 },
+          { id: 'fake', provider: 'fake', model: '', effort: '', priority: 0 },
+        ],
         chat: { provider: 'fake', model: '', effort: '' },
         reviewRouting: 'round_robin', usageHeadroomPercent: 20,
         retryBaseMinutes: 1, maxRunsPerPullRequestPerHour: 1,
-        providers: { fake: { command: process.execPath, args: ['-e', `let input='';process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{if(input.includes('base-only.ts'))process.exit(2);console.log(${JSON.stringify(output)})})`] } },
+        providers: {
+          invalid: {
+            command: process.execPath,
+            args: ['-e', `console.log(${JSON.stringify('BARBARIAN_RESULT: {"findings":1,"verdict":"issues","summary":"Bad line.","comments":[{"path":"value.ts","line":999,"side":"RIGHT","body":"Invalid location"}]}')})`],
+          },
+          fake: { command: process.execPath, args: ['-e', `let input='';process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{if(input.includes('base-only.ts'))process.exit(2);console.log(${JSON.stringify(output)})})`] },
+        },
       },
       statusUpdate: { enabled: false, workdays: [], daysOff: [] },
     };
@@ -77,6 +86,12 @@ describe('local branch agent review', () => {
       expect(localBranchFindings(database, branch.id)).toMatchObject([
         { path: 'value.ts', line: 1, side: 'RIGHT', summary: 'Medium: value changed' },
         { path: 'new-value.ts', line: 1, side: 'RIGHT', summary: 'Medium: new value is unused' },
+      ]);
+      expect(database.connection.prepare(`
+        SELECT provider, status, error FROM agent_runs WHERE branch_id=? ORDER BY id
+      `).all(branch.id)).toMatchObject([
+        { provider: 'invalid', status: 'failed', error: expect.stringContaining('does not point to a changed diff line') },
+        { provider: 'fake', status: 'complete', error: null },
       ]);
       const chatConfig = structuredClone(config);
       chatConfig.agents.providers.fake!.args = ['-e', 'console.log(process.cwd())'];

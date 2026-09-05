@@ -72,7 +72,15 @@ describe('agent provider options', () => {
     expect(agentProviderEnvironment({
       command: 'claude', args: ['-p'], env: { CLAUDE_CODE_OAUTH_TOKEN: '${SECOND_CLAUDE_TOKEN}' },
     }, {
-      SECOND_CLAUDE_TOKEN: 'oauth-token', ANTHROPIC_API_KEY: 'inherited-key', GH_TOKEN: 'github-token',
-    })).toEqual({ SECOND_CLAUDE_TOKEN: 'oauth-token', CLAUDE_CODE_OAUTH_TOKEN: 'oauth-token' });
+      SECOND_CLAUDE_TOKEN: 'oauth-token', THIRD_CLAUDE_TOKEN: 'other-oauth-token',
+      ANTHROPIC_API_KEY: 'inherited-key', OPENAI_API_KEY: 'other-provider-key',
+      GH_TOKEN: 'github-token', SAFE_FLAG: 'yes',
+    })).toEqual({ SAFE_FLAG: 'yes', CLAUDE_CODE_OAUTH_TOKEN: 'oauth-token' });
+  });
+
+  it('inherits only the matching provider family credential', () => {
+    expect(agentProviderEnvironment({ command: 'codex', args: ['exec', '-'] }, {
+      OPENAI_API_KEY: 'codex-key', CLAUDE_CODE_OAUTH_TOKEN: 'claude-token', PATH: '/bin',
+    })).toEqual({ OPENAI_API_KEY: 'codex-key', PATH: '/bin' });
   });
 });

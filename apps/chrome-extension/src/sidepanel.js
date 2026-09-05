@@ -227,7 +227,9 @@ async function trackCurrentReview() {
       method: 'POST', body: '{}',
     });
     status.textContent = result.reviewStarted === false
-      ? 'Added as a draft. Agent review is disabled until it is ready for review.'
+      ? result.reason === 'draft'
+        ? 'Added as a draft. Agent review is disabled until it is ready for review.'
+        : 'Added. No code review agents are configured.'
       : 'Added. The review agent is starting…';
     await refresh({ quiet: true });
   } catch (caught) {

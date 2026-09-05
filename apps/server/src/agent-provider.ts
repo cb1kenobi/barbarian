@@ -30,17 +30,33 @@ export function agentProviderSupportsWorkspaceWrite(command: string): boolean {
 
 const environmentReference = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
 
+const sensitiveEnvironmentName = /(?:AUTH|COOKIE|CREDENTIAL|DATABASE_URL|DSN|KEY|PASSWORD|SECRET|SESSION|TOKEN)/i;
+
+function inheritedProviderSecrets(command: string): Set<string> {
+  switch (agentProviderFamily(command)) {
+    case 'claude': return new Set(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']);
+    case 'codex': return new Set(['OPENAI_API_KEY']);
+    case 'cursor': return new Set(['CURSOR_API_KEY']);
+    case 'gemini': return new Set(['GEMINI_API_KEY', 'GOOGLE_API_KEY']);
+    default: return new Set();
+  }
+}
+
 export function agentProviderEnvironment(
   provider: AgentProviderConfig,
   base: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  const environment = { ...base };
+  const inheritedSecrets = inheritedProviderSecrets(provider.command);
+  const environment = Object.fromEntries(Object.entries(base).filter(([name]) => (
+    !sensitiveEnvironmentName.test(name) || inheritedSecrets.has(name)
+  )));
   for (const name of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']) {
     delete environment[name];
   }
   for (const [name, configured] of Object.entries(provider.env || {})) {
     const reference = configured.match(environmentReference)?.[1];
     const value = reference ? base[reference] : configured;
+    if (reference && reference !== name) delete environment[reference];
     if (value === undefined) delete environment[name];
     else environment[name] = value;
   }

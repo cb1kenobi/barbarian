@@ -321,7 +321,10 @@ describe('ReviewDispatcher', () => {
     const db = database();
     const id = seedReview(db, 16);
     const now = new Date().toISOString();
-    db.connection.prepare('UPDATE review_queue SET is_draft=1 WHERE id=?').run(id);
+    db.connection.prepare(`
+      UPDATE review_queue SET is_draft=1, status='agent_working', claim_owner='owner',
+        claimed_at=?, manual_requested_at=?, manual_provider='fake' WHERE id=?
+    `).run(now, now, id);
     db.connection.prepare(`
       INSERT INTO agent_runs(review_id, provider, task, status, started_at, runtime_key)
       VALUES (?, 'fake', 'code_review:new_pr', 'running', ?, ?)
@@ -338,6 +341,13 @@ describe('ReviewDispatcher', () => {
       SELECT status, error FROM agent_runs WHERE review_id=?
     `).get(id)).toEqual({
       status: 'cancelled', error: 'Stopped because the pull request became a draft',
+    });
+    expect(db.connection.prepare(`
+      SELECT status, claim_owner, claimed_at, manual_requested_at, manual_provider
+      FROM review_queue WHERE id=?
+    `).get(id)).toEqual({
+      status: 'unreviewed', claim_owner: null, claimed_at: null,
+      manual_requested_at: null, manual_provider: null,
     });
     dispatcher.stop();
     await runtime.shutdown();

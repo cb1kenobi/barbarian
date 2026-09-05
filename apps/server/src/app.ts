@@ -969,12 +969,12 @@ export async function createApp(
     if (tracked?.is_draft) {
       publishReviewUpdated(id);
       publishDashboardUpdated(id);
-      return reply.code(202).send({ accepted: true, id, reviewStarted: false });
+      return reply.code(202).send({ accepted: true, id, reviewStarted: false, reason: 'draft' });
     }
     if (!config.agents.codeReview.length) {
       publishReviewUpdated(id);
       publishDashboardUpdated(id);
-      return reply.code(202).send({ accepted: true, id, reviewStarted: false });
+      return reply.code(202).send({ accepted: true, id, reviewStarted: false, reason: 'no_agents' });
     }
     if (!dispatcher.requestManual(id)) return reply.code(500).send({ error: 'Pull request was added, but its review could not be started' });
     publishReviewUpdated(id);

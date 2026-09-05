@@ -11,15 +11,15 @@ export interface ReviewWorkspace {
 }
 
 const agentControlPathspecs = [
-  ':(glob)AGENTS.md', ':(glob)**/AGENTS.md',
-  ':(glob)CLAUDE.md', ':(glob)**/CLAUDE.md',
-  ':(glob).cursorrules', ':(glob)**/.cursorrules',
-  ':(glob).cursor', ':(glob)**/.cursor',
-  ':(glob).cursor/**', ':(glob)**/.cursor/**',
-  ':(glob).codex', ':(glob)**/.codex',
-  ':(glob).codex/**', ':(glob)**/.codex/**',
-  ':(glob).agents', ':(glob)**/.agents',
-  ':(glob).agents/**', ':(glob)**/.agents/**',
+  ':(icase,glob)AGENTS.md', ':(icase,glob)**/AGENTS.md',
+  ':(icase,glob)CLAUDE.md', ':(icase,glob)**/CLAUDE.md',
+  ':(icase,glob).cursorrules', ':(icase,glob)**/.cursorrules',
+  ':(icase,glob).cursor', ':(icase,glob)**/.cursor',
+  ':(icase,glob).cursor/**', ':(icase,glob)**/.cursor/**',
+  ':(icase,glob).codex', ':(icase,glob)**/.codex',
+  ':(icase,glob).codex/**', ':(icase,glob)**/.codex/**',
+  ':(icase,glob).agents', ':(icase,glob)**/.agents',
+  ':(icase,glob).agents/**', ':(icase,glob)**/.agents/**',
 ];
 
 async function hasUntrustedAgentControls(workspacePath: string, baseRefs: string[]): Promise<boolean | null> {

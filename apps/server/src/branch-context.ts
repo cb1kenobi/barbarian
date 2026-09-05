@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { BarbarianDatabase } from './database.js';
 import type { BarbarianConfig } from './types.js';
-import { executeAgent, parseReviewResult, type AgentSelection } from './agents.js';
+import { createAgentRun, executeAgent, parseReviewResult, type AgentSelection } from './agents.js';
 import { validateReviewCommentLocations } from './github.js';
 import { runProcess } from './process.js';
 import { explainPullRequest } from './summary.js';
@@ -309,16 +309,27 @@ ${diff || '(No tracked changes from the base branch.)'}`;
       attempted.add(selected.id);
       const selectedConfig = currentConfig();
       const agentSelection = { provider: selected.provider, model: selected.model, effort: selected.effort };
+      let runId: number | undefined;
       try {
+        runId = createAgentRun(
+          database, selectedConfig, null, 'local_branch_review',
+          `Preparing local branch review for ${branch.repository}:${branch.branch_name}.`,
+          selected.provider, undefined, { branchId: id, agentSelection },
+        );
         const output = await executeAgent(
           database, selectedConfig, null, 'local_branch_review', prompt, selected.provider, signal, undefined,
-          { branchId: id, cwd: tmpdir(), agentSelection },
+          { runId, branchId: id, cwd: tmpdir(), agentSelection },
         );
         const parsed = parseReviewResult(output);
         validateReviewCommentLocations(diff, parsed.comments);
         result = parsed;
       } catch (agentError) {
         if (signal?.aborted) throw agentError;
+        if (runId !== undefined) {
+          database.connection.prepare(`
+            UPDATE agent_runs SET status='failed', error=? WHERE id=? AND status='complete'
+          `).run(agentError instanceof Error ? agentError.message : String(agentError), runId);
+        }
         failures.push(`${selected.provider} failed: ${agentError instanceof Error ? agentError.message : String(agentError)}`);
       }
     }

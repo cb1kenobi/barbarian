@@ -194,13 +194,28 @@ export class ReviewDispatcher {
     ), 0);
     const now = new Date().toISOString();
     const ids = runs.map((run) => run.id);
-    const placeholders = ids.map(() => '?').join(',');
-    this.database.connection.prepare(`
-      UPDATE agent_runs SET status='cancelled', finished_at=?,
-        error='Stopped because the pull request became a draft', prompt=''
-      WHERE id IN (${placeholders}) AND status='running'
-    `).run(now, ...ids);
-    for (const reviewId of new Set(runs.map((run) => run.review_id))) this.publishReviewChanged(reviewId);
+    const runPlaceholders = ids.map(() => '?').join(',');
+    const reviewIds = [...new Set(runs.map((run) => run.review_id))];
+    const reviewPlaceholders = reviewIds.map(() => '?').join(',');
+    this.database.connection.exec('BEGIN IMMEDIATE');
+    try {
+      this.database.connection.prepare(`
+        UPDATE agent_runs SET status='cancelled', finished_at=?,
+          error='Stopped because the pull request became a draft', prompt=''
+        WHERE id IN (${runPlaceholders}) AND status='running'
+      `).run(now, ...ids);
+      this.database.connection.prepare(`
+        UPDATE review_queue SET status='unreviewed', claim_owner=NULL, claimed_at=NULL,
+          manual_requested_at=NULL, manual_provider=NULL, retry_after=NULL,
+          last_agent_error=NULL, updated_at=?
+        WHERE id IN (${reviewPlaceholders}) AND is_draft=1
+      `).run(now, ...reviewIds);
+      this.database.connection.exec('COMMIT');
+    } catch (error) {
+      this.database.connection.exec('ROLLBACK');
+      throw error;
+    }
+    for (const reviewId of reviewIds) this.publishReviewChanged(reviewId);
     return cancelled;
   }
 
