@@ -429,11 +429,12 @@ export function App() {
             <label className="review-sort"><span>Sort</span><select value={reviewSort} onChange={(event) => setReviewSort(event.target.value as ReviewSort)}><option value="priority">Priority</option><option value="pain">Pain</option><option value="oldest">Oldest</option><option value="newest">Newest</option><option value="repository">Repo name</option></select></label>
           </div></div>
           <div ref={reviewViewportRef} className={`review-grid queue-viewport review-viewport${reviewsScrollable ? ' is-scrollable' : ''}`}>
-            {reviews.map((review) => <button className="review-card" key={review.id} onClick={() => setSelectedReview(review.id)}>
+            {reviews.map((review) => <article className="review-card" key={review.id}>
+              <button type="button" className="review-card-open" aria-label={`Open review ${review.repository} #${review.number}: ${review.title}`} onClick={() => setSelectedReview(review.id)} />
               <div className="review-card-head"><span><span className="repo">{repositoryName(review.repository)}</span><span className="pr">#{review.number}</span></span><ReviewStatusBadge status={reviewDisplayStatus(review)} onAgentFailed={() => setFailedReview(review.id)} /></div>
               <h3>{review.title}</h3><p><InlineCode text={review.simple_summary} /></p>
               <footer className="review-card-footer"><ReviewMetadata review={review} timezone={dashboard?.profile.timezone} now={now} /></footer>
-            </button>)}
+            </article>)}
             {!reviews.length && <Empty message={queueSearch || reviewRepository !== 'all' || showDraftReviews ? 'No code reviews match these filters.' : 'No pull requests currently need your review.'} />}
           </div>
         </section>
@@ -639,7 +640,11 @@ function AgentRunDrawer({ id, now, onBack, onClose, onStopped }: {
           ? await api<AgentRunStatus>(`/api/agent-runs/${id}/status`)
           : await api<AgentRunDetail>(`/api/agent-runs/${id}`);
         if (!active) return;
-        if (hasDetail) setRun((current) => current ? { ...current, ...value } : current);
+        if (hasDetail && value.status !== 'running') {
+          const detail = await api<AgentRunDetail>(`/api/agent-runs/${id}`);
+          if (!active) return;
+          setRun(detail);
+        } else if (hasDetail) setRun((current) => current ? { ...current, ...value } : current);
         else {
           setRun(value as AgentRunDetail);
           hasDetail = true;

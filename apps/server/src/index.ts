@@ -84,6 +84,7 @@ async function monitorTick(): Promise<void> {
   monitorRuntime.nextSyncAt = null;
   try {
     await synchronize(database, config);
+    dispatcher.cancelDraftReviews();
     if (config.review.autoCleanup) await cleanupCompletedWorkspaces(database, config);
     await dispatcher.pump();
   } catch (error) {

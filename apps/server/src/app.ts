@@ -28,7 +28,7 @@ import {
   agentProviderCapabilities, agentProviderFamily, agentProviderSupportsWorkspaceWrite,
 } from './agent-provider.js';
 import { discoverAgentModels, type AgentModelOption } from './agent-models.js';
-import { authoredPullRequestsNeedingAttention } from './authored-pull-requests.js';
+import { openAuthoredPullRequests } from './authored-pull-requests.js';
 import { authenticatedGithubLogin } from './github-identity.js';
 import { resolveReviewWorkspace, type ReviewWorkspace } from './review-workspace.js';
 import {
@@ -613,7 +613,7 @@ export async function createApp(
     ).map((record) => {
       return rowToReview(record, config, cardMetadata.get(String(record.id)));
     });
-    const feedback = authoredPullRequestsNeedingAttention(database, login).map((record) => {
+    const feedback = openAuthoredPullRequests(database, login).map((record) => {
       const review = rowToReview(record, config, cardMetadata.get(String(record.id)));
       return {
         ...review,
@@ -760,6 +760,7 @@ export async function createApp(
     try {
       const config = configStore.get();
       const result = await synchronize(database, config);
+      dispatcher.cancelDraftReviews();
       await dispatcher.pump();
       return reply.send(result);
     } finally {
@@ -1232,10 +1233,7 @@ export async function createApp(
       const linkedReview = database.connection.prepare(`
         SELECT is_draft FROM review_queue WHERE id=? AND remote_state='OPEN'
       `).get(branch.review_id) as { is_draft: number } | undefined;
-      if (linkedReview?.is_draft) {
-        return reply.code(409).send({ error: 'Draft pull requests cannot be reviewed' });
-      }
-      if (dispatcher.requestManual(branch.review_id, body.provider)) {
+      if (!linkedReview?.is_draft && dispatcher.requestManual(branch.review_id, body.provider)) {
         return reply.code(202).send({ accepted: true, target: 'pull_request' });
       }
     }

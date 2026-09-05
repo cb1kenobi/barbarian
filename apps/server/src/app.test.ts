@@ -955,8 +955,11 @@ describe('local branch context', () => {
         url: `/api/local/branches/${encodeURIComponent(branch.id)}/run-review`,
         payload: {},
       });
-      expect(draftReview.statusCode).toBe(409);
-      expect(draftReview.json()).toEqual({ error: 'Draft pull requests cannot be reviewed' });
+      expect(draftReview.statusCode).toBe(202);
+      expect(draftReview.json()).toEqual({ accepted: true, target: 'branch' });
+      await expect.poll(() => (database.connection.prepare(
+        'SELECT status FROM local_branches WHERE id=?',
+      ).get(branch.id) as { status: string }).status).not.toBe('agent_working');
       database.connection.prepare(`
         UPDATE review_queue SET remote_state='MERGED', status='merged', is_draft=0 WHERE id='github:Acme/storage#2'
       `).run();

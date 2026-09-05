@@ -299,6 +299,8 @@ async function runReviewAction(kind) {
   } finally {
     busy = false;
     document.querySelectorAll('button').forEach((button) => { button.disabled = false; });
+    const reviewButton = document.querySelector('.agent-review');
+    if (reviewButton && currentContext?.review?.is_draft) reviewButton.disabled = true;
     updateSelectionPreview();
   }
 }

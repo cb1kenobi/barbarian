@@ -177,6 +177,31 @@ export class ReviewDispatcher {
     }
   }
 
+  cancelDraftReviews(): number {
+    const runs = this.database.connection.prepare(`
+      SELECT agent_runs.id, agent_runs.review_id, agent_runs.runtime_key
+      FROM agent_runs
+      JOIN review_queue ON review_queue.id=agent_runs.review_id
+      WHERE review_queue.is_draft=1 AND agent_runs.status='running'
+        AND agent_runs.task LIKE 'code_review:%'
+    `).all() as Array<{ id: number; review_id: string; runtime_key: string | null }>;
+    if (!runs.length) return 0;
+    const keys = new Set(runs.flatMap((run) => [run.review_id, run.runtime_key].filter(Boolean) as string[]));
+    const cancelled = [...keys].reduce((total, key) => (
+      total + this.runtime.cancel(key, new Error('Pull request became a draft'))
+    ), 0);
+    const now = new Date().toISOString();
+    const ids = runs.map((run) => run.id);
+    const placeholders = ids.map(() => '?').join(',');
+    this.database.connection.prepare(`
+      UPDATE agent_runs SET status='cancelled', finished_at=?,
+        error='Stopped because the pull request became a draft', prompt=''
+      WHERE id IN (${placeholders}) AND status='running'
+    `).run(now, ...ids);
+    for (const reviewId of new Set(runs.map((run) => run.review_id))) this.publishReviewChanged(reviewId);
+    return cancelled;
+  }
+
   async pump(): Promise<void> {
     if (this.pumping || this.stopped) return;
     this.pumping = true;
@@ -253,17 +278,18 @@ export class ReviewDispatcher {
           `).get(row.id, since) as { total: number }).total);
           if (recentRuns >= config.agents.maxRunsPerPullRequestPerHour) continue;
         }
+        const claimOwner = `${this.owner}:${randomUUID()}`;
         const changed = this.database.connection.prepare(`
           UPDATE review_queue SET claim_owner=?, claimed_at=?, status='agent_working',
             manual_requested_at=NULL, manual_provider=NULL, attempt_count=?,
             attempt_head_sha=head_sha, attempt_watermark=discussion_watermark,
             retry_after=NULL, updated_at=? WHERE id=? AND claim_owner IS NULL
-        `).run(this.owner, now, attemptCount, now, row.id);
+        `).run(claimOwner, now, attemptCount, now, row.id);
         if (!changed.changes) continue;
         this.database.connection.exec('COMMIT');
         return {
           reviewId: row.id,
-          owner: this.owner,
+          owner: claimOwner,
           headSha: row.head_sha,
           discussionWatermark: row.discussion_watermark,
           trigger,

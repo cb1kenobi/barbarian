@@ -229,9 +229,12 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
 .review-viewport { max-height: min(660px, 72vh); align-content: start; padding-right: 8px; }
 .feedback-panel { margin-top: 24px; }
 .feedback-viewport { max-height: min(440px, 52vh); align-content: start; padding-right: 8px; }
-.review-card { display: flex; min-width: 0; flex-direction: column; padding: 17px 17px 15px; border: 1px solid var(--line); background: var(--panel); color: inherit; text-align: left; cursor: pointer; }
+.review-card { position: relative; display: flex; min-width: 0; flex-direction: column; padding: 17px 17px 15px; border: 1px solid var(--line); background: var(--panel); color: inherit; text-align: left; cursor: pointer; }
 .review-card:hover { border-color: var(--line-strong); transform: translateY(-1px); }
-.review-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.review-card-open { position: absolute; z-index: 1; inset: 0; width: 100%; border: 0; background: transparent; cursor: pointer; }
+.review-card-open:focus-visible { outline: 2px solid var(--acid); outline-offset: 2px; }
+.review-card-head { position: relative; z-index: 2; display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; pointer-events: none; }
+.review-card-head .failure-trigger { pointer-events: auto; }
 .pr { margin-left: 7px; color: #686c62; font: .6875rem ui-monospace, SFMono-Regular, Menlo, monospace; }
 .review-grid h3 { min-height: 44px; margin: 14px 0 20px; font-size: .9375rem; font-weight: 500; line-height: 1.45; }
 .review-card > p { min-height: 65px; margin: -11px 0 18px; overflow: hidden; color: var(--muted); font-size: .875rem; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }

@@ -1,6 +1,6 @@
 import type { BarbarianDatabase } from './database.js';
 import type { BarbarianConfig } from './types.js';
-import { authoredPullRequestsNeedingAttention } from './authored-pull-requests.js';
+import { openAuthoredPullRequests } from './authored-pull-requests.js';
 import { authenticatedGithubLogin } from './github-identity.js';
 
 interface StatusReview {
@@ -119,7 +119,7 @@ export function buildStatusDraft(database: BarbarianDatabase, config: BarbarianC
       AND status<>'approved'
       AND NOT (COALESCE(viewer_review_state, '')='APPROVED' AND viewer_review_sha=head_sha)
   `).get(login) as { total: number }).total);
-  const authoredPullRequests = authoredPullRequestsNeedingAttention(database, login);
+  const authoredPullRequests = openAuthoredPullRequests(database, login);
   const feedback = sortReviews(
     authoredPullRequests.filter((review) => review.has_new_feedback) as unknown as StatusReview[],
     config,

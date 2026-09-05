@@ -316,6 +316,33 @@ describe('ReviewDispatcher', () => {
     db.close();
   });
 
+  it('cancels active agents when their pull request becomes a draft', async () => {
+    const db = database();
+    const id = seedReview(db, 16);
+    const now = new Date().toISOString();
+    db.connection.prepare('UPDATE review_queue SET is_draft=1 WHERE id=?').run(id);
+    db.connection.prepare(`
+      INSERT INTO agent_runs(review_id, provider, task, status, started_at, runtime_key)
+      VALUES (?, 'fake', 'code_review:new_pr', 'running', ?, ?)
+    `).run(id, now, `${id}:code-review:fake`);
+    const runtime = new AgentRuntime(2);
+    const running = runtime.run(async (signal) => new Promise<void>((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }), `${id}:code-review:fake`);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const dispatcher = new ReviewDispatcher(db, config(2), runtime, { error: () => undefined });
+    expect(dispatcher.cancelDraftReviews()).toBe(1);
+    await expect(running).rejects.toThrow('Pull request became a draft');
+    expect(db.connection.prepare(`
+      SELECT status, error FROM agent_runs WHERE review_id=?
+    `).get(id)).toEqual({
+      status: 'cancelled', error: 'Stopped because the pull request became a draft',
+    });
+    dispatcher.stop();
+    await runtime.shutdown();
+    db.close();
+  });
+
   it('does not hide a review-room chat when stopping the code review', async () => {
     const db = database();
     const id = seedReview(db, 15);

@@ -6,7 +6,7 @@ export interface AuthoredPullRequestRow extends Record<string, unknown> {
   has_new_feedback: boolean;
 }
 
-export function authoredPullRequestsNeedingAttention(
+export function openAuthoredPullRequests(
   database: BarbarianDatabase,
   login: string,
 ): AuthoredPullRequestRow[] {
