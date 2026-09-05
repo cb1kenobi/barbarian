@@ -142,6 +142,7 @@ export function upsertReview(database: BarbarianDatabase, config: BarbarianConfi
     || existing.last_reviewed_sha !== pr.headSha
     || (existing.last_reviewed_watermark !== null && watermark > existing.last_reviewed_watermark)
   )) status = 'unreviewed';
+  if (pr.isDraft) status = 'unreviewed';
 
   database.connection.prepare(`
     INSERT INTO review_queue(
@@ -161,6 +162,11 @@ export function upsertReview(database: BarbarianDatabase, config: BarbarianConfi
       requested_reviewers=excluded.requested_reviewers, requested_teams=excluded.requested_teams,
       linked_issues=excluded.linked_issues, review_skill=excluded.review_skill,
       discussion_watermark=excluded.discussion_watermark,
+      claim_owner=CASE WHEN excluded.is_draft=1 THEN NULL ELSE review_queue.claim_owner END,
+      claimed_at=CASE WHEN excluded.is_draft=1 THEN NULL ELSE review_queue.claimed_at END,
+      manual_requested_at=CASE WHEN excluded.is_draft=1 THEN NULL ELSE review_queue.manual_requested_at END,
+      manual_provider=CASE WHEN excluded.is_draft=1 THEN NULL ELSE review_queue.manual_provider END,
+      retry_after=CASE WHEN excluded.is_draft=1 THEN NULL ELSE review_queue.retry_after END,
       review_paused=CASE
         WHEN review_queue.head_sha<>excluded.head_sha
           OR excluded.discussion_watermark>review_queue.discussion_watermark THEN 0

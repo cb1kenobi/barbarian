@@ -246,10 +246,15 @@ describe('applyDiscovery', () => {
       commitCount: 3,
       updatedAt: '2026-09-03T00:04:16Z',
     }];
+    db.connection.prepare(`
+      UPDATE review_queue SET status='agent_working', claim_owner='active-owner', claimed_at=?
+      WHERE number=797
+    `).run(new Date().toISOString());
     await applyDiscovery(db, automaticConfig, discovery);
-    expect(db.connection.prepare('SELECT is_draft, head_sha FROM review_queue WHERE number=797').get()).toEqual({
-      is_draft: 1,
-      head_sha: 'draft-head',
+    expect(db.connection.prepare(`
+      SELECT is_draft, head_sha, status, claim_owner, claimed_at FROM review_queue WHERE number=797
+    `).get()).toEqual({
+      is_draft: 1, head_sha: 'draft-head', status: 'unreviewed', claim_owner: null, claimed_at: null,
     });
     await dispatcher.pump();
     await new Promise((resolve) => setTimeout(resolve, 20));

@@ -200,10 +200,11 @@ function rowToReview(
   cardMetadata: ReviewCardMetadata = emptyCardMetadata,
 ) {
   const reviewPaused = Boolean(row.review_paused);
+  const isDraft = Boolean(row.is_draft);
   const linkedIssues = parseJson<number[]>(String(row.linked_issues));
   const review = {
     ...row,
-    pending_reason: reviewPaused ? null : reviewTrigger({
+    pending_reason: reviewPaused || isDraft ? null : reviewTrigger({
       manual_requested_at: row.manual_requested_at ? String(row.manual_requested_at) : null,
       head_sha: String(row.head_sha),
       last_reviewed_sha: row.last_reviewed_sha ? String(row.last_reviewed_sha) : null,
@@ -211,7 +212,7 @@ function rowToReview(
       last_reviewed_watermark: row.last_reviewed_watermark === null ? null : String(row.last_reviewed_watermark || ''),
     }),
     review_paused: reviewPaused,
-    is_draft: Boolean(row.is_draft),
+    is_draft: isDraft,
     requested_reviewers: parseJson<string[]>(String(row.requested_reviewers)),
     requested_teams: parseJson<string[]>(String(row.requested_teams)),
     linked_issues: linkedIssues,
@@ -908,15 +909,25 @@ export async function createApp(
       if (!body.askAgent) return { message: null };
       const runtimeKey = `agent-run:${randomUUID()}`;
       const response = await runtime.run(
-        (signal) => askAgent(database, config, id, body.message, body.provider, signal, {
-          runtimeKey,
-          ...(agentWorkspace ? {
-            branchId: agentWorkspace.branchId,
-            cwd: agentWorkspace.path,
-            workspaceWrite: true,
-          } : {}),
-          ...(body.selection ? { untrustedSelection: body.selection } : {}),
-        }),
+        async (signal) => {
+          if (agentWorkspace) {
+            const currentWorkspace = await resolveReviewWorkspace(database, id);
+            if (!currentWorkspace
+              || currentWorkspace.branchId !== agentWorkspace.branchId
+              || currentWorkspace.path !== agentWorkspace.path) {
+              throw new Error('The linked local branch changed before the agent started');
+            }
+          }
+          return askAgent(database, config, id, body.message, body.provider, signal, {
+            runtimeKey,
+            ...(agentWorkspace ? {
+              branchId: agentWorkspace.branchId,
+              cwd: agentWorkspace.path,
+              workspaceWrite: true,
+            } : {}),
+            ...(body.selection ? { untrustedSelection: body.selection } : {}),
+          });
+        },
         runtimeKey,
       );
       const inserted = database.connection.prepare(`
@@ -1272,44 +1283,52 @@ export async function createApp(
     const config = configStore.get();
     const body = chatBody.parse(request.body);
     const now = new Date().toISOString();
-    if (branch.review_id) {
-      const review = database.connection.prepare('SELECT id FROM review_queue WHERE id=?').get(branch.review_id);
-      if (!review) return reply.code(404).send({ error: 'The linked pull request is no longer tracked' });
+    if (body.askAgent && activeWritableBranches.has(id)) {
+      return reply.code(409).send({ error: 'An agent is already working in this branch' });
+    }
+    if (body.askAgent) activeWritableBranches.add(id);
+    try {
+      if (branch.review_id) {
+        const review = database.connection.prepare('SELECT id FROM review_queue WHERE id=?').get(branch.review_id);
+        if (!review) return reply.code(404).send({ error: 'The linked pull request is no longer tracked' });
+        database.connection.prepare(`
+          INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'user', ?, ?, ?)
+        `).run(branch.review_id, body.author, body.message, now);
+        if (!body.askAgent) return { message: null };
+        const runtimeKey = `agent-run:${randomUUID()}`;
+        const response = await runtime.run(
+          (signal) => askAgent(database, config, branch.review_id!, body.message, body.provider, signal, {
+            branchId: id,
+            cwd: branch.workspace_path,
+            workspaceWrite: true,
+            runtimeKey,
+            ...(body.selection ? { untrustedSelection: body.selection } : {}),
+          }),
+          runtimeKey,
+        );
+        const inserted = database.connection.prepare(`
+          INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'assistant', ?, ?, ?)
+        `).run(branch.review_id, body.provider || agentSelectionForTask(config, 'chat').provider, response, new Date().toISOString());
+        return { message: { id: Number(inserted.lastInsertRowid), role: 'assistant', author: body.provider || agentSelectionForTask(config, 'chat').provider, content: response } };
+      }
       database.connection.prepare(`
-        INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'user', ?, ?, ?)
-      `).run(branch.review_id, body.author, body.message, now);
+        INSERT INTO local_branch_messages(branch_id, role, author, content, created_at) VALUES (?, 'user', ?, ?, ?)
+      `).run(id, body.author, body.message, now);
       if (!body.askAgent) return { message: null };
       const runtimeKey = `agent-run:${randomUUID()}`;
       const response = await runtime.run(
-        (signal) => askAgent(database, config, branch.review_id!, body.message, body.provider, signal, {
-          branchId: id,
-          cwd: branch.workspace_path,
-          workspaceWrite: true,
-          runtimeKey,
-          ...(body.selection ? { untrustedSelection: body.selection } : {}),
-        }),
+        (signal) => askLocalBranchAgent(
+          database, config, id, body.message, body.provider, signal, runtimeKey, body.selection,
+        ),
         runtimeKey,
       );
       const inserted = database.connection.prepare(`
-        INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'assistant', ?, ?, ?)
-      `).run(branch.review_id, body.provider || agentSelectionForTask(config, 'chat').provider, response, new Date().toISOString());
-      return { message: { id: Number(inserted.lastInsertRowid), role: 'assistant', author: body.provider || agentSelectionForTask(config, 'chat').provider, content: response } };
+        INSERT INTO local_branch_messages(branch_id, role, author, content, created_at) VALUES (?, 'assistant', ?, ?, ?)
+      `).run(id, body.provider || agentSelectionForTask(config, 'local_branch_chat').provider, response, new Date().toISOString());
+      return { message: { id: Number(inserted.lastInsertRowid), role: 'assistant', author: body.provider || agentSelectionForTask(config, 'local_branch_chat').provider, content: response } };
+    } finally {
+      if (body.askAgent) activeWritableBranches.delete(id);
     }
-    database.connection.prepare(`
-      INSERT INTO local_branch_messages(branch_id, role, author, content, created_at) VALUES (?, 'user', ?, ?, ?)
-    `).run(id, body.author, body.message, now);
-    if (!body.askAgent) return { message: null };
-    const runtimeKey = `agent-run:${randomUUID()}`;
-    const response = await runtime.run(
-      (signal) => askLocalBranchAgent(
-        database, config, id, body.message, body.provider, signal, runtimeKey, body.selection,
-      ),
-      runtimeKey,
-    );
-    const inserted = database.connection.prepare(`
-      INSERT INTO local_branch_messages(branch_id, role, author, content, created_at) VALUES (?, 'assistant', ?, ?, ?)
-    `).run(id, body.provider || agentSelectionForTask(config, 'local_branch_chat').provider, response, new Date().toISOString());
-    return { message: { id: Number(inserted.lastInsertRowid), role: 'assistant', author: body.provider || agentSelectionForTask(config, 'local_branch_chat').provider, content: response } };
   });
 
   app.get('/api/settings', async () => ({

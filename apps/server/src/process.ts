@@ -9,6 +9,16 @@ export interface ProcessResult {
   exitCode: number;
 }
 
+export class ProcessExecutionError extends Error {
+  constructor(
+    message: string,
+    readonly stdout: string,
+    readonly stderr: string,
+  ) {
+    super(message);
+  }
+}
+
 class CappedOutput {
   private value = '';
   private dropped = 0;
@@ -50,13 +60,20 @@ export function runProcess(
     });
     const stdout = new CappedOutput(options.maxOutputCharacters ?? 512_000);
     const stderr = new CappedOutput(options.maxOutputCharacters ?? 512_000);
+    const executionError = (error: Error) => {
+      const wrapped = new ProcessExecutionError(error.message, stdout.result(), stderr.result());
+      wrapped.name = error.name;
+      return wrapped;
+    };
     let settled = false;
     const timeout = setTimeout(() => {
       child.kill('SIGTERM');
       setTimeout(() => child.kill('SIGKILL'), 5_000).unref();
       if (!settled) {
         settled = true;
-        reject(new Error(`${command} timed out after ${options.timeoutMs ?? 120_000}ms`));
+        reject(new ProcessExecutionError(
+          `${command} timed out after ${options.timeoutMs ?? 120_000}ms`, stdout.result(), stderr.result(),
+        ));
       }
     }, options.timeoutMs ?? 120_000);
 
@@ -68,13 +85,13 @@ export function runProcess(
       if (error.code !== 'EPIPE' && !settled) {
         settled = true;
         clearTimeout(timeout);
-        reject(error);
+        reject(executionError(error));
       }
     });
     child.on('error', (error) => {
       settled = true;
       clearTimeout(timeout);
-      reject(error);
+      reject(executionError(error));
     });
     child.on('close', (code) => {
       clearTimeout(timeout);

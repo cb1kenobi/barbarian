@@ -732,6 +732,46 @@ describe('browser context appearance', () => {
       database.close();
     }
   });
+
+  it('tracks a draft pull request without requesting an agent review', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-browser-draft-track-test-'));
+    directories.push(directory);
+    const database = new BarbarianDatabase(path.join(directory, 'test.db'));
+    let requestedReview = '';
+    const dispatcher = {
+      setReviewChangedListener() {},
+      requestManual(id: string) { requestedReview = id; return true; },
+      async pump() {},
+      cancelReview() { return { found: false, stopped: false, cancelled: 0 }; },
+    } as unknown as ReviewDispatcher;
+    const app = await createApp(database, new ConfigStore(config), undefined, {
+      dispatcher,
+      trackReview: async (db, _configured, repository, number) => {
+        const now = new Date().toISOString();
+        const id = `github:${repository}#${number}`;
+        db.connection.prepare(`
+          INSERT INTO review_queue(
+            id, repository, number, title, url, author, head_sha, head_ref_name, base_ref_name,
+            is_draft, first_seen_at, updated_at, last_seen_at
+          ) VALUES (?, ?, ?, 'Draft review', ?, 'author', 'head', 'feature', 'main', 1, ?, ?, ?)
+        `).run(id, repository, number, `https://github.com/${repository}/pull/${number}`, now, now, now);
+        return id;
+      },
+    });
+    try {
+      const response = await app.inject({
+        method: 'POST', url: '/api/reviews/github%3AAcme%2Fstorage%2398/track', payload: {},
+      });
+      expect(response.statusCode).toBe(202);
+      expect(response.json()).toEqual({
+        accepted: true, id: 'github:Acme/storage#98', reviewStarted: false,
+      });
+      expect(requestedReview).toBe('');
+    } finally {
+      await app.close();
+      database.close();
+    }
+  });
 });
 
 describe('browser issue context', () => {
@@ -1009,6 +1049,12 @@ describe('local branch context', () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-dashboard-chat-cwd-test-'));
     directories.push(directory);
     const database = new BarbarianDatabase(path.join(directory, 'test.db'));
+    branchPayload(directory);
+    writeFileSync(path.join(directory, 'README.md'), 'dashboard workspace\n');
+    execFileSync('git', ['add', 'README.md'], { cwd: directory });
+    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', 'test'], { cwd: directory });
+    const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: directory, encoding: 'utf8' }).trim();
+    const payload = { ...branchPayload(directory), headSha };
     const current = structuredClone(config);
     const codexStub = path.join(directory, 'codex');
     writeFileSync(
@@ -1029,11 +1075,11 @@ describe('local branch context', () => {
         'github:Acme/storage#8', 'Acme/storage', 8, 'Dashboard PR',
         'https://github.com/Acme/storage/pull/8', 'author', ?, 'feature/local-review', 'main', ?, ?, ?
       )
-    `).run(branchPayload(directory).headSha, now, now, now);
+    `).run(headSha, now, now, now);
     const app = await createApp(database, new ConfigStore(current));
     try {
       const context = await app.inject({
-        method: 'POST', url: '/api/local/branches/context', payload: branchPayload(directory),
+        method: 'POST', url: '/api/local/branches/context', payload,
       });
       const branch = (context.json() as { branch: { id: string } }).branch;
 
@@ -1100,6 +1146,20 @@ describe('local branch context', () => {
       expect(staleWrite.json()).toEqual({
         error: 'The linked local branch is no longer available or checked out',
       });
+
+      database.connection.prepare('UPDATE local_branches SET branch_name=? WHERE id=?')
+        .run('feature/local-review', branch.id);
+      const originalPath = process.env.PATH;
+      process.env.PATH = '';
+      try {
+        const unavailableGit = await app.inject({
+          method: 'GET', url: '/api/reviews/github%3AAcme%2Fstorage%238',
+        });
+        expect(unavailableGit.statusCode).toBe(200);
+        expect(unavailableGit.json()).toMatchObject({ agentWorkspace: null });
+      } finally {
+        process.env.PATH = originalPath;
+      }
     } finally {
       await app.close();
       database.close();
