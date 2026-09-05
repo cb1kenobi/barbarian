@@ -103,6 +103,10 @@ export function splitItems(value: string): string[] {
   return value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
 }
 
+export function compareAlphabetically(left: string, right: string): number {
+  return left.localeCompare(right, undefined, { sensitivity: 'base' }) || left.localeCompare(right);
+}
+
 function toDraft(config: SettingsConfig): SettingsDraft {
   return {
     ...structuredClone(config),
@@ -139,22 +143,24 @@ function AgentPicker({
   modelsLoading: boolean;
   onChange: (selection: AgentSelectionSettings) => void;
 }) {
-  const provider = providers.find((candidate) => candidate.name === selection.provider);
+  const sortedProviders = [...providers].sort((left, right) => compareAlphabetically(left.name, right.name));
+  const provider = sortedProviders.find((candidate) => candidate.name === selection.provider);
   const detectedModels = provider?.models || [];
+  const sortedDetectedModels = [...detectedModels].sort((left, right) => compareAlphabetically(left.name, right.name));
   const modelDiscoveryLoading = Boolean(modelsLoading && provider?.supportsModelDiscovery && detectedModels.length === 0);
   const selectedModelIsDetected = !selection.model || detectedModels.some((model) => model.id === selection.model);
   const defaultName = detectedModels.find((model) => model.id === provider?.defaultModel)?.name || provider?.defaultModel;
   return <div className="settings-grid three agent-picker">
     <label><span>Provider</span><select required value={selection.provider} onChange={(event) => onChange({ provider: event.target.value, model: '', effort: '' })}>
       {!providers.some((candidate) => candidate.name === selection.provider) && <option value={selection.provider}>{selection.provider}</option>}
-      {providers.map((candidate) => <option key={candidate.name} value={candidate.name}>{candidate.name}</option>)}
+      {sortedProviders.map((candidate) => <option key={candidate.name} value={candidate.name}>{candidate.name}</option>)}
     </select></label>
     <label><span>Model <small>{detectedModels.length ? `${detectedModels.length} detected` : modelDiscoveryLoading ? 'loading' : provider?.error ? 'discovery failed' : provider?.supportsModel ? defaultName ? `CLI default: ${defaultName}` : 'blank uses CLI default' : 'not supported'}</small></span>{modelDiscoveryLoading
       ? <div className="model-discovery-loading" role="status"><span aria-hidden="true" />Detecting models…</div>
       : detectedModels.length ? <select value={selection.model} onChange={(event) => onChange({ ...selection, model: event.target.value })}>
         <option value="">{defaultName ? `CLI default — ${defaultName}` : 'CLI default'}</option>
         {!selectedModelIsDetected && <option value={selection.model}>{selection.model}</option>}
-        {detectedModels.map((model) => <option key={model.id} value={model.id}>{model.name}{model.isDefault ? ' — default' : ''}</option>)}
+        {sortedDetectedModels.map((model) => <option key={model.id} value={model.id}>{model.name}{model.isDefault ? ' — default' : ''}</option>)}
       </select>
       : <input disabled={!provider?.supportsModel} placeholder="CLI default" value={selection.model} onChange={(event) => onChange({ ...selection, model: event.target.value })} />}</label>
     <label><span>Effort <small>{provider?.supportsEffort ? 'reasoning depth' : 'not supported'}</small></span><select className={!provider?.supportsEffort ? 'unsupported-field' : undefined} disabled={!provider?.supportsEffort} value={provider?.supportsEffort ? selection.effort : ''} onChange={(event) => onChange({ ...selection, effort: event.target.value as AgentEffort })}>{effortLevels.map((effort) => <option key={effort || 'default'} value={effort}>{effort || 'CLI default'}</option>)}</select></label>
@@ -368,8 +374,10 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
               <p>Required when listening on all interfaces. Enter only the VPN hostnames or IP addresses people will use to open Barbarian.</p>
             </div>
             {advanced?.server && <div className="settings-description-row">
-              <span className="field-label">Currently running</span>
-              <code className="readonly-value">{advanced.server.active.bindAddress}:{advanced.server.active.port}</code>
+              <label><span>Host</span><input className="readonly-value" readOnly aria-describedby="server-host-description" value={`${advanced.server.active.bindAddress}:${advanced.server.active.port}`} /></label>
+              <p id="server-host-description">{advanced.server.restartRequired || draft.server.bindAddress !== advanced.server.active.bindAddress || draft.server.port !== advanced.server.active.port
+                ? 'Restart Barbarian to apply the Listen on or Port changes above. Until then, it continues running at this host.'
+                : 'Address and port currently used by Barbarian. Changing Listen on or Port requires a restart.'}</p>
             </div>}
           </div></fieldset>
 
@@ -393,14 +401,18 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
             <div className="settings-list">{draft.repositories.map((repository, index) => <article className="settings-card" key={repository.id}>
               <div className="settings-card-head"><strong>Repository {index + 1}</strong><button type="button" className="danger-text" onClick={() => removeRepository(index)}>Remove</button></div>
               <div className="settings-grid repo-fields">
-                <label className="wide"><span>GitHub Repository (owner/name)</span><input required placeholder="owner/name" value={repository.name} onChange={(event) => updateRepository(index, { name: event.target.value })} /></label>
-                <label className="repo-priority"><span>Priority</span><input type="number" value={repository.priority} onChange={(event) => updateRepository(index, { priority: Number(event.target.value) })} /></label>
-                <label><span>Review skill</span><input required value={repository.reviewSkill} onChange={(event) => updateRepository(index, { reviewSkill: event.target.value })} /></label>
-                <div className="repo-watch-fields">
-                  <label className="check-field"><input type="checkbox" checked={repository.watchIssues} onChange={(event) => updateRepository(index, { watchIssues: event.target.checked })} /><span>Watch issues</span></label>
-                  <label className="check-field"><input type="checkbox" checked={repository.watchPullRequests} onChange={(event) => updateRepository(index, { watchPullRequests: event.target.checked })} /><span>Watch pull requests</span></label>
+                <div className="repo-main-fields">
+                  <label><span>GitHub Repository (owner/name)</span><input required placeholder="owner/name" value={repository.name} onChange={(event) => updateRepository(index, { name: event.target.value })} /></label>
+                  <div className="repo-secondary-fields">
+                    <label className="repo-priority"><span>Priority</span><input type="number" value={repository.priority} onChange={(event) => updateRepository(index, { priority: Number(event.target.value) })} /></label>
+                    <label><span>Review skill</span><input required value={repository.reviewSkill} onChange={(event) => updateRepository(index, { reviewSkill: event.target.value })} /></label>
+                    <div className="repo-watch-fields">
+                      <label className="check-field"><input type="checkbox" checked={repository.watchIssues} onChange={(event) => updateRepository(index, { watchIssues: event.target.checked })} /><span>Watch issues</span></label>
+                      <label className="check-field"><input type="checkbox" checked={repository.watchPullRequests} onChange={(event) => updateRepository(index, { watchPullRequests: event.target.checked })} /><span>Watch pull requests</span></label>
+                    </div>
+                  </div>
                 </div>
-                <label className="wide"><span>Label weights <small>one “label: weight” per line</small></span><textarea rows={3} placeholder={'security: 80\nregression: 60'} value={repository.labelsText} onChange={(event) => updateRepository(index, { labelsText: event.target.value })} /></label>
+                <label className="repo-label-weights"><span>Label weights <small>one “label: weight” per line</small></span><textarea rows={4} placeholder={'security: 80\nregression: 60'} value={repository.labelsText} onChange={(event) => updateRepository(index, { labelsText: event.target.value })} /></label>
               </div>
             </article>)}</div>
             <button type="button" className="add-button" onClick={addRepository}>＋ Add repository</button>

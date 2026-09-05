@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatLabels, parseLabels, splitItems, timezoneOptions } from './settings';
+import { compareAlphabetically, formatLabels, parseLabels, splitItems, timezoneOptions } from './settings';
 
 describe('settings form helpers', () => {
   it('round-trips repository label weights', () => {
@@ -17,5 +17,9 @@ describe('settings form helpers', () => {
 
   it('always includes the current timezone', () => {
     expect(timezoneOptions('UTC')).toContain('UTC');
+  });
+
+  it('sorts provider and model labels alphabetically without regard to case', () => {
+    expect(['Gemini', 'claude', 'Codex'].sort(compareAlphabetically)).toEqual(['claude', 'Codex', 'Gemini']);
   });
 });
