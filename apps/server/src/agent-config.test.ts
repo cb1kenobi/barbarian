@@ -4,11 +4,10 @@ import type { BarbarianConfig } from './types.js';
 
 const config = {
   agents: {
-    codeReview: {
-      codex: { enabled: true, model: 'gpt-review', effort: 'high' },
-      gemini: { enabled: true, model: 'gemini-pro', effort: '' },
-      claude: { enabled: false, model: 'opus', effort: 'medium' },
-    },
+    codeReview: [
+      { id: 'codex-review', provider: 'codex', model: 'gpt-review', effort: 'high', priority: 10 },
+      { id: 'gemini-review', provider: 'gemini', model: 'gemini-pro', effort: '', priority: 0 },
+    ],
     chat: { provider: 'claude', model: 'sonnet', effort: 'medium' },
     providers: {
       codex: { command: 'codex', args: ['exec', '-'] },
@@ -28,7 +27,7 @@ describe('task-specific agent configuration', () => {
     });
   });
 
-  it('lists every enabled code review provider in provider order', () => {
+  it('lists every configured code review provider in row order', () => {
     expect(enabledCodeReviewProviders(config)).toEqual(['codex', 'gemini']);
   });
 

@@ -47,11 +47,9 @@ linear:
   command: []
 
 agents:
-  codeReview:
-    codex:
-      enabled: true
-      model: ""
-      effort: ""
+  codeReview: []
+  reviewRouting: round_robin
+  usageHeadroomPercent: 20
   chat:
     provider: codex
     model: ""
@@ -68,6 +66,13 @@ agents:
     claude:
       command: claude
       args: [-p]
+    # Add another Claude account by generating a token with `claude setup-token`,
+    # saving it in .env, then defining another named provider instance:
+    # claude-secondary:
+    #   command: claude
+    #   args: [-p]
+    #   env:
+    #     CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_SECONDARY_OAUTH_TOKEN}
     gemini:
       command: gemini
       args: []

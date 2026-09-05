@@ -42,8 +42,9 @@ function setup(command: string): { database: BarbarianDatabase; config: Barbaria
     linear: { enabled: false, command: [] },
     agents: {
       autoReview: true, maxConcurrent: 1, maxAutomaticAttempts: 3,
-      codeReview: { fake: { enabled: true, model: '', effort: '' } },
+      codeReview: [{ id: 'fake', provider: 'fake', model: '', effort: '', priority: 0 }],
       chat: { provider: 'fake', model: '', effort: '' },
+      reviewRouting: 'round_robin', usageHeadroomPercent: 20,
       retryBaseMinutes: 1, maxRunsPerPullRequestPerHour: 3,
       providers: { fake: { command: process.execPath, args: ['-e', command] } },
     },
@@ -105,7 +106,7 @@ describe('newReviewComments', () => {
 });
 
 describe('runReviewAgent', () => {
-  it('records the agent while review context is still being prepared', async () => {
+  it('does not start an agent before the captured review bundle is ready', async () => {
     const script = "console.log('BARBARIAN_RESULT: {\\\"findings\\\":0,\\\"verdict\\\":\\\"ready\\\",\\\"summary\\\":\\\"Clear.\\\"}')";
     const { database, config, claim } = setup(script);
     let releaseBundle!: () => void;
@@ -121,23 +122,21 @@ describe('runReviewAgent', () => {
       },
     });
     await fetchStarted;
-    expect(database.connection.prepare(`
-      SELECT task, status, prompt FROM agent_runs ORDER BY id DESC LIMIT 1
-    `).get()).toEqual({
-      task: 'code_review:new_pr', status: 'running',
-      prompt: 'Preparing review context for Acme/repo#1 at old-head.',
-    });
+    expect(database.connection.prepare('SELECT COUNT(*) AS total FROM agent_runs').get()).toEqual({ total: 0 });
     releaseBundle();
     await running;
+    expect(database.connection.prepare(`
+      SELECT task, status FROM agent_runs ORDER BY id DESC LIMIT 1
+    `).get()).toEqual({ task: 'code_review:new_pr', status: 'complete' });
     database.close();
   });
 
-  it('runs every enabled provider separately and deduplicates their combined findings', async () => {
+  it('runs only one provider for a review', async () => {
     const output = 'BARBARIAN_RESULT: {"findings":1,"verdict":"issues","summary":"One issue found.","comments":[{"path":"file.ts","line":1,"side":"RIGHT","body":"**High: broken invariant**\\n\\nFailure mode and fix."}]}';
     const script = `console.log(${JSON.stringify(output)})`;
     const { database, config, claim } = setup(script);
     config.agents.providers.second = { command: process.execPath, args: ['-e', script] };
-    config.agents.codeReview.second = { enabled: true, model: '', effort: '' };
+    config.agents.codeReview.push({ id: 'second', provider: 'second', model: '', effort: '', priority: 0 });
     const runtime = new AgentRuntime(2);
     let releaseBundle!: () => void;
     const bundleReady = new Promise<void>((resolve) => { releaseBundle = resolve; });
@@ -151,33 +150,36 @@ describe('runReviewAgent', () => {
       schedule: (task, key) => runtime.run(task, key),
     });
     await fetchStarted;
-    expect(database.connection.prepare(`
-      SELECT provider, status, runtime_key FROM agent_runs ORDER BY provider
-    `).all()).toEqual([
-      { provider: 'fake', status: 'running', runtime_key: `${claim.reviewId}:code-review:fake` },
-      { provider: 'second', status: 'running', runtime_key: `${claim.reviewId}:code-review:second` },
-    ]);
+    expect(database.connection.prepare('SELECT COUNT(*) AS total FROM agent_runs').get()).toEqual({ total: 0 });
     releaseBundle();
     await running;
     expect(published).toHaveLength(1);
     expect(published[0]).toHaveLength(1);
+    expect(database.connection.prepare(`
+      SELECT provider, status, runtime_key FROM agent_runs ORDER BY id
+    `).all()).toEqual([
+      { provider: 'fake', status: 'complete', runtime_key: `${claim.reviewId}:code-review:fake` },
+    ]);
     expect(database.connection.prepare('SELECT status, findings_count FROM review_queue WHERE id=?')
       .get(claim.reviewId)).toEqual({ status: 'issues_found', findings_count: 1 });
     database.close();
   });
 
-  it('uses the finding provider summary when another provider reports the review as clean', async () => {
-    const clean = 'BARBARIAN_RESULT: {"findings":0,"verdict":"ready","summary":"No issue found."}';
+  it('fails over to the next matching provider after an agent error', async () => {
     const issue = 'BARBARIAN_RESULT: {"findings":1,"verdict":"issues","summary":"Adds validation but leaves one unsafe fallback.","comments":[{"path":"file.ts","line":1,"side":"RIGHT","body":"**High: broken invariant**\\n\\nFailure mode and fix."}]}';
-    const { database, config, claim } = setup(`console.log(${JSON.stringify(clean)})`);
+    const { database, config, claim } = setup("console.error('first failed'); process.exit(2)");
     config.agents.providers.second = { command: process.execPath, args: ['-e', `console.log(${JSON.stringify(issue)})`] };
-    config.agents.codeReview.second = { enabled: true, model: '', effort: '' };
+    config.agents.codeReview.push({ id: 'second', provider: 'second', model: '', effort: '', priority: 0 });
     let publishedSummary = '';
     await runReviewAgent(database, config, claim, undefined, {
       ...dependencies,
       postReview: async (_repository, _number, _headSha, summary) => { publishedSummary = summary; },
     });
     expect(publishedSummary).toBe('Adds validation but leaves one unsafe fallback.');
+    expect(database.connection.prepare('SELECT provider, status FROM agent_runs ORDER BY id').all()).toEqual([
+      { provider: 'fake', status: 'failed' },
+      { provider: 'second', status: 'complete' },
+    ]);
     database.close();
   });
 
@@ -382,7 +384,7 @@ describe('runReviewAgent', () => {
 
   it('releases the claim when the configured provider is unavailable', async () => {
     const { database, config, claim } = setup("console.log('unused')");
-    config.agents.codeReview = { missing: { enabled: true, model: '', effort: '' } };
+    config.agents.codeReview = [{ id: 'missing', provider: 'missing', model: '', effort: '', priority: 0 }];
     config.agents.providers = {};
     await expect(runReviewAgent(database, config, claim, undefined, dependencies))
       .rejects.toThrow('is not configured');

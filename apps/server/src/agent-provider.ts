@@ -28,6 +28,29 @@ export function agentProviderSupportsWorkspaceWrite(command: string): boolean {
   return family === 'codex' || family === 'cursor';
 }
 
+const environmentReference = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
+
+export function agentProviderEnvironment(
+  provider: AgentProviderConfig,
+  base: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const environment = { ...base };
+  for (const name of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']) {
+    delete environment[name];
+  }
+  for (const [name, configured] of Object.entries(provider.env || {})) {
+    const reference = configured.match(environmentReference)?.[1];
+    const value = reference ? base[reference] : configured;
+    if (value === undefined) delete environment[name];
+    else environment[name] = value;
+  }
+  if (environment.CLAUDE_CODE_OAUTH_TOKEN) {
+    if (!Object.hasOwn(provider.env || {}, 'ANTHROPIC_AUTH_TOKEN')) delete environment.ANTHROPIC_AUTH_TOKEN;
+    if (!Object.hasOwn(provider.env || {}, 'ANTHROPIC_API_KEY')) delete environment.ANTHROPIC_API_KEY;
+  }
+  return environment;
+}
+
 function withoutOption(args: string[], names: string[]): string[] {
   const filtered: string[] = [];
   for (let index = 0; index < args.length; index += 1) {

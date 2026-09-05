@@ -200,14 +200,18 @@ Agent commands are arrays, not shell strings. Barbarian launches them without a 
 ```yaml
 agents:
   codeReview:
-    codex:
-      enabled: true
+    - id: codex-default
+      provider: codex
       model: ""
       effort: ""
-    claude:
-      enabled: true
-      model: ""
-      effort: ""
+      priority: 100
+    - id: claude-second-account
+      provider: claude-secondary
+      model: opus
+      effort: high
+      priority: 80
+  reviewRouting: round_robin # random, round_robin, or priority
+  usageHeadroomPercent: 20
   chat:
     provider: claude
     model: ""
@@ -224,14 +228,23 @@ agents:
     claude:
       command: claude
       args: [-p]
+    claude-secondary:
+      command: claude
+      args: [-p]
+      env:
+        CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_SECONDARY_OAUTH_TOKEN}
     cursor:
       command: cursor-agent
       args: [-p, --mode, ask, --output-format, text]
 ```
 
-Enable one or more providers for code review, with an independent model and effort for each, then choose a single provider, model, and effort for chat. Each enabled code review provider runs independently and appears separately in Active AI Agents; Barbarian combines their findings into one deduplicated GitHub review. Chat selection applies to PR, issue, and editor conversations. Effort is available for Codex and Claude; Cursor model IDs already encode their effort level. Detected model lists come from the installed CLIs, and blank values retain each CLI’s defaults. Provider commands and their base arguments remain editable only in YAML.
+Add zero or more code review rows in Settings, with an independent provider, model, effort, and priority. One available row handles each review. Random and round-robin routing spread work across the pool; priority routing chooses the highest number first. Before every selection and failover, providers with known usage above `100 - usageHeadroomPercent` are removed. Codex and token-authenticated Claude providers have built-in usage checks. Other CLIs remain eligible when their usage is unknown; provider definitions can supply `usageCommand: [command, arg]`, whose stdout must be a percentage or `{"usedPercent": 42}`.
 
-Provider API keys are optional because Barbarian launches local CLI programs. A CLI authenticated through its own login flow—such as `codex login` using ChatGPT—does not need an API key in `.env`. Put a provider key there only when that CLI is configured to use one. Barbarian inherits the environment but never returns secrets from its settings API.
+If a review agent fails, Barbarian refreshes the current configuration and usage data, then tries the next eligible row. A forced choice from the Agent review dropdown first selects that exact row and limits failover to rows from the same provider family with the same model and effort. This lets one Claude account fail over to another without silently changing models. Agent chat remains a separate single provider/model/effort selection.
+
+For multiple Claude subscription accounts, run `claude setup-token` while signed in to each account, put each token under a unique name in Barbarian’s private `.env`, and define one named provider instance per token as shown above. `${CLAUDE_SECONDARY_OAUTH_TOKEN}` is resolved from `.env` only when that provider launches; the token is not returned by the settings API or stored in agent-run commands. `CLAUDE_CONFIG_DIR` can also isolate file-backed Claude profiles on Linux and Windows, but macOS stores interactive credentials in Keychain, so per-provider OAuth tokens are the reliable unattended option there.
+
+Provider API keys are optional because Barbarian launches local CLI programs. A CLI authenticated through its own login flow—such as `codex login` using ChatGPT—does not need an API key in `.env`. Put a provider key or OAuth token there only when that provider instance is configured to use one. Barbarian inherits the environment but never returns secrets from its settings API.
 
 Automatic review is off by default for existing installations so an upgrade cannot begin spending agent usage unexpectedly. Set `agents.autoReview: true` to enable it. Barbarian runs agents only while an eligible event is being handled; a healthy idle system can therefore show zero running agents even though monitoring remains active.
 

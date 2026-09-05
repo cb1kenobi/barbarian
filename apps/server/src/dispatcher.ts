@@ -66,7 +66,7 @@ export class ReviewDispatcher {
     this.runnerSchedulesAgents = !runner;
     this.runner = runner || ((database, current, claim, signal) => runReviewAgent(
       database, current, claim, signal,
-      { schedule: (task, key) => this.runtime.run(task, key) },
+      { schedule: (task, key) => this.runtime.run(task, key), currentConfig: this.configSource },
     ));
   }
 
@@ -119,9 +119,11 @@ export class ReviewDispatcher {
     }
   }
 
-  requestManual(reviewId: string, provider?: string): boolean {
+  requestManual(reviewId: string, agentId?: string): boolean {
     const config = this.configSource();
-    if (provider && !config.agents.providers[provider]) throw new Error(`Agent provider "${provider}" is not configured`);
+    if (agentId && !config.agents.codeReview.some((agent) => agent.id === agentId)) {
+      throw new Error(`Code review agent "${agentId}" is not configured`);
+    }
     const now = new Date().toISOString();
     const result = this.database.connection.prepare(`
       UPDATE review_queue SET
@@ -129,7 +131,7 @@ export class ReviewDispatcher {
         manual_provider=CASE WHEN claim_owner IS NULL THEN ? ELSE manual_provider END,
         review_paused=0, status=CASE WHEN claim_owner IS NULL THEN 'unreviewed' ELSE status END, updated_at=?
       WHERE id=? AND remote_state='OPEN' AND is_draft=0
-    `).run(now, provider || null, now, reviewId);
+    `).run(now, agentId || null, now, reviewId);
     if (result.changes) void this.pump();
     return Boolean(result.changes);
   }
@@ -245,6 +247,7 @@ export class ReviewDispatcher {
   }
 
   private claimNext(config: BarbarianConfig): ReviewClaim | null {
+    if (config.agents.codeReview.length === 0) return null;
     const now = new Date().toISOString();
     const reviewer = authenticatedGithubLogin(
       this.database,
@@ -293,7 +296,7 @@ export class ReviewDispatcher {
           headSha: row.head_sha,
           discussionWatermark: row.discussion_watermark,
           trigger,
-          ...(row.manual_provider ? { provider: row.manual_provider } : {}),
+          ...(row.manual_provider ? { agentId: row.manual_provider } : {}),
           attemptCount,
         };
       }

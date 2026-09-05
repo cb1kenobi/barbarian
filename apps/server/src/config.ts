@@ -35,13 +35,19 @@ const agentSelectionSchema = z.object({
   effort: z.union([agentEffortSchema, z.literal('')]).default(''),
 }).strict();
 
-const codeReviewAgentSchema = agentSelectionSchema.omit({ provider: true }).extend({
-  enabled: z.boolean().default(false),
+const codeReviewAgentSchema = agentSelectionSchema.extend({
+  id: z.string().min(1).max(100).regex(/^[A-Za-z0-9._-]+$/),
+  priority: z.number().int().min(-1000).max(1000).default(0),
 }).strict();
 
 const agentsSchema = z.object({
-  codeReview: z.record(z.string(), codeReviewAgentSchema),
+  codeReview: z.array(codeReviewAgentSchema).refine(
+    (agents) => new Set(agents.map((agent) => agent.id)).size === agents.length,
+    'Code review agent IDs must be unique',
+  ).default([]),
   chat: agentSelectionSchema,
+  reviewRouting: z.enum(['random', 'round_robin', 'priority']).default('round_robin'),
+  usageHeadroomPercent: z.number().int().min(0).max(100).default(20),
   autoReview: z.boolean().default(false),
   maxConcurrent: z.number().int().min(1).max(8).default(2),
   maxAutomaticAttempts: z.number().int().min(1).max(10).default(3),
@@ -49,7 +55,8 @@ const agentsSchema = z.object({
   maxRunsPerPullRequestPerHour: z.number().int().min(1).max(20).default(3),
   providers: z.record(z.string(), z.object({
     command: z.string(), args: z.array(z.string()).default([]), model: z.string().optional(),
-    effort: agentEffortSchema.optional(),
+    effort: agentEffortSchema.optional(), env: z.record(z.string(), z.string()).optional(),
+    usageCommand: z.array(z.string()).min(1).optional(),
   })).default({}),
 });
 
@@ -94,13 +101,10 @@ export const configSchema = z.object({
     if (Object.keys(agents.providers).length > 0 && !agents.providers[agents.chat.provider]) {
       context.addIssue({ code: 'custom', path: ['chat', 'provider'], message: 'Agent must name a configured provider' });
     }
-    for (const provider of Object.keys(agents.codeReview)) {
-      if (!agents.providers[provider]) {
-        context.addIssue({ code: 'custom', path: ['codeReview', provider], message: 'Code review agent must name a configured provider' });
+    for (const [index, agent] of agents.codeReview.entries()) {
+      if (!agents.providers[agent.provider]) {
+        context.addIssue({ code: 'custom', path: ['codeReview', index, 'provider'], message: 'Code review agent must name a configured provider' });
       }
-    }
-    if (Object.keys(agents.providers).length > 0 && !Object.values(agents.codeReview).some((agent) => agent.enabled)) {
-      context.addIssue({ code: 'custom', path: ['codeReview'], message: 'Enable at least one code review agent' });
     }
   }),
   statusUpdate: z.object({
@@ -121,6 +125,8 @@ export const writableConfigSchema = z.object({
   agents: agentsSchema.pick({
     codeReview: true,
     chat: true,
+    reviewRouting: true,
+    usageHeadroomPercent: true,
     autoReview: true,
     maxConcurrent: true,
     maxAutomaticAttempts: true,
@@ -177,30 +183,43 @@ export function parseConfig(value: unknown): BarbarianConfig {
     ? rawAgents.codeReview as Record<string, unknown>
     : null;
   const isSingleSelection = rawCodeReview && typeof rawCodeReview.provider === 'string';
-  const codeReview = isSingleSelection || !rawCodeReview
-    ? Object.fromEntries(Object.entries(rawProviders).map(([name, provider]) => {
+  const codeReview = Array.isArray(rawAgents.codeReview)
+    ? rawAgents.codeReview
+    : isSingleSelection || !rawCodeReview
+      ? Object.entries(rawProviders).flatMap(([name, provider]) => {
       const values = provider && typeof provider === 'object' ? provider as Record<string, unknown> : {};
       const selected = isSingleSelection && rawCodeReview ? rawCodeReview : legacySelection;
-      return [name, {
-        enabled: name === selected.provider,
+      return name === selected.provider ? [{
+        id: name,
+        provider: name,
         model: name === selected.provider && typeof selected.model === 'string'
           ? selected.model
           : typeof values.model === 'string' ? values.model : '',
         effort: name === selected.provider && typeof selected.effort === 'string'
           ? selected.effort
           : typeof values.effort === 'string' ? values.effort : '',
-      }];
-    }))
-    : Object.fromEntries(Object.keys(rawProviders).map((name) => [name, {
-      enabled: false, model: '', effort: '',
-      ...(rawCodeReview[name] && typeof rawCodeReview[name] === 'object' ? rawCodeReview[name] as object : {}),
-    }]));
+        priority: 0,
+      }] : [];
+    })
+      : Object.keys(rawProviders).flatMap((name) => {
+        const value = rawCodeReview[name];
+        if (!value || typeof value !== 'object' || !(value as { enabled?: unknown }).enabled) return [];
+        const selection = value as Record<string, unknown>;
+        return [{
+          id: name, provider: name,
+          model: typeof selection.model === 'string' ? selection.model : '',
+          effort: typeof selection.effort === 'string' ? selection.effort : '',
+          priority: 0,
+        }];
+      });
   return configSchema.parse({
     ...source,
     agents: {
       ...rawAgents,
       codeReview,
       chat: rawAgents.chat || legacySelection,
+      reviewRouting: rawAgents.reviewRouting || 'round_robin',
+      usageHeadroomPercent: rawAgents.usageHeadroomPercent ?? 20,
     },
   }) as BarbarianConfig;
 }
@@ -261,6 +280,8 @@ function safeUpdate(current: BarbarianConfig, submitted: WritableConfig): Barbar
       ...current.agents,
       codeReview: submitted.agents.codeReview,
       chat: submitted.agents.chat,
+      reviewRouting: submitted.agents.reviewRouting,
+      usageHeadroomPercent: submitted.agents.usageHeadroomPercent,
       autoReview: submitted.agents.autoReview,
       maxConcurrent: submitted.agents.maxConcurrent,
       maxAutomaticAttempts: submitted.agents.maxAutomaticAttempts,
@@ -284,6 +305,8 @@ const writablePaths: Array<{ path: Array<string>; value: (config: BarbarianConfi
   { path: ['review', 'autoCleanup'], value: (config) => config.review.autoCleanup },
   { path: ['agents', 'codeReview'], value: (config) => config.agents.codeReview },
   { path: ['agents', 'chat'], value: (config) => config.agents.chat },
+  { path: ['agents', 'reviewRouting'], value: (config) => config.agents.reviewRouting },
+  { path: ['agents', 'usageHeadroomPercent'], value: (config) => config.agents.usageHeadroomPercent },
   { path: ['agents', 'autoReview'], value: (config) => config.agents.autoReview },
   { path: ['agents', 'maxConcurrent'], value: (config) => config.agents.maxConcurrent },
   { path: ['agents', 'maxAutomaticAttempts'], value: (config) => config.agents.maxAutomaticAttempts },

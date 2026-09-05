@@ -24,8 +24,9 @@ function config(maxConcurrent = 2): BarbarianConfig {
     linear: { enabled: false, command: [] },
     agents: {
       autoReview: true, maxConcurrent, maxAutomaticAttempts: 3,
-      codeReview: { fake: { enabled: true, model: '', effort: '' } },
+      codeReview: [{ id: 'fake', provider: 'fake', model: '', effort: '', priority: 0 }],
       chat: { provider: 'fake', model: '', effort: '' },
+      reviewRouting: 'round_robin', usageHeadroomPercent: 20,
       retryBaseMinutes: 1, maxRunsPerPullRequestPerHour: 3,
       providers: { fake: { command: process.execPath, args: [] } },
     },

@@ -33,8 +33,9 @@ describe('Barbarian config', () => {
       appearance: { theme: 'dark', fontSize: 'normal', weapon: 'double-axe' },
       profile: { reviewName: '' },
       agents: {
-        codeReview: { codex: { enabled: true, model: '', effort: '' } },
+        codeReview: [{ id: 'codex', provider: 'codex', model: '', effort: '', priority: 0 }],
         chat: { provider: 'codex', model: '', effort: '' },
+        reviewRouting: 'round_robin', usageHeadroomPercent: 20,
       },
     });
     const example = parse(readFileSync(path.resolve('config/barbarian.example.yaml'), 'utf8'));
@@ -57,7 +58,7 @@ describe('Barbarian config', () => {
       },
     };
     expect(parseConfig(legacy).agents).toMatchObject({
-      codeReview: { claude: { enabled: true, model: 'opus', effort: 'high' } },
+      codeReview: [{ id: 'claude', provider: 'claude', model: 'opus', effort: 'high', priority: 0 }],
       chat: { provider: 'claude', model: 'opus', effort: 'high' },
     });
   });
@@ -77,7 +78,7 @@ describe('Barbarian config', () => {
     })).toThrow();
     expect(() => parseConfig({
       ...base,
-      agents: { ...base.agents, codeReview: { missing: { enabled: true, model: '', effort: '' } } },
+      agents: { ...base.agents, codeReview: [{ id: 'missing', provider: 'missing', model: '', effort: '', priority: 0 }] },
     })).toThrow();
     expect(() => parseConfig({ ...base, server: { bindAddress: '192.168.1.20', port: 4142 } })).toThrow();
     expect(() => parseConfig({ ...base, server: { bindAddress: '127.0.0.1', port: 70000 } })).toThrow();
@@ -116,8 +117,10 @@ describe('Barbarian config', () => {
         autoCleanup: initial.review.autoCleanup,
       },
       agents: {
-        codeReview: { codex: { enabled: true, model: 'gpt-review', effort: 'high' as const } },
+        codeReview: [{ id: 'codex', provider: 'codex', model: 'gpt-review', effort: 'high' as const, priority: 0 }],
         chat: { provider: 'codex', model: 'gpt-chat', effort: 'medium' as const },
+        reviewRouting: initial.agents.reviewRouting,
+        usageHeadroomPercent: initial.agents.usageHeadroomPercent,
         autoReview: initial.agents.autoReview,
         maxConcurrent: initial.agents.maxConcurrent,
         maxAutomaticAttempts: initial.agents.maxAutomaticAttempts,
@@ -134,7 +137,7 @@ describe('Barbarian config', () => {
     await store.update(submitted, 'memory:1');
     expect(store.get().appearance).toEqual(submitted.appearance);
     expect(store.get().review.workspaceRoot).toBe(initial.review.workspaceRoot);
-    expect(store.get().agents.codeReview.codex).toEqual({ enabled: true, model: 'gpt-review', effort: 'high' });
+    expect(store.get().agents.codeReview[0]).toEqual({ id: 'codex', provider: 'codex', model: 'gpt-review', effort: 'high', priority: 0 });
     expect(store.get().agents.chat).toEqual({ provider: 'codex', model: 'gpt-chat', effort: 'medium' });
     expect(store.get().agents.providers.codex).toEqual(initial.agents.providers.codex);
     expect(Object.isFrozen(store.get().repositories)).toBe(true);
@@ -175,8 +178,10 @@ describe('Barbarian config', () => {
         autoCleanup: initial.review.autoCleanup,
       },
       agents: {
-        codeReview: { codex: { enabled: true, model: 'gpt-review', effort: 'high' as const } },
+        codeReview: [{ id: 'codex', provider: 'codex', model: 'gpt-review', effort: 'high' as const, priority: 0 }],
         chat: { provider: 'codex', model: 'gpt-chat', effort: 'medium' as const },
+        reviewRouting: initial.agents.reviewRouting,
+        usageHeadroomPercent: initial.agents.usageHeadroomPercent,
         autoReview: initial.agents.autoReview,
         maxConcurrent: initial.agents.maxConcurrent,
         maxAutomaticAttempts: initial.agents.maxAutomaticAttempts,

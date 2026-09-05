@@ -50,8 +50,9 @@ describe('local branch agent review', () => {
       linear: { enabled: false, command: [] },
       agents: {
         autoReview: false, maxConcurrent: 1, maxAutomaticAttempts: 1,
-        codeReview: { fake: { enabled: true, model: '', effort: '' } },
+        codeReview: [{ id: 'fake', provider: 'fake', model: '', effort: '', priority: 0 }],
         chat: { provider: 'fake', model: '', effort: '' },
+        reviewRouting: 'round_robin', usageHeadroomPercent: 20,
         retryBaseMinutes: 1, maxRunsPerPullRequestPerHour: 1,
         providers: { fake: { command: process.execPath, args: ['-e', `let input='';process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{if(input.includes('base-only.ts'))process.exit(2);console.log(${JSON.stringify(output)})})`] } },
       },

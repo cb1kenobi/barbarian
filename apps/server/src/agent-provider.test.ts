@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  agentInvocationArgs, agentProviderCapabilities, agentProviderSupportsWorkspaceWrite,
+  agentInvocationArgs, agentProviderCapabilities, agentProviderEnvironment,
+  agentProviderSupportsWorkspaceWrite,
 } from './agent-provider.js';
 
 describe('agent provider options', () => {
@@ -65,5 +66,13 @@ describe('agent provider options', () => {
     expect(agentProviderSupportsWorkspaceWrite('cursor-agent')).toBe(true);
     expect(agentProviderSupportsWorkspaceWrite('claude')).toBe(false);
     expect(agentProviderSupportsWorkspaceWrite('custom-reviewer')).toBe(false);
+  });
+
+  it('resolves per-provider secrets and lets Claude OAuth override inherited API authentication', () => {
+    expect(agentProviderEnvironment({
+      command: 'claude', args: ['-p'], env: { CLAUDE_CODE_OAUTH_TOKEN: '${SECOND_CLAUDE_TOKEN}' },
+    }, {
+      SECOND_CLAUDE_TOKEN: 'oauth-token', ANTHROPIC_API_KEY: 'inherited-key', GH_TOKEN: 'github-token',
+    })).toEqual({ SECOND_CLAUDE_TOKEN: 'oauth-token', CLAUDE_CODE_OAUTH_TOKEN: 'oauth-token' });
   });
 });

@@ -56,6 +56,17 @@ interface ReviewTimelineEvent {
   agents: Array<{ provider: string; model: string; effort: string }>;
 }
 
+interface ReviewAgentOption {
+  id: string; provider: string; model: string; effort: string; priority: number;
+  usedPercent: number | null; available: boolean; usageError?: string;
+}
+
+interface ReviewAgentOptions {
+  algorithm: 'random' | 'round_robin' | 'priority';
+  usageHeadroomPercent: number;
+  agents: ReviewAgentOption[];
+}
+
 interface ActiveAgent {
   id: number; review_id: string | null; branch_id: string | null;
   repository: string | null; number: number | null; title: string; url: string | null;
@@ -749,9 +760,17 @@ function ReviewDrawer({ id, timezone, now, onClose, onChanged, onAgentFailed }: 
   const [error, setError] = useState('');
   const [agentWorkspace, setAgentWorkspace] = useState<ReviewAgentWorkspace | null>(null);
   const [workspaceWrite, setWorkspaceWrite] = useState(false);
+  const [reviewAgents, setReviewAgents] = useState<ReviewAgentOptions | null>(null);
   useCloseOnEscape(onClose);
   const load = useCallback(async () => { const detail = await api<{ review: Review; messages: ChatMessage[]; timeline?: ReviewTimelineEvent[]; agentWorkspace?: ReviewAgentWorkspace | null }>(`/api/reviews/${encodeURIComponent(id)}`); setReview(detail.review); setMessages(detail.messages); setTimeline(detail.timeline || []); setAgentWorkspace(detail.agentWorkspace || null); }, [id]);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const controller = new AbortController();
+    void api<ReviewAgentOptions>('/api/agents/review-options', { signal: controller.signal })
+      .then(setReviewAgents)
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [id]);
   useEffect(() => { setWorkspaceWrite(false); }, [id]);
   const action = async (name: string, operation: () => Promise<unknown>) => { setBusy(name); setError(''); try { await operation(); await load(); await onChanged(); return true; } catch (caught) { setError(caught instanceof Error ? caught.message : String(caught)); return false; } finally { setBusy(''); } };
   const send = async (event: FormEvent) => { event.preventDefault(); if (busy || !message.trim()) return; const text = message; setMessage(''); const sent = await action('chat', () => api(`/api/reviews/${encodeURIComponent(id)}/chat`, { method: 'POST', body: JSON.stringify({ message: text, workspaceWrite }) })); if (!sent) setMessage((current) => restoreFailedChatMessage(text, current)); };
@@ -764,7 +783,7 @@ function ReviewDrawer({ id, timezone, now, onClose, onChanged, onAgentFailed }: 
   return <div className="drawer-backdrop" onMouseDown={onClose}><aside className="drawer" onMouseDown={(event) => event.stopPropagation()}><button className="drawer-close" onClick={onClose}>×</button>
     {!review ? <p>Loading review…</p> : <><div className="drawer-details"><div className="drawer-review-heading"><span className="section-label">{review.repository} · #{review.number} · BY {review.author.startsWith('@') ? review.author : `@${review.author}`}</span><div className="drawer-status"><ReviewStatusBadge status={reviewDisplayStatus(review)} onAgentFailed={onAgentFailed} />{review.pending_reason && <span>Queued: {review.pending_reason.replaceAll('_', ' ')}</span>}</div></div><h2>{review.title}</h2><p className="plain-summary"><InlineCode text={review.simple_summary} /></p><FixedIssues review={review} />
       <div className="drawer-review-metadata"><ReviewMetadata review={review} timezone={timezone} now={now} /></div>
-      <div className="drawer-actions"><button disabled={!!busy || review.is_draft} onClick={() => void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: '{}' }))}>{review.is_draft ? 'Draft — no review' : busy === 'review' ? 'Starting…' : '▶ Agent review'}</button><button disabled={!!busy} onClick={() => void action('workspace', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'POST', body: '{}' }))}>{busy === 'workspace' ? 'Cloning & building…' : review.workspace_path ? 'Rebuild workspace' : 'Prepare locally'}</button>{review.workspace_path && <button disabled={!!busy} onClick={() => void action('cleanup', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'DELETE' }))}>Clean up</button>}<a href={review.url} target="_blank">Open GitHub ↗</a></div>
+      <div className="drawer-actions"><div className="review-combo"><button disabled={!!busy || review.is_draft || reviewAgents?.agents.length === 0} onClick={() => void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: '{}' }))}>{review.is_draft ? 'Draft — no review' : busy === 'review' ? 'Starting…' : '▶ Agent review'}</button><details><summary aria-label="Choose review agent">▾</summary><div className="review-agent-menu"><button type="button" disabled={!!busy || review.is_draft || reviewAgents?.agents.length === 0} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: '{}' })); }}><strong>Automatic</strong><span>{reviewAgents?.algorithm.replace('_', ' ') || 'configured routing'}</span></button>{reviewAgents?.agents.map((agent) => <button type="button" key={agent.id} disabled={!!busy || review.is_draft || !agent.available} title={agent.usageError} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: JSON.stringify({ agentId: agent.id }) })); }}><strong>{agent.provider}</strong><span>{agent.model || 'CLI default'} · {agent.effort || 'default effort'}{agent.usedPercent === null ? '' : ` · ${agent.usedPercent}% used`}</span></button>)}{reviewAgents && !reviewAgents.agents.length && <p>No review agents configured.</p>}</div></details></div><button disabled={!!busy} onClick={() => void action('workspace', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'POST', body: '{}' }))}>{busy === 'workspace' ? 'Cloning & building…' : review.workspace_path ? 'Rebuild workspace' : 'Prepare locally'}</button>{review.workspace_path && <button disabled={!!busy} onClick={() => void action('cleanup', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'DELETE' }))}>Clean up</button>}<a href={review.url} target="_blank">Open GitHub ↗</a></div>
       {review.workspace_path && <code className="workspace-path">{review.workspace_path}</code>}{error && <p className="inline-error">{error}</p>}</div>
       <div className="drawer-tabs" role="tablist" aria-label="Pull request details">
         <button type="button" role="tab" aria-selected={tab === 'review-room'} className={tab === 'review-room' ? 'active' : ''} onClick={() => setTab('review-room')}>Review Room</button>

@@ -296,6 +296,14 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
 .status-modal footer button { padding: 9px 12px; border: 1px solid var(--accent-border); background: var(--acid); color: var(--accent-ink); font-size: .75rem; font-weight: 700; text-decoration: none; cursor: pointer; }
 .status-modal footer .muted-button { border-color: var(--line-strong); background: transparent; color: var(--muted-strong); }
 .drawer-actions button:disabled { opacity: .5; cursor: wait; }
+.review-combo { position: relative; display: flex; }
+.review-combo > button { border-right: 0; }
+.review-combo > details > summary { display: grid; place-items: center; height: 100%; min-width: 30px; border: 1px solid var(--line-strong); color: var(--muted-strong); cursor: pointer; list-style: none; }
+.review-combo > details > summary::-webkit-details-marker { display: none; }
+.review-agent-menu { position: absolute; z-index: 20; top: calc(100% + 5px); left: 0; display: grid; width: min(360px, calc(100vw - 48px)); padding: 5px; border: 1px solid var(--line-strong); background: var(--modal); box-shadow: 0 14px 35px #0008; }
+.drawer-actions .review-agent-menu button { display: grid; gap: 3px; padding: 9px 10px; border: 0; text-align: left; }
+.review-agent-menu button strong { color: var(--ink); }
+.review-agent-menu button span, .review-agent-menu p { margin: 0; color: var(--muted); font-size: .6875rem; font-weight: 400; text-transform: capitalize; }
 .workspace-path { display: block; overflow-x: auto; margin-top: 11px; padding: 9px; background: #0c0d0b; color: #7d8276; font-size: .6875rem; }
 .inline-error { color: #ff9473; font-size: .8125rem; }
 .agent-run-drawer { width: min(760px, 96vw); }
@@ -487,9 +495,10 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
 .add-button:hover { border-color: var(--acid); color: var(--acid); }
 .add-button.compact { margin: 0; padding: 5px 8px; }
 .agent-picker { align-items: start; }
-.code-review-agent-row { display: grid; grid-template-columns: 150px minmax(0, 1.4fr) minmax(145px, .6fr); align-items: start; gap: 14px; }
-.code-review-agent-row .agent-enable { padding-top: 25px; color: var(--ink); font-weight: 700; text-transform: capitalize; }
-.code-review-agent-row:not(.enabled) { opacity: .72; }
+.code-review-agent-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 130px; align-items: end; gap: 14px; padding-right: 48px; }
+.code-review-agent-row .remove-button { position: absolute; top: 8px; right: 8px; width: 30px; height: 30px; border: 0; background: transparent; color: var(--muted); font-size: 1.15rem; cursor: pointer; }
+.code-review-agent-row .remove-button:hover { color: #ff776d; }
+.settings-empty { margin: 4px 0 0; color: var(--muted-soft); font-size: .75rem; }
 .model-discovery-loading { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 2px; background: var(--panel-hover); color: var(--muted); font-size: .75rem; line-height: 1.4; }
 .model-discovery-loading > span { width: 12px; height: 12px; flex: none; border: 2px solid var(--line-strong); border-top-color: var(--acid); border-radius: 50%; animation: model-discovery-spin .8s linear infinite; }
 @keyframes model-discovery-spin { to { transform: rotate(360deg); } }
@@ -544,8 +553,8 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
   .review-grid { grid-template-columns: 1fr; }
   .status-guide { grid-template-columns: 1fr; width: min(440px, calc(100vw - 100px)); max-height: 70vh; overflow-y: auto; }
   .settings-grid.three, .settings-grid.repo-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .code-review-agent-row { grid-template-columns: 120px minmax(0, 1fr); }
-  .code-review-agent-row > label:last-child { grid-column: 2; }
+  .code-review-agent-row { grid-template-columns: 1fr; }
+  .code-review-agent-row > label:last-child { grid-column: 1; }
   .settings-grid.repo-fields { grid-template-columns: 82px minmax(0, 1fr); }
   .settings-grid.repo-fields .wide { grid-column: 1 / -1; }
   .repo-watch-fields { grid-column: 1 / -1; grid-template-columns: repeat(2, max-content); padding-top: 0; }
@@ -582,7 +591,6 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
   .settings-header, .settings-body, .settings-footer { padding-left: 18px; padding-right: 18px; }
   .settings-grid.two, .settings-grid.three, .settings-grid.four, .settings-grid.repo-fields, .choice-groups { grid-template-columns: 1fr; }
   .code-review-agent-row { grid-template-columns: 1fr; }
-  .code-review-agent-row .agent-enable { padding-top: 0; }
   .code-review-agent-row > label:last-child { grid-column: 1; }
   .weapon-choice-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .settings-grid.repo-fields .repo-priority { width: 82px; }

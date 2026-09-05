@@ -1,9 +1,14 @@
-import type { BarbarianConfig } from './types.js';
+import type { AgentSelectionConfig, BarbarianConfig } from './types.js';
 import { configuredAgentForTask } from './agent-config.js';
 
-export function configuredAgentModel(config: BarbarianConfig, providerName: string, task = 'chat'): string {
+export function configuredAgentModel(
+  config: BarbarianConfig,
+  providerName: string,
+  task = 'chat',
+  selection?: AgentSelectionConfig,
+): string {
   let provider;
-  try { provider = configuredAgentForTask(config, task, providerName).provider; } catch { return 'CLI default'; }
+  try { provider = configuredAgentForTask(config, task, providerName, selection).provider; } catch { return 'CLI default'; }
   if (provider.model?.trim()) return provider.model.trim();
   for (let index = 0; index < provider.args.length; index += 1) {
     const argument = provider.args[index] || '';
@@ -17,6 +22,11 @@ export function configuredAgentModel(config: BarbarianConfig, providerName: stri
   return 'CLI default';
 }
 
-export function configuredAgentEffort(config: BarbarianConfig, providerName: string, task = 'chat'): string {
-  try { return configuredAgentForTask(config, task, providerName).provider.effort || 'CLI default'; } catch { return 'CLI default'; }
+export function configuredAgentEffort(
+  config: BarbarianConfig,
+  providerName: string,
+  task = 'chat',
+  selection?: AgentSelectionConfig,
+): string {
+  try { return configuredAgentForTask(config, task, providerName, selection).provider.effort || 'CLI default'; } catch { return 'CLI default'; }
 }

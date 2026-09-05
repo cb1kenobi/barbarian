@@ -111,9 +111,12 @@ export function applySetupAnswers(current: BarbarianConfig, answers: SetupAnswer
     },
     agents: {
       ...current.agents,
-      codeReview: Object.fromEntries(Object.entries(current.agents.codeReview).map(([provider, selection]) => [
-        provider, { ...selection, enabled: provider === answers.defaultAgent },
-      ])),
+      codeReview: [{
+        ...(current.agents.codeReview.find((agent) => agent.provider === answers.defaultAgent) || {
+          id: answers.defaultAgent, model: '', effort: '', priority: 0,
+        }),
+        provider: answers.defaultAgent,
+      }],
       chat: { ...current.agents.chat, provider: answers.defaultAgent },
     },
   });

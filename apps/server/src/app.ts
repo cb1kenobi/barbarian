@@ -30,6 +30,7 @@ import {
 import { discoverAgentModels, type AgentModelOption } from './agent-models.js';
 import { openAuthoredPullRequests } from './authored-pull-requests.js';
 import { authenticatedGithubLogin } from './github-identity.js';
+import { reviewAgentAvailability } from './review-router.js';
 import {
   resolveLocalBranchWorkspace, resolveReviewWorkspace, type ReviewWorkspace,
 } from './review-workspace.js';
@@ -160,6 +161,8 @@ function settingsView(config: BarbarianConfig, activeServer: BarbarianConfig['se
       agents: {
         codeReview: config.agents.codeReview,
         chat: config.agents.chat,
+        reviewRouting: config.agents.reviewRouting,
+        usageHeadroomPercent: config.agents.usageHeadroomPercent,
         autoReview: config.agents.autoReview,
         maxConcurrent: config.agents.maxConcurrent,
         maxAutomaticAttempts: config.agents.maxAutomaticAttempts,
@@ -963,6 +966,11 @@ export async function createApp(
       publishDashboardUpdated(id);
       return reply.code(202).send({ accepted: true, id, reviewStarted: false });
     }
+    if (!config.agents.codeReview.length) {
+      publishReviewUpdated(id);
+      publishDashboardUpdated(id);
+      return reply.code(202).send({ accepted: true, id, reviewStarted: false });
+    }
     if (!dispatcher.requestManual(id)) return reply.code(500).send({ error: 'Pull request was added, but its review could not be started' });
     publishReviewUpdated(id);
     publishDashboardUpdated(id);
@@ -971,12 +979,23 @@ export async function createApp(
 
   app.post('/api/reviews/:id/run-review', async (request, reply) => {
     const id = decodeURIComponent((request.params as { id: string }).id);
-    const body = z.object({ provider: z.string().optional() }).parse(request.body || {});
+    const body = z.object({ agentId: z.string().optional(), provider: z.string().optional() }).parse(request.body || {});
+    const config = configStore.get();
+    if (!config.agents.codeReview.length) return reply.code(409).send({ error: 'No code review agents are configured' });
+    const agentId = body.agentId || (body.provider
+      ? config.agents.codeReview.find((agent) => agent.provider === body.provider)?.id
+      : undefined);
+    if ((body.agentId || body.provider) && !agentId) {
+      return reply.code(409).send({ error: 'Requested code review agent is not configured' });
+    }
+    if (agentId && !config.agents.codeReview.some((agent) => agent.id === agentId)) {
+      return reply.code(409).send({ error: 'Requested code review agent is not configured' });
+    }
     const review = database.connection.prepare('SELECT id, is_draft FROM review_queue WHERE id=?').get(id) as
       { id: string; is_draft: number } | undefined;
     if (!review) return reply.code(404).send({ error: 'Review not found' });
     if (review.is_draft) return reply.code(409).send({ error: 'Draft pull requests cannot be reviewed' });
-    if (!dispatcher.requestManual(id, body.provider)) return reply.code(404).send({ error: 'Review not found' });
+    if (!dispatcher.requestManual(id, agentId)) return reply.code(404).send({ error: 'Review not found' });
     return reply.code(202).send({ accepted: true });
   });
 
@@ -1236,7 +1255,18 @@ export async function createApp(
     const id = decodeURIComponent((request.params as { id: string }).id);
     const branch = database.connection.prepare('SELECT * FROM local_branches WHERE id=?').get(id) as unknown as LocalBranchRow | undefined;
     if (!branch) return reply.code(404).send({ error: 'Local branch is not tracked' });
-    const body = z.object({ provider: z.string().optional() }).parse(request.body || {});
+    const body = z.object({ agentId: z.string().optional(), provider: z.string().optional() }).parse(request.body || {});
+    const reviewConfig = configStore.get();
+    if (!reviewConfig.agents.codeReview.length) return reply.code(409).send({ error: 'No code review agents are configured' });
+    const agentId = body.agentId || (body.provider
+      ? reviewConfig.agents.codeReview.find((agent) => agent.provider === body.provider)?.id
+      : undefined);
+    if ((body.agentId || body.provider) && !agentId) {
+      return reply.code(409).send({ error: 'Requested code review agent is not configured' });
+    }
+    if (agentId && !reviewConfig.agents.codeReview.some((agent) => agent.id === agentId)) {
+      return reply.code(409).send({ error: 'Requested code review agent is not configured' });
+    }
     if (branch.status === 'agent_working') return reply.code(409).send({ error: 'An agent review is already running' });
     if (activeWritableBranches.has(id)) {
       return reply.code(409).send({ error: 'An agent is already working in this local branch' });
@@ -1245,7 +1275,7 @@ export async function createApp(
       const linkedReview = database.connection.prepare(`
         SELECT is_draft FROM review_queue WHERE id=? AND remote_state='OPEN'
       `).get(branch.review_id) as { is_draft: number } | undefined;
-      if (!linkedReview?.is_draft && dispatcher.requestManual(branch.review_id, body.provider)) {
+      if (!linkedReview?.is_draft && dispatcher.requestManual(branch.review_id, agentId)) {
         return reply.code(202).send({ accepted: true, target: 'pull_request' });
       }
     }
@@ -1254,7 +1284,9 @@ export async function createApp(
     `).run(new Date().toISOString(), id);
     activeWritableBranches.add(id);
     void runtime.run(
-      (signal) => runLocalBranchReview(database, configStore.get(), id, signal),
+      (signal) => runLocalBranchReview(
+        database, reviewConfig, id, signal, agentId, { currentConfig: () => configStore.get() },
+      ),
       id,
     ).catch((error) => {
       database.connection.prepare(`
@@ -1390,6 +1422,15 @@ export async function createApp(
       ...await discoverAgentModels(provider),
     }))),
   }));
+
+  app.get('/api/agents/review-options', async () => {
+    const config = configStore.get();
+    return {
+      algorithm: config.agents.reviewRouting,
+      usageHeadroomPercent: config.agents.usageHeadroomPercent,
+      agents: await reviewAgentAvailability(config),
+    };
+  });
 
   app.put('/api/settings', async (request, reply) => {
     try {

@@ -20,7 +20,8 @@ const config = {
   review: { requestedReviewer: '', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
   linear: { enabled: false, command: [] },
   agents: {
-    codeReview: {}, chat: { provider: 'codex', model: '', effort: '' }, autoReview: false,
+    codeReview: [], chat: { provider: 'codex', model: '', effort: '' }, autoReview: false,
+    reviewRouting: 'round_robin', usageHeadroomPercent: 20,
     maxConcurrent: 1, maxAutomaticAttempts: 1, retryBaseMinutes: 1,
     maxRunsPerPullRequestPerHour: 1, providers: {},
   },

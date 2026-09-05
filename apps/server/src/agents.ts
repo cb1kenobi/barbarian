@@ -3,11 +3,12 @@ import type { BarbarianConfig } from './types.js';
 import { ProcessExecutionError, resolveExecutable, runProcess } from './process.js';
 import { recordActivity } from './activity.js';
 import { refreshReviewContext } from './review-context.js';
-import { agentInvocationArgs } from './agent-provider.js';
+import { agentInvocationArgs, agentProviderEnvironment } from './agent-provider.js';
 import { completedReviewStatus } from './review-state.js';
 import { configuredAgentForTask } from './agent-config.js';
-import { enabledCodeReviewProviders } from './agent-config.js';
 import { configuredAgentEffort, configuredAgentModel } from './agent-display.js';
+import { chooseReviewAgent, criteriaForReviewAgent, type UsageReader } from './review-router.js';
+import type { AgentSelectionConfig } from './types.js';
 import {
   fetchPullRequestReviewBundle,
   postPullRequestReview,
@@ -35,16 +36,8 @@ export interface ReviewClaim {
   headSha: string;
   discussionWatermark: string;
   trigger: 'new_pr' | 'new_commits' | 'feedback' | 'manual';
-  provider?: string;
+  agentId?: string;
   attemptCount: number;
-}
-
-function agentEnvironment(): NodeJS.ProcessEnv {
-  const environment = { ...process.env };
-  for (const name of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']) {
-    delete environment[name];
-  }
-  return environment;
 }
 
 function commandText(command: string, args: string[]): string {
@@ -76,6 +69,7 @@ interface AgentExecutionOptions {
   runId?: number;
   workspaceWrite?: boolean;
   untrustedSelection?: AgentSelection;
+  agentSelection?: AgentSelectionConfig;
 }
 
 function createAgentRun(
@@ -88,7 +82,7 @@ function createAgentRun(
   claim?: ReviewClaim,
   options: AgentExecutionOptions = {},
 ): number {
-  const { name, provider } = configuredAgentForTask(config, task, requestedProvider);
+  const { name, provider } = configuredAgentForTask(config, task, requestedProvider, options.agentSelection);
   const args = agentInvocationArgs(provider, options.workspaceWrite ? { workspaceWrite: true } : {});
   const inserted = database.connection.prepare(`
     INSERT INTO agent_runs(
@@ -99,7 +93,8 @@ function createAgentRun(
     reviewId, options.branchId || null, options.workItemId || null, name, task, new Date().toISOString(),
     commandText(provider.command, args), prompt, options.runtimeKey || reviewId || options.branchId || null,
     claim?.owner || null, claim?.headSha || null, claim?.discussionWatermark || null,
-    configuredAgentModel(config, name, task), configuredAgentEffort(config, name, task),
+    configuredAgentModel(config, name, task, options.agentSelection),
+    configuredAgentEffort(config, name, task, options.agentSelection),
   );
   return Number(inserted.lastInsertRowid);
 }
@@ -115,7 +110,7 @@ export async function executeAgent(
   claim?: ReviewClaim,
   options: AgentExecutionOptions = {},
 ): Promise<string> {
-  const { provider } = configuredAgentForTask(config, task, requestedProvider);
+  const { provider } = configuredAgentForTask(config, task, requestedProvider, options.agentSelection);
   const args = agentInvocationArgs(provider, options.workspaceWrite ? { workspaceWrite: true } : {});
   const runId = options.runId || createAgentRun(
     database, config, reviewId, task, prompt, requestedProvider, claim, options,
@@ -134,7 +129,7 @@ export async function executeAgent(
       input: prompt,
       timeoutMs: 30 * 60_000,
       maxOutputCharacters: 512_000,
-      env: agentEnvironment(),
+      env: agentProviderEnvironment(provider),
       ...(options.cwd ? { cwd: options.cwd } : {}),
       ...(signal ? { signal } : {}),
     });
@@ -380,6 +375,8 @@ export interface ReviewAgentDependencies {
   postReview?: typeof postPullRequestReview;
   refreshContext?: typeof refreshReviewContext;
   schedule?: <T>(task: (signal: AbortSignal) => Promise<T>, key: string) => Promise<T>;
+  currentConfig?: () => BarbarianConfig;
+  usageReader?: UsageReader;
 }
 
 function finishClaim(
@@ -437,26 +434,19 @@ export async function runReviewAgent(
   const fetchBundle = dependencies.fetchBundle || fetchPullRequestReviewBundle;
   const postReview = dependencies.postReview || postPullRequestReview;
   const refreshContextAfterReview = dependencies.refreshContext || refreshReviewContext;
+  const currentConfig = dependencies.currentConfig || (() => config);
   const task = `code_review:${claim.trigger}`;
-  const providers = claim.provider ? [claim.provider] : enabledCodeReviewProviders(config);
-  if (providers.length === 0) throw new Error('No code review agents are enabled');
+  const criteria = criteriaForReviewAgent(config, claim.agentId);
+  if (config.agents.codeReview.length === 0) throw new Error('No code review agents are configured');
   recordActivity(database, 'review_started', `Agent started reviewing ${review.repository}#${review.number}`, claim.reviewId, {
     trigger: claim.trigger,
     headSha: claim.headSha,
     discussionWatermark: claim.discussionWatermark,
-    providers,
+    requestedAgentId: claim.agentId || null,
   });
-  const preparedRuns = new Map<string, { id: number; runtimeKey: string }>();
+  const attempted = new Set<string>();
+  const attemptedProviders: string[] = [];
   try {
-    for (const provider of providers) {
-      const runtimeKey = `${claim.reviewId}:code-review:${provider}`;
-      const id = createAgentRun(
-        database, config, claim.reviewId, task,
-        `Preparing review context for ${review.repository}#${review.number} at ${claim.headSha}.`,
-        provider, claim, { runtimeKey },
-      );
-      preparedRuns.set(provider, { id, runtimeKey });
-    }
     const bundle = await fetchBundle(review.repository, review.number);
     if (bundle.metadata.headRefOid !== claim.headSha) {
       throw new Error('Pull request head changed before the review bundle was captured');
@@ -476,36 +466,58 @@ BARBARIAN_RESULT: {"findings":<count>,"verdict":"ready|issues","summary":"<plain
 
 REVIEW_BUNDLE_JSON:
 ${JSON.stringify(bundle)}`;
-    const outcomes = await Promise.allSettled(providers.map(async (provider) => {
-      const prepared = preparedRuns.get(provider)!;
-      const execute = (agentSignal?: AbortSignal) => executeAgent(
-        database, config, claim.reviewId, task, prompt, provider, agentSignal || signal, claim,
-        { runId: prepared.id, runtimeKey: prepared.runtimeKey },
-      );
-      const output = dependencies.schedule
-        ? await dependencies.schedule((agentSignal) => execute(agentSignal), prepared.runtimeKey)
-        : await execute();
-      const result = parseReviewResult(output);
-      validateReviewCommentLocations(bundle.diff, result.comments);
-      return { provider, result };
-    }));
-    const successful = outcomes.flatMap((outcome) => outcome.status === 'fulfilled' ? [outcome.value] : []);
-    if (successful.length !== providers.length) {
-      const failed = outcomes.flatMap((outcome, index) => outcome.status === 'rejected' ? [providers[index]!] : []);
-      const failure = outcomes.find((outcome) => outcome.status === 'rejected') as PromiseRejectedResult | undefined;
-      throw new Error(`Code review agent${failed.length === 1 ? '' : 's'} ${failed.join(', ')} failed: ${
-        failure?.reason instanceof Error ? failure.reason.message : String(failure?.reason || 'unknown error')
-      }`);
+    let successful: { provider: string; agentId: string; result: ParsedReviewResult } | null = null;
+    const failures: string[] = [];
+    while (!successful) {
+      let selected;
+      try {
+        selected = await chooseReviewAgent(database, currentConfig(), attempted, {
+          ...(criteria ? { criteria } : {}),
+          ...(attempted.size === 0 && claim.agentId ? { preferredAgentId: claim.agentId } : {}),
+          ...(dependencies.usageReader ? { usageReader: dependencies.usageReader } : {}),
+        });
+      } catch (selectionError) {
+        if (!failures.length) throw selectionError;
+        throw new Error(`${failures.join('; ')}; ${selectionError instanceof Error ? selectionError.message : String(selectionError)}`);
+      }
+      attempted.add(selected.id);
+      attemptedProviders.push(selected.provider);
+      const runtimeKey = `${claim.reviewId}:code-review:${selected.id}`;
+      const agentSelection = { provider: selected.provider, model: selected.model, effort: selected.effort };
+      let id: number | undefined;
+      try {
+        const selectedConfig = currentConfig();
+        const runId = createAgentRun(
+          database, selectedConfig, claim.reviewId, task,
+          `Preparing review context for ${review.repository}#${review.number} at ${claim.headSha}.`,
+          selected.provider, claim, { runtimeKey, agentSelection },
+        );
+        id = runId;
+        const execute = (agentSignal?: AbortSignal) => executeAgent(
+          database, selectedConfig, claim.reviewId, task, prompt, selected.provider,
+          agentSignal || signal, claim, { runId, runtimeKey, agentSelection },
+        );
+        const output = dependencies.schedule
+          ? await dependencies.schedule((agentSignal) => execute(agentSignal), runtimeKey)
+          : await execute();
+        const parsed = parseReviewResult(output);
+        validateReviewCommentLocations(bundle.diff, parsed.comments);
+        successful = { provider: selected.provider, agentId: selected.id, result: parsed };
+      } catch (agentError) {
+        if (signal?.aborted) throw agentError;
+        if (id !== undefined) {
+          database.connection.prepare(`
+            UPDATE agent_runs SET status='failed', error=? WHERE id=? AND status='complete'
+          `).run(agentError instanceof Error ? agentError.message : String(agentError), id);
+        }
+        failures.push(`${selected.provider} failed: ${agentError instanceof Error ? agentError.message : String(agentError)}`);
+      }
     }
-    const combinedComments = successful.flatMap(({ result }) => result.comments);
-    const uniqueFindings = newReviewComments({ ...bundle, inlineComments: [] }, combinedComments);
+    const uniqueFindings = newReviewComments({ ...bundle, inlineComments: [] }, successful.result.comments);
     const commentsToPublish = newReviewComments(bundle, uniqueFindings);
-    const representative = successful.reduce((selected, candidate) => (
-      candidate.result.comments.length > selected.result.comments.length ? candidate : selected
-    ));
     const result = {
       findings: uniqueFindings.length,
-      summary: representative.result.summary,
+      summary: successful.result.summary,
     };
     if (signal?.aborted) throw signal.reason || new Error('Review stopped');
     const stillClaimed = database.connection.prepare('SELECT 1 FROM review_queue WHERE id=? AND claim_owner=?')
@@ -525,9 +537,11 @@ ${JSON.stringify(bundle)}`;
       claim.reviewId,
       {
         ...result,
-        providers: successful.map(({ provider }) => provider),
+        providers: [successful.provider],
+        agentId: successful.agentId,
+        attemptedProviders,
         publishedFindings: commentsToPublish.length,
-        suppressedDuplicates: combinedComments.length - commentsToPublish.length,
+        suppressedDuplicates: successful.result.comments.length - commentsToPublish.length,
         trigger: claim.trigger,
         headSha: claim.headSha,
         discussionWatermark: claim.discussionWatermark,
@@ -538,12 +552,6 @@ ${JSON.stringify(bundle)}`;
     const message = signal?.aborted
       ? signal.reason instanceof Error ? signal.reason.message : String(signal.reason || 'Stopped by user')
       : error instanceof Error ? error.message : String(error);
-    for (const { id } of preparedRuns.values()) {
-      database.connection.prepare(`
-        UPDATE agent_runs SET status=?, finished_at=?, error=?, prompt=''
-        WHERE id=? AND status='running'
-      `).run(signal?.aborted ? 'cancelled' : 'failed', new Date().toISOString(), message, id);
-    }
     if (!signal?.aborted) failClaim(database, config, claim, error);
     throw error;
   }

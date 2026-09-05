@@ -24,6 +24,10 @@ export type BrandWeapon = 'double-axe' | 'sword' | 'crossed-swords' | 'single-ax
 export interface AgentProviderConfig {
   command: string;
   args: string[];
+  /** Environment passed only to this provider. A value like ${TOKEN_NAME} reads from Barbarian's .env. */
+  env?: Record<string, string>;
+  /** Optional command whose stdout is a percentage or {"usedPercent": number}. */
+  usageCommand?: string[];
   /** @deprecated Model and effort now belong to a task-specific agent selection. */
   model?: string;
   /** @deprecated Model and effort now belong to a task-specific agent selection. */
@@ -37,10 +41,14 @@ export interface AgentSelectionConfig {
 }
 
 export interface CodeReviewAgentConfig {
-  enabled: boolean;
+  id: string;
+  provider: string;
   model: string;
   effort: AgentEffort | '';
+  priority: number;
 }
+
+export type ReviewRoutingAlgorithm = 'random' | 'round_robin' | 'priority';
 
 export interface BarbarianConfig {
   version: number;
@@ -58,8 +66,10 @@ export interface BarbarianConfig {
   };
   linear: { enabled: boolean; command: string[] };
   agents: {
-    codeReview: Record<string, CodeReviewAgentConfig>;
+    codeReview: CodeReviewAgentConfig[];
     chat: AgentSelectionConfig;
+    reviewRouting: ReviewRoutingAlgorithm;
+    usageHeadroomPercent: number;
     autoReview: boolean;
     maxConcurrent: number;
     maxAutomaticAttempts: number;

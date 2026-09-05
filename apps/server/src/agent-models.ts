@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { AgentProviderConfig } from './types.js';
-import { agentProviderFamily } from './agent-provider.js';
+import { agentProviderEnvironment, agentProviderFamily } from './agent-provider.js';
 
 const executeFile = promisify(execFile);
 const claudeCache = new Map<string, { expiresAt: number; discovery: AgentModelDiscovery }>();
@@ -130,11 +130,12 @@ export function parseCursorModels(source: string): AgentModelDiscovery {
   };
 }
 
-async function runClaudeDiscovery(command: string): Promise<string> {
-  const { stdout } = await executeFile(command, ['-p', '--output-format=json', '/model'], {
+async function runClaudeDiscovery(provider: AgentProviderConfig): Promise<string> {
+  const { stdout } = await executeFile(provider.command, ['-p', '--output-format=json', '/model'], {
     encoding: 'utf8',
     timeout: 15_000,
     maxBuffer: 1024 * 1024,
+    env: agentProviderEnvironment(provider),
   });
   return stdout;
 }
@@ -151,14 +152,15 @@ async function runCursorDiscovery(command: string): Promise<string> {
 
 async function discoverClaudeModels(
   provider: AgentProviderConfig,
-  runner: (command: string) => Promise<string>,
+  runner: (provider: AgentProviderConfig) => Promise<string>,
   cache: boolean,
 ): Promise<AgentModelDiscovery> {
-  const cached = cache ? claudeCache.get(provider.command) : undefined;
+  const cacheKey = JSON.stringify([provider.command, provider.args, provider.env]);
+  const cached = cache ? claudeCache.get(cacheKey) : undefined;
   if (cached && cached.expiresAt > Date.now()) return cached.discovery;
   try {
-    const discovery = parseClaudeModels(await runner(provider.command));
-    if (cache) claudeCache.set(provider.command, { expiresAt: Date.now() + 5 * 60_000, discovery });
+    const discovery = parseClaudeModels(await runner(provider));
+    if (cache) claudeCache.set(cacheKey, { expiresAt: Date.now() + 5 * 60_000, discovery });
     return discovery;
   } catch (error) {
     const discovery = {
@@ -166,7 +168,7 @@ async function discoverClaudeModels(
       defaultModel: null,
       error: error instanceof Error ? error.message : String(error),
     };
-    if (cache) claudeCache.set(provider.command, { expiresAt: Date.now() + 60_000, discovery });
+    if (cache) claudeCache.set(cacheKey, { expiresAt: Date.now() + 60_000, discovery });
     return discovery;
   }
 }
@@ -197,7 +199,7 @@ export async function discoverAgentModels(
   provider: AgentProviderConfig,
   options: {
     codexHome?: string;
-    runClaude?: (command: string) => Promise<string>;
+    runClaude?: (provider: AgentProviderConfig) => Promise<string>;
     runCursor?: (command: string) => Promise<string>;
   } = {},
 ): Promise<AgentModelDiscovery> {

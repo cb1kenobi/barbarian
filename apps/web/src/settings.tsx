@@ -7,7 +7,7 @@ export type FontSize = 'small' | 'normal';
 export type AgentEffort = '' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export interface AppearanceConfig { theme: Theme; fontSize: FontSize; weapon: Weapon }
 interface AgentSelectionSettings { provider: string; model: string; effort: AgentEffort }
-interface CodeReviewAgentSettings { enabled: boolean; model: string; effort: AgentEffort }
+interface CodeReviewAgentSettings extends AgentSelectionSettings { id: string; priority: number }
 export interface RepositoryConfig {
   name: string;
   priority: number;
@@ -25,8 +25,10 @@ export interface SettingsConfig {
   repositories: RepositoryConfig[];
   review: { requestedReviewer: string; fallbackTeams: string[]; autoCleanup: boolean };
   agents: {
-    codeReview: Record<string, CodeReviewAgentSettings>;
+    codeReview: CodeReviewAgentSettings[];
     chat: AgentSelectionSettings;
+    reviewRouting: 'random' | 'round_robin' | 'priority';
+    usageHeadroomPercent: number;
     autoReview: boolean;
     maxConcurrent: number;
     maxAutomaticAttempts: number;
@@ -160,28 +162,23 @@ function AgentPicker({
 }
 
 function CodeReviewAgentRow({
-  provider, selection, modelsLoading, onChange,
+  providers, selection, modelsLoading, onChange, onRemove,
 }: {
-  provider: AdvancedSettings['providers'][number];
+  providers: AdvancedSettings['providers'];
   selection: CodeReviewAgentSettings;
   modelsLoading: boolean;
   onChange: (selection: CodeReviewAgentSettings) => void;
+  onRemove: () => void;
 }) {
-  const detectedModels = provider.models || [];
-  const modelDiscoveryLoading = modelsLoading && provider.supportsModelDiscovery && detectedModels.length === 0;
-  const selectedModelIsDetected = !selection.model || detectedModels.some((model) => model.id === selection.model);
-  const defaultName = detectedModels.find((model) => model.id === provider.defaultModel)?.name || provider.defaultModel;
-  return <article className={`settings-card code-review-agent-row${selection.enabled ? ' enabled' : ''}`}>
-    <label className="check-field agent-enable"><input type="checkbox" checked={selection.enabled} onChange={(event) => onChange({ ...selection, enabled: event.target.checked })} /><span>{provider.name}</span></label>
-    <label><span>Model <small>{detectedModels.length ? `${detectedModels.length} detected` : modelDiscoveryLoading ? 'loading' : provider.error ? 'discovery failed' : provider.supportsModel ? defaultName ? `default: ${defaultName}` : 'CLI default' : 'not supported'}</small></span>{modelDiscoveryLoading && selection.enabled
-      ? <div className="model-discovery-loading" role="status"><span aria-hidden="true" />Detecting models…</div>
-      : detectedModels.length ? <select disabled={!selection.enabled} value={selection.model} onChange={(event) => onChange({ ...selection, model: event.target.value })}>
-        <option value="">{defaultName ? `CLI default — ${defaultName}` : 'CLI default'}</option>
-        {!selectedModelIsDetected && <option value={selection.model}>{selection.model}</option>}
-        {detectedModels.map((model) => <option key={model.id} value={model.id}>{model.name}{model.isDefault ? ' — default' : ''}</option>)}
-      </select>
-      : <input disabled={!selection.enabled || !provider.supportsModel} placeholder="CLI default" value={selection.model} onChange={(event) => onChange({ ...selection, model: event.target.value })} />}</label>
-    <label><span>Effort <small>{provider.supportsEffort ? 'reasoning depth' : 'not supported'}</small></span><select disabled={!selection.enabled || !provider.supportsEffort} value={provider.supportsEffort ? selection.effort : ''} onChange={(event) => onChange({ ...selection, effort: event.target.value as AgentEffort })}>{effortLevels.map((effort) => <option key={effort || 'default'} value={effort}>{effort || 'CLI default'}</option>)}</select></label>
+  return <article className="settings-card code-review-agent-row enabled">
+    <button type="button" className="remove-button" onClick={onRemove} aria-label={`Remove ${selection.provider} review agent`}>×</button>
+    <AgentPicker
+      selection={selection}
+      providers={providers}
+      modelsLoading={modelsLoading}
+      onChange={(next) => onChange({ ...selection, ...next })}
+    />
+    <label className="review-agent-priority"><span>Priority <small>higher runs first</small></span><input type="number" min="-1000" max="1000" value={selection.priority} onChange={(event) => onChange({ ...selection, priority: Number(event.target.value) })} /></label>
   </article>;
 }
 
@@ -265,6 +262,27 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
       id: nextId(), name: '', priority: 0, watchIssues: true, watchPullRequests: true,
       reviewSkill: 'cb1-code-review', labelsText: '',
     }],
+  }));
+  const updateReviewAgent = (index: number, selection: CodeReviewAgentSettings) => setDraft((current) => current && ({
+    ...current,
+    agents: {
+      ...current.agents,
+      codeReview: current.agents.codeReview.map((agent, candidate) => candidate === index ? selection : agent),
+    },
+  }));
+  const removeReviewAgent = (index: number) => setDraft((current) => current && ({
+    ...current,
+    agents: { ...current.agents, codeReview: current.agents.codeReview.filter((_, candidate) => candidate !== index) },
+  }));
+  const addReviewAgent = () => setDraft((current) => current && ({
+    ...current,
+    agents: {
+      ...current.agents,
+      codeReview: [...current.agents.codeReview, {
+        id: `review-${crypto.randomUUID()}`,
+        provider: advanced?.providers[0]?.name || '', model: '', effort: '', priority: 0,
+      }],
+    },
   }));
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -412,14 +430,17 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
           </div></fieldset>
 
           <fieldset className="settings-section"><legend>Code Review Agents</legend>
-            <p className="settings-section-description">Every enabled provider reviews each automatic or manual pull request. Results are combined into one deduplicated review.</p>
-            <div className="settings-list code-review-agents">{advanced?.providers.map((provider) => {
-              const selection = draft.agents.codeReview[provider.name] || { enabled: false, model: '', effort: '' };
-              return <CodeReviewAgentRow key={provider.name} provider={provider} selection={selection} modelsLoading={modelsLoading} onChange={(next) => setDraft({
-                ...draft,
-                agents: { ...draft.agents, codeReview: { ...draft.agents.codeReview, [provider.name]: next } },
-              })} />;
-            })}</div>
+            <p className="settings-section-description">One available agent handles each review. Add the same provider more than once to use different models, efforts, or account-backed provider instances.</p>
+            <div className="settings-list code-review-agents">{draft.agents.codeReview.map((selection, index) => <CodeReviewAgentRow
+              key={selection.id}
+              providers={advanced?.providers || []}
+              selection={selection}
+              modelsLoading={modelsLoading}
+              onChange={(next) => updateReviewAgent(index, next)}
+              onRemove={() => removeReviewAgent(index)}
+            />)}</div>
+            {!draft.agents.codeReview.length && <p className="settings-empty">No code review agents configured.</p>}
+            <button type="button" className="add-button" disabled={!advanced?.providers.length} onClick={addReviewAgent}>＋ Add provider</button>
           </fieldset>
 
           <fieldset className="settings-section"><legend>Chat Agent</legend>
@@ -428,6 +449,8 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
           </fieldset>
 
           <fieldset className="settings-section"><legend>Agent behavior</legend><div className="settings-grid four">
+            <label><span>Review routing</span><select value={draft.agents.reviewRouting} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, reviewRouting: event.target.value as SettingsConfig['agents']['reviewRouting'] } })}><option value="random">Random</option><option value="round_robin">Round robin</option><option value="priority">Priority-based</option></select></label>
+            <label><span>Usage headroom <small>percent reserved</small></span><input type="number" min="0" max="100" value={draft.agents.usageHeadroomPercent} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, usageHeadroomPercent: Number(event.target.value) } })} /></label>
             <label><span>Max concurrent</span><input type="number" min="1" max="8" value={draft.agents.maxConcurrent} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, maxConcurrent: Number(event.target.value) } })} /></label>
             <label><span>Max attempts</span><input type="number" min="1" max="10" value={draft.agents.maxAutomaticAttempts} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, maxAutomaticAttempts: Number(event.target.value) } })} /></label>
             <label><span>Runs / PR / hour</span><input type="number" min="1" max="20" value={draft.agents.maxRunsPerPullRequestPerHour} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, maxRunsPerPullRequestPerHour: Number(event.target.value) } })} /></label>

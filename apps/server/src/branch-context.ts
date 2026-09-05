@@ -8,6 +8,7 @@ import { executeAgent, parseReviewResult, type AgentSelection } from './agents.j
 import { validateReviewCommentLocations } from './github.js';
 import { runProcess } from './process.js';
 import { explainPullRequest } from './summary.js';
+import { chooseReviewAgent, criteriaForReviewAgent, type UsageReader } from './review-router.js';
 
 export interface LocalBranchInput {
   remote: string;
@@ -241,6 +242,8 @@ export async function runLocalBranchReview(
   config: BarbarianConfig,
   id: string,
   signal?: AbortSignal,
+  requestedAgentId?: string,
+  options: { currentConfig?: () => BarbarianConfig; usageReader?: UsageReader } = {},
 ): Promise<void> {
   const branch = database.connection.prepare('SELECT * FROM local_branches WHERE id=?').get(id) as unknown as LocalBranchRow | undefined;
   if (!branch) throw new Error('Local branch is not tracked');
@@ -286,12 +289,39 @@ BARBARIAN_RESULT: {"findings":<count>,"verdict":"ready|issues","summary":"<plain
 LOCAL_BRANCH_DIFF:
 ${diff || '(No tracked changes from the base branch.)'}`;
   try {
-    const output = await executeAgent(
-      database, config, null, 'local_branch_review', prompt, undefined, signal, undefined,
-      { branchId: id, cwd: tmpdir() },
-    );
-    const result = parseReviewResult(output);
-    validateReviewCommentLocations(diff, result.comments);
+    const currentConfig = options.currentConfig || (() => config);
+    const criteria = criteriaForReviewAgent(config, requestedAgentId);
+    const attempted = new Set<string>();
+    const failures: string[] = [];
+    let result: ReturnType<typeof parseReviewResult> | null = null;
+    while (!result) {
+      let selected;
+      try {
+        selected = await chooseReviewAgent(database, currentConfig(), attempted, {
+          ...(criteria ? { criteria } : {}),
+          ...(attempted.size === 0 && requestedAgentId ? { preferredAgentId: requestedAgentId } : {}),
+          ...(options.usageReader ? { usageReader: options.usageReader } : {}),
+        });
+      } catch (selectionError) {
+        if (!failures.length) throw selectionError;
+        throw new Error(`${failures.join('; ')}; ${selectionError instanceof Error ? selectionError.message : String(selectionError)}`);
+      }
+      attempted.add(selected.id);
+      const selectedConfig = currentConfig();
+      const agentSelection = { provider: selected.provider, model: selected.model, effort: selected.effort };
+      try {
+        const output = await executeAgent(
+          database, selectedConfig, null, 'local_branch_review', prompt, selected.provider, signal, undefined,
+          { branchId: id, cwd: tmpdir(), agentSelection },
+        );
+        const parsed = parseReviewResult(output);
+        validateReviewCommentLocations(diff, parsed.comments);
+        result = parsed;
+      } catch (agentError) {
+        if (signal?.aborted) throw agentError;
+        failures.push(`${selected.provider} failed: ${agentError instanceof Error ? agentError.message : String(agentError)}`);
+      }
+    }
     const now = new Date().toISOString();
     database.connection.exec('BEGIN IMMEDIATE');
     try {

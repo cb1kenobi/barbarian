@@ -24,8 +24,9 @@ const config: BarbarianConfig = {
   linear: { enabled: false, command: [] },
   agents: {
     autoReview: false, maxConcurrent: 2, maxAutomaticAttempts: 3,
-    codeReview: { codex: { enabled: true, model: '', effort: '' } },
+    codeReview: [{ id: 'codex', provider: 'codex', model: '', effort: '', priority: 0 }],
     chat: { provider: 'codex', model: '', effort: '' },
+    reviewRouting: 'round_robin', usageHeadroomPercent: 20,
     retryBaseMinutes: 5, maxRunsPerPullRequestPerHour: 3, providers: {},
   },
   statusUpdate: {

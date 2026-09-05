@@ -27,8 +27,9 @@ const config: BarbarianConfig = {
   linear: { enabled: false, command: [] },
   agents: {
     autoReview: false, maxConcurrent: 2, maxAutomaticAttempts: 3,
-    codeReview: { codex: { enabled: true, model: '', effort: '' } },
+    codeReview: [{ id: 'codex', provider: 'codex', model: '', effort: '', priority: 0 }],
     chat: { provider: 'codex', model: '', effort: '' },
+    reviewRouting: 'round_robin', usageHeadroomPercent: 20,
     retryBaseMinutes: 5, maxRunsPerPullRequestPerHour: 3, providers: {},
   },
   statusUpdate: { enabled: false, workdays: [], daysOff: [] },
@@ -1260,7 +1261,7 @@ describe('settings API', () => {
         config: {
           appearance: { theme: 'dark', fontSize: 'small', weapon: 'double-axe' },
           agents: {
-            codeReview: { codex: { enabled: true, model: '', effort: '' } },
+            codeReview: [{ id: 'codex', provider: 'codex', model: '', effort: '', priority: 0 }],
             chat: { provider: 'codex', model: '', effort: '' },
           },
         },
@@ -1283,7 +1284,7 @@ describe('settings API', () => {
         appearance: { theme: 'slayer', fontSize: 'normal', weapon: 'double-axe' },
         agents: {
           ...(editable.agents as Record<string, unknown>),
-          codeReview: { codex: { enabled: true, model: 'gpt-review', effort: 'high' } },
+          codeReview: [{ id: 'codex', provider: 'codex', model: 'gpt-review', effort: 'high', priority: 0 }],
           chat: { provider: 'codex', model: 'gpt-chat', effort: 'medium' },
         },
         repositories: [...current.repositories, {
@@ -1314,7 +1315,7 @@ describe('settings API', () => {
       });
       expect(persisted).toHaveLength(1);
       expect(persisted[0]).toMatchObject(next);
-      expect(persisted[0]!.agents.codeReview.codex).toEqual({ enabled: true, model: 'gpt-review', effort: 'high' });
+      expect(persisted[0]!.agents.codeReview[0]).toEqual({ id: 'codex', provider: 'codex', model: 'gpt-review', effort: 'high', priority: 0 });
       expect(persisted[0]!.agents.chat).toEqual({ provider: 'codex', model: 'gpt-chat', effort: 'medium' });
       expect(persisted[0]!.agents.providers.codex).toEqual(current.agents.providers.codex);
       expect(persisted[0]!.review.workspaceRoot).toBe(current.review.workspaceRoot);
