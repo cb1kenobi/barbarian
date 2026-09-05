@@ -14,8 +14,11 @@ const agentControlPathspecs = [
   ':(glob)AGENTS.md', ':(glob)**/AGENTS.md',
   ':(glob)CLAUDE.md', ':(glob)**/CLAUDE.md',
   ':(glob).cursorrules', ':(glob)**/.cursorrules',
+  ':(glob).cursor', ':(glob)**/.cursor',
   ':(glob).cursor/**', ':(glob)**/.cursor/**',
+  ':(glob).codex', ':(glob)**/.codex',
   ':(glob).codex/**', ':(glob)**/.codex/**',
+  ':(glob).agents', ':(glob)**/.agents',
   ':(glob).agents/**', ':(glob)**/.agents/**',
 ];
 

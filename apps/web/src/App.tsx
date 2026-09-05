@@ -461,7 +461,7 @@ export function App() {
         </section>
       </main>
 
-      {selectedReview && <ReviewDrawer id={selectedReview} timezone={dashboard?.profile.timezone} now={now} onClose={() => setSelectedReview(null)} onChanged={load} onAgentFailed={() => setFailedReview(selectedReview)} />}
+      {selectedReview && !failedReview && <ReviewDrawer id={selectedReview} timezone={dashboard?.profile.timezone} now={now} onClose={() => setSelectedReview(null)} onChanged={load} onAgentFailed={() => setFailedReview(selectedReview)} />}
       {failedReview && <AgentFailureDialog id={failedReview} timezone={timezone} now={now} onClose={() => setFailedReview(null)} />}
       {agentDrawer.view === 'history' && <AgentHistoryDrawer now={now} timezone={timezone} onClose={() => setAgentDrawer(closeAgentDrawer())} onSelect={(id) => setAgentDrawer(openAgentRun(id, true))} />}
       {agentDrawer.view === 'run' && <AgentRunDrawer id={agentDrawer.runId} now={now} onClose={() => setAgentDrawer(closeAgentDrawer())} onStopped={load} {...(agentDrawer.returnToHistory ? { onBack: () => setAgentDrawer(backFromAgentRun(agentDrawer)) } : {})} />}

@@ -51,13 +51,24 @@ export function runProcess(
   } = {},
 ): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
+    if (options.signal?.aborted) {
+      const reason = options.signal.reason instanceof Error
+        ? options.signal.reason
+        : new Error(String(options.signal.reason || 'Stopped by user'));
+      const error = new ProcessExecutionError(reason.message, '', '');
+      error.name = 'AbortError';
+      reject(error);
+      return;
+    }
+    const detached = process.platform !== 'win32';
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env || process.env,
+      detached,
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],
-      signal: options.signal,
     });
+    const processGroupId = child.pid;
     const stdout = new CappedOutput(options.maxOutputCharacters ?? 512_000);
     const stderr = new CappedOutput(options.maxOutputCharacters ?? 512_000);
     const executionError = (error: Error) => {
@@ -68,16 +79,43 @@ export function runProcess(
       return wrapped;
     };
     let settled = false;
-    const timeout = setTimeout(() => {
-      child.kill('SIGTERM');
-      setTimeout(() => child.kill('SIGKILL'), 5_000).unref();
-      if (!settled) {
-        settled = true;
-        reject(new ProcessExecutionError(
-          `${command} timed out after ${options.timeoutMs ?? 120_000}ms`, stdout.result(), stderr.result(),
-        ));
+    let terminalError: Error | null = null;
+    let forceKillTimer: NodeJS.Timeout | undefined;
+    const killProcessTree = (signal: NodeJS.Signals) => {
+      if (!processGroupId) return;
+      if (detached) {
+        try { process.kill(-processGroupId, signal); return; }
+        catch {}
       }
+      try { child.kill(signal); } catch {}
+    };
+    const terminate = (error: Error) => {
+      if (settled || terminalError) return;
+      terminalError = error;
+      killProcessTree('SIGTERM');
+      forceKillTimer = setTimeout(() => killProcessTree('SIGKILL'), 5_000);
+      forceKillTimer.unref();
+    };
+    const abort = () => {
+      const reason = options.signal?.reason instanceof Error
+        ? options.signal.reason
+        : new Error(String(options.signal?.reason || 'Stopped by user'));
+      const error = executionError(reason);
+      error.name = 'AbortError';
+      terminate(error);
+    };
+    options.signal?.addEventListener('abort', abort, { once: true });
+    const timeout = setTimeout(() => {
+      terminate(new ProcessExecutionError(
+        `${command} timed out after ${options.timeoutMs ?? 120_000}ms`, stdout.result(), stderr.result(),
+      ));
     }, options.timeoutMs ?? 120_000);
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      options.signal?.removeEventListener('abort', abort);
+    };
 
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
@@ -85,20 +123,24 @@ export function runProcess(
     child.stderr.on('data', (chunk: string) => { stderr.append(chunk); });
     child.stdin.on('error', (error: NodeJS.ErrnoException) => {
       if (error.code !== 'EPIPE' && !settled) {
-        settled = true;
-        clearTimeout(timeout);
-        reject(executionError(error));
+        terminate(executionError(error));
       }
     });
     child.on('error', (error) => {
+      if (settled) return;
       settled = true;
-      clearTimeout(timeout);
+      cleanup();
       reject(executionError(error));
     });
     child.on('close', (code) => {
-      clearTimeout(timeout);
       if (settled) return;
       settled = true;
+      if (terminalError) killProcessTree('SIGKILL');
+      cleanup();
+      if (terminalError) {
+        reject(terminalError);
+        return;
+      }
       resolve({ stdout: stdout.result(), stderr: stderr.result(), exitCode: code ?? 1 });
     });
     if (options.input) child.stdin.end(options.input);

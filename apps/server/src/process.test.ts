@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runProcess } from './process.js';
 
@@ -13,11 +16,21 @@ describe('runProcess', () => {
   });
 
   it('terminates a spawned process when its agent signal is cancelled', async () => {
-    const controller = new AbortController();
-    const running = runProcess(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
-      signal: controller.signal,
-    });
-    controller.abort(new Error('Stopped by user'));
-    await expect(running).rejects.toMatchObject({ name: 'AbortError' });
+    const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-process-tree-test-'));
+    const marker = path.join(directory, 'survived');
+    try {
+      const controller = new AbortController();
+      const descendant = `setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'alive'), 350)`;
+      const parent = `require('node:child_process').spawn(${JSON.stringify(process.execPath)}, ['-e', ${JSON.stringify(descendant)}], { stdio: 'ignore' }); setInterval(() => {}, 1000)`;
+      const running = runProcess(process.execPath, ['-e', parent], {
+        signal: controller.signal,
+      });
+      setTimeout(() => controller.abort(new Error('Stopped by user')), 100);
+      await expect(running).rejects.toMatchObject({ name: 'AbortError' });
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
