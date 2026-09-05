@@ -167,8 +167,24 @@ export function upsertReview(database: BarbarianDatabase, config: BarbarianConfi
       manual_requested_at=CASE WHEN excluded.is_draft=1 THEN NULL ELSE review_queue.manual_requested_at END,
       manual_provider=CASE WHEN excluded.is_draft=1 THEN NULL ELSE review_queue.manual_provider END,
       retry_after=CASE WHEN excluded.is_draft=1 THEN NULL ELSE review_queue.retry_after END,
+      last_reviewed_sha=CASE
+        WHEN review_queue.is_draft=1 AND excluded.is_draft=0 THEN NULL
+        ELSE review_queue.last_reviewed_sha END,
+      last_reviewed_watermark=CASE
+        WHEN review_queue.is_draft=1 AND excluded.is_draft=0 THEN NULL
+        ELSE review_queue.last_reviewed_watermark END,
+      attempt_count=CASE
+        WHEN review_queue.is_draft=1 AND excluded.is_draft=0 THEN 0
+        ELSE review_queue.attempt_count END,
+      attempt_head_sha=CASE
+        WHEN review_queue.is_draft=1 AND excluded.is_draft=0 THEN NULL
+        ELSE review_queue.attempt_head_sha END,
+      attempt_watermark=CASE
+        WHEN review_queue.is_draft=1 AND excluded.is_draft=0 THEN NULL
+        ELSE review_queue.attempt_watermark END,
       review_paused=CASE
-        WHEN review_queue.head_sha<>excluded.head_sha
+        WHEN review_queue.is_draft=1 AND excluded.is_draft=0
+          OR review_queue.head_sha<>excluded.head_sha
           OR excluded.discussion_watermark>review_queue.discussion_watermark THEN 0
         ELSE review_queue.review_paused END,
       is_draft=excluded.is_draft, remote_state='OPEN', updated_at=excluded.updated_at,

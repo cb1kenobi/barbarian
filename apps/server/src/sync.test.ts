@@ -260,6 +260,19 @@ describe('applyDiscovery', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(claims).toHaveLength(2);
 
+    discovery.discoveredAt = '2026-09-03T00:25:00Z';
+    discovery.pullRequests = [{
+      ...discovery.pullRequests[0]!,
+      isDraft: false,
+      updatedAt: '2026-09-03T00:24:16Z',
+    }];
+    await applyDiscovery(db, automaticConfig, discovery);
+    await dispatcher.pump();
+    await waitFor(() => claims.length === 3 && runtime.availableSlots === 1);
+    expect(claims[2]).toMatchObject({
+      reviewId: 'github:Acme/storage#797', trigger: 'new_pr', headSha: 'draft-head',
+    });
+
     dispatcher.stop();
     await runtime.shutdown();
     db.close();

@@ -1229,6 +1229,9 @@ export async function createApp(
     if (!branch) return reply.code(404).send({ error: 'Local branch is not tracked' });
     const body = z.object({ provider: z.string().optional() }).parse(request.body || {});
     if (branch.status === 'agent_working') return reply.code(409).send({ error: 'An agent review is already running' });
+    if (activeWritableBranches.has(id)) {
+      return reply.code(409).send({ error: 'An agent is already working in this local branch' });
+    }
     if (branch.review_id && !branch.is_dirty) {
       const linkedReview = database.connection.prepare(`
         SELECT is_draft FROM review_queue WHERE id=? AND remote_state='OPEN'
@@ -1240,6 +1243,7 @@ export async function createApp(
     database.connection.prepare(`
       UPDATE local_branches SET status='agent_working', last_agent_error=NULL, updated_at=? WHERE id=?
     `).run(new Date().toISOString(), id);
+    activeWritableBranches.add(id);
     void runtime.run(
       (signal) => runLocalBranchReview(database, configStore.get(), id, signal),
       id,
@@ -1252,7 +1256,7 @@ export async function createApp(
         new Date().toISOString(), id,
       );
       app.log.error(error, `local branch review failed for ${id}`);
-    });
+    }).finally(() => activeWritableBranches.delete(id));
     return reply.code(202).send({ accepted: true, target: 'branch' });
   });
 

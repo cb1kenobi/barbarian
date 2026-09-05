@@ -20,7 +20,8 @@ describe('agent provider options', () => {
     expect(agentInvocationArgs({
       command: 'codex', args: ['exec', '--sandbox', 'read-only', '--skip-git-repo-check', '-'],
     }, { workspaceWrite: true })).toEqual([
-      'exec', '--skip-git-repo-check', '--sandbox', 'workspace-write', '-',
+      'exec', '--skip-git-repo-check', '--sandbox', 'workspace-write',
+      '-c', 'project_doc_max_bytes=0', '-c', 'project_doc_fallback_filenames=[]', '-',
     ]);
   });
 

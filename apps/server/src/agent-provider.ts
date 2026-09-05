@@ -71,7 +71,11 @@ export function agentInvocationArgs(
   const model = provider.model?.trim();
   if (invocation.workspaceWrite && family === 'codex') {
     args = withoutOption(args, ['--sandbox', '-s']);
-    options.push('--sandbox', 'workspace-write');
+    options.push(
+      '--sandbox', 'workspace-write',
+      '-c', 'project_doc_max_bytes=0',
+      '-c', 'project_doc_fallback_filenames=[]',
+    );
   } else if (invocation.workspaceWrite && family === 'cursor') {
     args = withoutOption(args, ['--mode']);
     args = args.filter((argument) => argument !== '--plan');
