@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { normalizeWeapon, weaponAssetPath, weaponFaviconPath, weaponOptions, type Weapon } from './weapons';
+import { useCloseOnEscape } from './escape-layers';
 
 export type Theme = 'light' | 'dark' | 'slayer';
 export type FontSize = 'small' | 'normal';
@@ -238,12 +239,11 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
     if (draft) applyAppearance(draft.appearance);
   }, [draft?.appearance]);
 
+  useCloseOnEscape(() => { if (!savingRef.current) onCloseRef.current(); });
+
   useEffect(() => {
     closeButton.current?.focus();
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !savingRef.current) onCloseRef.current(); };
-    window.addEventListener('keydown', closeOnEscape);
     return () => {
-      window.removeEventListener('keydown', closeOnEscape);
       if (!saved.current && originalAppearance.current) applyAppearance(originalAppearance.current);
     };
   }, []);

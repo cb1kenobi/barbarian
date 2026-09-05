@@ -1,15 +1,16 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { formatLastSync, formatNextSync, formatSyncTimestamp, type SyncRun } from './sync-time';
 import { sortReviews, type ReviewSort } from './review-sort';
 import { countReviewsNeedingApproval, reviewDisplayStatus, reviewStatusGuide, statusLabel, statusTone } from './review-display';
 import { formatElapsed } from './elapsed-time';
 import { applyAppearance, SettingsModal, type AppearanceConfig } from './settings';
 import { copyStatusUpdate, editStatusText } from './status-editor';
-import { shouldSubmitChat } from './chat-editor';
+import { restoreFailedChatMessage, shouldSubmitChat } from './chat-editor';
 import { renderMarkdown } from './markdown';
 import { repositoryBookmark, sortRepositoryBookmarks, type RepositoryBookmark } from './repository-links';
 import { sortWorkItems, type WorkSort } from './work-sort';
 import { matchesQueueSearch } from './queue-search';
+import { useCloseOnEscape } from './escape-layers';
 import { greetingForTime } from './greeting';
 import {
   backFromAgentRun, closeAgentDrawer, openAgentHistory, openAgentRun, type AgentDrawerState,
@@ -189,26 +190,6 @@ function formatTimelineTime(value: string, timezone?: string): string {
     hour: 'numeric',
     minute: '2-digit',
   }).format(date);
-}
-
-const escapeLayers: symbol[] = [];
-
-function useCloseOnEscape(onClose: () => void): void {
-  const layer = useRef(Symbol('escape-layer')).current;
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
-  useEffect(() => {
-    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape' && escapeLayers.at(-1) === layer) onCloseRef.current();
-    };
-    escapeLayers.push(layer);
-    window.addEventListener('keydown', closeOnEscape);
-    return () => {
-      const index = escapeLayers.lastIndexOf(layer);
-      if (index >= 0) escapeLayers.splice(index, 1);
-      window.removeEventListener('keydown', closeOnEscape);
-    };
-  }, [layer]);
 }
 
 function useScrollableViewport() {
@@ -471,7 +452,7 @@ export function App() {
         </section>
       </main>
 
-      {selectedReview && !failedReview && <ReviewDrawer id={selectedReview} timezone={dashboard?.profile.timezone} now={now} onClose={() => setSelectedReview(null)} onChanged={load} onAgentFailed={() => setFailedReview(selectedReview)} />}
+      {selectedReview && <ReviewDrawer id={selectedReview} timezone={dashboard?.profile.timezone} now={now} onClose={() => setSelectedReview(null)} onChanged={load} onAgentFailed={() => setFailedReview(selectedReview)} />}
       {failedReview && <AgentFailureDialog id={failedReview} timezone={timezone} now={now} onClose={() => setFailedReview(null)} />}
       {agentDrawer.view === 'history' && <AgentHistoryDrawer now={now} timezone={timezone} onClose={() => setAgentDrawer(closeAgentDrawer())} onSelect={(id) => setAgentDrawer(openAgentRun(id, true))} />}
       {agentDrawer.view === 'run' && <AgentRunDrawer id={agentDrawer.runId} now={now} onClose={() => setAgentDrawer(closeAgentDrawer())} onStopped={load} {...(agentDrawer.returnToHistory ? { onBack: () => setAgentDrawer(backFromAgentRun(agentDrawer)) } : {})} />}
@@ -773,7 +754,7 @@ function ReviewDrawer({ id, timezone, now, onClose, onChanged, onAgentFailed }: 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { setWorkspaceWrite(false); }, [id]);
   const action = async (name: string, operation: () => Promise<unknown>) => { setBusy(name); setError(''); try { await operation(); await load(); await onChanged(); return true; } catch (caught) { setError(caught instanceof Error ? caught.message : String(caught)); return false; } finally { setBusy(''); } };
-  const send = async (event: FormEvent) => { event.preventDefault(); if (busy || !message.trim()) return; const text = message; setMessage(''); const sent = await action('chat', () => api(`/api/reviews/${encodeURIComponent(id)}/chat`, { method: 'POST', body: JSON.stringify({ message: text, workspaceWrite }) })); if (!sent) setMessage((current) => current || text); };
+  const send = async (event: FormEvent) => { event.preventDefault(); if (busy || !message.trim()) return; const text = message; setMessage(''); const sent = await action('chat', () => api(`/api/reviews/${encodeURIComponent(id)}/chat`, { method: 'POST', body: JSON.stringify({ message: text, workspaceWrite }) })); if (!sent) setMessage((current) => restoreFailedChatMessage(text, current)); };
   const submitOnEnter = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (!shouldSubmitChat(event.key, event.shiftKey, event.nativeEvent.isComposing)) return;
     event.preventDefault();
