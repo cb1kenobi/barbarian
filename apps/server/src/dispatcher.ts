@@ -165,7 +165,7 @@ export class ReviewDispatcher {
         WHERE id=? AND remote_state='OPEN'
       `).run(now, reviewId);
       this.database.connection.prepare(`
-        UPDATE agent_runs SET status='cancelled', finished_at=?, error='Stopped by user', prompt=''
+        UPDATE agent_runs SET status='cancelled', finished_at=?, error='Agent review stopped by user', prompt=''
         WHERE review_id=? AND status='running' AND task LIKE 'code_review:%'
       `).run(now, reviewId);
       this.database.connection.exec('COMMIT');

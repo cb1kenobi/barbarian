@@ -1030,6 +1030,7 @@ describe('local branch context', () => {
     current.agents.chat.provider = 'fake';
     current.agents.providers = {
       fake: { command: codexStub, args: ['exec', '--sandbox', 'read-only', '-'] },
+      readonly: { command: process.execPath, args: ['-e', 'console.log(process.cwd())'] },
     };
     const now = new Date().toISOString();
     database.connection.prepare(`
@@ -1057,6 +1058,16 @@ describe('local branch context', () => {
       expect(database.connection.prepare(`
         SELECT branch_id FROM agent_runs ORDER BY id DESC LIMIT 1
       `).get()).toEqual({ branch_id: branch.id });
+      const readOnlyResponse = await app.inject({
+        method: 'POST',
+        url: `/api/local/branches/${encodeURIComponent(branch.id)}/chat`,
+        payload: {
+          message: 'Explain without editing.', askAgent: true, workspaceWrite: false,
+          provider: 'readonly', author: 'VS Code extension',
+        },
+      });
+      expect(readOnlyResponse.statusCode).toBe(200);
+      expect(readOnlyResponse.json()).toMatchObject({ message: { content: realpathSync(directory) } });
     } finally {
       await app.close();
       database.close();

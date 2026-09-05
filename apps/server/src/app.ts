@@ -47,7 +47,7 @@ const chatBody = z.object({
   provider: z.string().optional(),
   askAgent: z.boolean().default(true),
   author: z.string().default('Developer'),
-  workspaceWrite: z.boolean().default(false),
+  workspaceWrite: z.boolean().optional(),
   selection: z.object({
     text: z.string().max(16_000),
     path: z.string().max(2_000).optional(),
@@ -80,6 +80,8 @@ const reviewStatuses = new Set<ReviewStatus>([
   'unreviewed', 'agent_working', 'issues_found', 'awaiting_feedback',
   'agent_failed', 'ready_to_merge', 'approved', 'merged', 'closed',
 ]);
+
+class WorkspaceChangedError extends Error {}
 
 function parseJson<T>(value: string): T {
   return JSON.parse(value) as T;
@@ -920,7 +922,7 @@ export async function createApp(
             if (!currentWorkspace
               || currentWorkspace.branchId !== agentWorkspace.branchId
               || currentWorkspace.path !== agentWorkspace.path) {
-              throw new Error('The linked local branch changed before the agent started');
+              throw new WorkspaceChangedError('The linked local branch changed before the agent started');
             }
           }
           return askAgent(database, config, id, body.message, body.provider, signal, {
@@ -939,6 +941,9 @@ export async function createApp(
         INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'assistant', ?, ?, ?)
       `).run(id, body.provider || agentSelectionForTask(config, 'chat').provider, response, new Date().toISOString());
       return { message: { id: Number(inserted.lastInsertRowid), role: 'assistant', author: body.provider || agentSelectionForTask(config, 'chat').provider, content: response } };
+    } catch (error) {
+      if (error instanceof WorkspaceChangedError) return reply.code(409).send({ error: error.message });
+      throw error;
     } finally {
       if (writableBranchId) activeWritableBranches.delete(writableBranchId);
     }
@@ -1290,12 +1295,15 @@ export async function createApp(
     const body = chatBody.parse(request.body);
     const now = new Date().toISOString();
     let agentWorkspace: ReviewWorkspace | null = null;
+    let workspaceWrite = false;
     if (body.askAgent) {
       const selectedProvider = body.provider || agentSelectionForTask(
         config, branch.review_id ? 'chat' : 'local_branch_chat',
       ).provider;
       const provider = config.agents.providers[selectedProvider];
-      if (!provider || !agentProviderSupportsWorkspaceWrite(provider.command)) {
+      if (!provider) return reply.code(409).send({ error: 'The selected agent is not configured' });
+      workspaceWrite = body.workspaceWrite ?? agentProviderSupportsWorkspaceWrite(provider.command);
+      if (workspaceWrite && !agentProviderSupportsWorkspaceWrite(provider.command)) {
         return reply.code(409).send({ error: 'The selected agent does not support editable local workspaces' });
       }
       agentWorkspace = await resolveLocalBranchWorkspace(database, id);
@@ -1303,10 +1311,10 @@ export async function createApp(
         return reply.code(409).send({ error: 'The local branch is no longer safe and available for agent edits' });
       }
     }
-    if (body.askAgent && activeWritableBranches.has(id)) {
+    if (body.askAgent && workspaceWrite && activeWritableBranches.has(id)) {
       return reply.code(409).send({ error: 'An agent is already working in this branch' });
     }
-    if (body.askAgent) activeWritableBranches.add(id);
+    if (body.askAgent && workspaceWrite) activeWritableBranches.add(id);
     try {
       if (branch.review_id) {
         const review = database.connection.prepare('SELECT id FROM review_queue WHERE id=?').get(branch.review_id);
@@ -1322,12 +1330,12 @@ export async function createApp(
             if (!agentWorkspace || !currentWorkspace
               || currentWorkspace.path !== agentWorkspace.path
               || currentWorkspace.branchName !== agentWorkspace.branchName) {
-              throw new Error('The local branch changed before the agent started');
+              throw new WorkspaceChangedError('The local branch changed before the agent started');
             }
             return askAgent(database, config, branch.review_id!, body.message, body.provider, signal, {
               branchId: id,
               cwd: agentWorkspace.path,
-              workspaceWrite: true,
+              workspaceWrite,
               runtimeKey,
               ...(body.selection ? { untrustedSelection: body.selection } : {}),
             });
@@ -1350,10 +1358,11 @@ export async function createApp(
           if (!agentWorkspace || !currentWorkspace
             || currentWorkspace.path !== agentWorkspace.path
             || currentWorkspace.branchName !== agentWorkspace.branchName) {
-            throw new Error('The local branch changed before the agent started');
+            throw new WorkspaceChangedError('The local branch changed before the agent started');
           }
           return askLocalBranchAgent(
             database, config, id, body.message, body.provider, signal, runtimeKey, body.selection,
+            workspaceWrite,
           );
         },
         runtimeKey,
@@ -1362,8 +1371,11 @@ export async function createApp(
         INSERT INTO local_branch_messages(branch_id, role, author, content, created_at) VALUES (?, 'assistant', ?, ?, ?)
       `).run(id, body.provider || agentSelectionForTask(config, 'local_branch_chat').provider, response, new Date().toISOString());
       return { message: { id: Number(inserted.lastInsertRowid), role: 'assistant', author: body.provider || agentSelectionForTask(config, 'local_branch_chat').provider, content: response } };
+    } catch (error) {
+      if (error instanceof WorkspaceChangedError) return reply.code(409).send({ error: error.message });
+      throw error;
     } finally {
-      if (body.askAgent) activeWritableBranches.delete(id);
+      if (body.askAgent && workspaceWrite) activeWritableBranches.delete(id);
     }
   });
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { formatLastSync, formatNextSync, formatSyncTimestamp, type SyncRun } from './sync-time';
 import { sortReviews, type ReviewSort } from './review-sort';
 import { countReviewsNeedingApproval, reviewDisplayStatus, reviewStatusGuide, statusLabel, statusTone } from './review-display';
@@ -191,14 +191,24 @@ function formatTimelineTime(value: string, timezone?: string): string {
   }).format(date);
 }
 
+const escapeLayers: symbol[] = [];
+
 function useCloseOnEscape(onClose: () => void): void {
+  const layer = useRef(Symbol('escape-layer')).current;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   useEffect(() => {
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape' && escapeLayers.at(-1) === layer) onCloseRef.current();
     };
+    escapeLayers.push(layer);
     window.addEventListener('keydown', closeOnEscape);
-    return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [onClose]);
+    return () => {
+      const index = escapeLayers.lastIndexOf(layer);
+      if (index >= 0) escapeLayers.splice(index, 1);
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [layer]);
 }
 
 function useScrollableViewport() {
