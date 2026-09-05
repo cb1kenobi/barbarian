@@ -11,6 +11,9 @@ import { repositoryBookmark, sortRepositoryBookmarks, type RepositoryBookmark } 
 import { sortWorkItems, type WorkSort } from './work-sort';
 import { matchesQueueSearch } from './queue-search';
 import { greetingForTime } from './greeting';
+import {
+  backFromAgentRun, closeAgentDrawer, openAgentHistory, openAgentRun, type AgentDrawerState,
+} from './agent-drawer.js';
 
 interface WorkItem {
   id: string; repository: string; number: number; title: string; simple_summary: string;
@@ -55,6 +58,7 @@ interface ReviewTimelineEvent {
 interface ActiveAgent {
   id: number; review_id: string | null; branch_id: string | null;
   repository: string | null; number: number | null; title: string; url: string | null;
+  pull_request_url: string | null;
   branch_name: string | null; agent: string; model: string; effort: string;
   task: string; status: string; started_at: string; finished_at: string | null;
 }
@@ -62,13 +66,34 @@ interface ActiveAgent {
 interface AgentRunDetail extends ActiveAgent {
   command: string;
   prompt: string;
+  output: string;
   error: string | null;
+}
+
+interface AgentRunPage {
+  runs: ActiveAgent[];
+  nextBefore: number | null;
 }
 
 interface AgentRunStatus {
   status: string;
   finished_at: string | null;
   error: string | null;
+}
+
+interface AgentFailureDetail {
+  review: { id: string; repository: string; number: number; title: string };
+  error: string | null;
+  runs: Array<{
+    id: number; agent: string; model: string; effort: string; status: string;
+    started_at: string; finished_at: string | null; error: string | null; output: string;
+  }>;
+}
+
+interface ReviewAgentWorkspace {
+  branchId: string;
+  branchName: string;
+  path: string;
 }
 
 interface Dashboard {
@@ -211,7 +236,8 @@ export function App() {
   const [syncing, setSyncing] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [selectedReview, setSelectedReview] = useState<string | null>(null);
-  const [selectedAgent, setSelectedAgent] = useState<number | null>(null);
+  const [failedReview, setFailedReview] = useState<string | null>(null);
+  const [agentDrawer, setAgentDrawer] = useState<AgentDrawerState>(() => closeAgentDrawer());
   const [showStatus, setShowStatus] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [reviewSort, setReviewSort] = useState<ReviewSort>('priority');
@@ -317,6 +343,7 @@ export function App() {
           <a href="#feedback"><i>↩</i> Feedback <b>{feedback.length}</b></a>
           <a href="#reviews"><i>◇</i> Reviews <b>{reviews.length}</b></a>
           <a href="#work"><i>◫</i> Work queue <b>{allWork.length}</b></a>
+          <button type="button" onClick={() => setAgentDrawer(openAgentHistory())}><i>◷</i> History</button>
         </nav>
         <section className="repo-bookmarks" aria-labelledby="repo-bookmarks-label">
           <span className="rail-label" id="repo-bookmarks-label">REPOSITORIES</span>
@@ -327,7 +354,7 @@ export function App() {
           <section className="active-agents" aria-labelledby="active-agents-label">
             <span className="rail-label" id="active-agents-label">ACTIVE AI AGENTS</span>
             <div className="active-agent-list">
-              {(dashboard?.activeAgents || []).map((agent) => <button className="active-agent" type="button" onClick={() => setSelectedAgent(agent.id)} title={`View ${agentTaskLabel(agent.task)} invocation`} key={agent.id}>
+              {(dashboard?.activeAgents || []).map((agent) => <button className="active-agent" type="button" onClick={() => setAgentDrawer(openAgentRun(agent.id))} title={`View ${agentTaskLabel(agent.task)} invocation`} key={agent.id}>
                 <span className="active-agent-head"><span><i aria-hidden="true" />{agentTarget(agent)}</span><time>{formatElapsed(agent.started_at, now)}</time></span>
                 <small>{agentTaskLabel(agent.task)} · {agent.agent} · {agent.model}</small>
               </button>)}
@@ -403,7 +430,7 @@ export function App() {
           </div></div>
           <div ref={reviewViewportRef} className={`review-grid queue-viewport review-viewport${reviewsScrollable ? ' is-scrollable' : ''}`}>
             {reviews.map((review) => <button className="review-card" key={review.id} onClick={() => setSelectedReview(review.id)}>
-              <div className="review-card-head"><span><span className="repo">{repositoryName(review.repository)}</span><span className="pr">#{review.number}</span></span><ReviewStatusBadge status={reviewDisplayStatus(review)} /></div>
+              <div className="review-card-head"><span><span className="repo">{repositoryName(review.repository)}</span><span className="pr">#{review.number}</span></span><ReviewStatusBadge status={reviewDisplayStatus(review)} onAgentFailed={() => setFailedReview(review.id)} /></div>
               <h3>{review.title}</h3><p><InlineCode text={review.simple_summary} /></p>
               <footer className="review-card-footer"><ReviewMetadata review={review} timezone={dashboard?.profile.timezone} now={now} /></footer>
             </button>)}
@@ -431,8 +458,10 @@ export function App() {
         </section>
       </main>
 
-      {selectedReview && <ReviewDrawer id={selectedReview} timezone={dashboard?.profile.timezone} now={now} onClose={() => setSelectedReview(null)} onChanged={load} />}
-      {selectedAgent && <AgentRunDrawer id={selectedAgent} now={now} onClose={() => setSelectedAgent(null)} onStopped={load} />}
+      {selectedReview && <ReviewDrawer id={selectedReview} timezone={dashboard?.profile.timezone} now={now} onClose={() => setSelectedReview(null)} onChanged={load} onAgentFailed={() => setFailedReview(selectedReview)} />}
+      {failedReview && <AgentFailureDialog id={failedReview} timezone={timezone} now={now} onClose={() => setFailedReview(null)} />}
+      {agentDrawer.view === 'history' && <AgentHistoryDrawer now={now} timezone={timezone} onClose={() => setAgentDrawer(closeAgentDrawer())} onSelect={(id) => setAgentDrawer(openAgentRun(id, true))} />}
+      {agentDrawer.view === 'run' && <AgentRunDrawer id={agentDrawer.runId} now={now} onClose={() => setAgentDrawer(closeAgentDrawer())} onStopped={load} {...(agentDrawer.returnToHistory ? { onBack: () => setAgentDrawer(backFromAgentRun(agentDrawer)) } : {})} />}
       {showStatus && dashboard && <StatusDialog dashboard={dashboard} onClose={() => setShowStatus(false)} onSaved={load} />}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} onSaved={load} />}
     </div>
@@ -461,10 +490,26 @@ function ReviewStatusInfo() {
   </span>;
 }
 
-function ReviewStatusBadge({ status }: { status: unknown }) {
-  return <span className={`tag ${statusTone(status)}`}>
+function ReviewStatusBadge({ status, onAgentFailed }: { status: unknown; onAgentFailed?: () => void }) {
+  const content = <>
     {status === 'approved' && <svg className="tag-check" viewBox="0 0 12 12" aria-hidden="true"><path d="m1.8 6.2 2.6 2.6 5.8-5.9" /></svg>}
     {statusLabel(status)}
+  </>;
+  if (status === 'agent_failed' && onAgentFailed) return <span
+    className={`tag ${statusTone(status)} failure-trigger`}
+    role="button"
+    tabIndex={0}
+    aria-haspopup="dialog"
+    onClick={(event) => { event.stopPropagation(); onAgentFailed(); }}
+    onKeyDown={(event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      event.stopPropagation();
+      onAgentFailed();
+    }}
+  >{content}</span>;
+  return <span className={`tag ${statusTone(status)}`}>
+    {content}
   </span>;
 }
 
@@ -528,7 +573,58 @@ function FixedIssues({ review }: { review: Review }) {
   </span>)}</p>;
 }
 
-function AgentRunDrawer({ id, now, onClose, onStopped }: { id: number; now: number; onClose: () => void; onStopped: () => Promise<void> }) {
+function AgentHistoryDrawer({ now, timezone, onClose, onSelect }: {
+  now: number;
+  timezone: string | undefined;
+  onClose: () => void;
+  onSelect: (id: number) => void;
+}) {
+  const [runs, setRuns] = useState<ActiveAgent[]>([]);
+  const [nextBefore, setNextBefore] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  useCloseOnEscape(onClose);
+  const loadPage = useCallback(async (before: number | null) => {
+    setLoading(true);
+    setError('');
+    try {
+      const page = await api<AgentRunPage>(`/api/agent-runs?limit=50${before ? `&before=${before}` : ''}`);
+      setRuns((current) => before ? [...current, ...page.runs] : page.runs);
+      setNextBefore(page.nextBefore);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => { void loadPage(null); }, [loadPage]);
+
+  return <div className="drawer-backdrop" onMouseDown={onClose}><aside className="drawer agent-history-drawer" onMouseDown={(event) => event.stopPropagation()}>
+    <button className="drawer-close" onClick={onClose}>×</button>
+    <span className="section-label">AI AGENTS</span>
+    <h2>History</h2>
+    <p className="agent-history-intro">Every agent invocation started by Barbarian, newest first.</p>
+    {error && <p className="inline-error">{error}</p>}
+    <div className="agent-history-list">
+      {runs.map((run) => <button type="button" className="agent-history-row" onClick={() => onSelect(run.id)} key={run.id}>
+        <span className="agent-history-head"><strong>{agentTarget(run)}</strong><span className={`agent-history-status ${run.status}`}>{run.status}</span></span>
+        <span>{agentTaskLabel(run.task)} · {run.agent} · {run.model}</span>
+        <time title={formatSyncTimestamp(run.started_at, timezone)}>{formatElapsed(run.started_at, now)} ago</time>
+      </button>)}
+      {!loading && !runs.length && !error && <p className="agent-history-empty">No agent invocations have been recorded.</p>}
+    </div>
+    {nextBefore && <button type="button" className="agent-history-more" disabled={loading} onClick={() => void loadPage(nextBefore)}>{loading ? 'Loading…' : 'Load older runs'}</button>}
+    {loading && !runs.length && <p className="agent-history-loading">Loading agent history…</p>}
+  </aside></div>;
+}
+
+function AgentRunDrawer({ id, now, onBack, onClose, onStopped }: {
+  id: number;
+  now: number;
+  onBack?: () => void;
+  onClose: () => void;
+  onStopped: () => Promise<void>;
+}) {
   const [run, setRun] = useState<AgentRunDetail | null>(null);
   const [error, setError] = useState('');
   const [stopping, setStopping] = useState(false);
@@ -574,6 +670,7 @@ function AgentRunDrawer({ id, now, onClose, onStopped }: { id: number; now: numb
   };
 
   return <div className="drawer-backdrop" onMouseDown={onClose}><aside className="drawer agent-run-drawer" onMouseDown={(event) => event.stopPropagation()}>
+    {onBack && <button type="button" className="drawer-back" onClick={onBack}>← History</button>}
     <button className="drawer-close" onClick={onClose}>×</button>
     {!run && !error && <p>Loading agent invocation…</p>}
     {error && <p className="inline-error">{error}</p>}
@@ -581,15 +678,69 @@ function AgentRunDrawer({ id, now, onClose, onStopped }: { id: number; now: numb
       <span className="section-label">AI AGENT · {run.status.toUpperCase()}</span>
       <h2>{agentTarget(run)}</h2>
       <div className="drawer-status"><span>{agentTaskLabel(run.task)}</span><span>{run.agent}</span><span>{run.model}</span><span>{run.effort === 'CLI default' ? 'default effort' : `${run.effort} effort`}</span><span>{formatElapsed(run.started_at, now)}</span></div>
-      {run.status === 'running' && <div className="agent-run-actions"><button type="button" className="kill-agent" disabled={stopping} onClick={() => void stop()}>{stopping ? 'Stopping…' : run.task.startsWith('code_review:') ? 'Kill agent & pause reviews' : 'Kill agent'}</button></div>}
+      {(run.status === 'running' || run.pull_request_url) && <div className="agent-run-actions">
+        {run.status === 'running' && <button type="button" className="kill-agent" disabled={stopping} onClick={() => void stop()}>{stopping ? 'Stopping…' : run.task.startsWith('code_review:') ? 'Kill agent & pause reviews' : 'Kill agent'}</button>}
+        {run.pull_request_url && <a className="agent-run-link" href={run.pull_request_url} target="_blank" rel="noreferrer">Open pull request ↗</a>}
+      </div>}
       <section className="agent-invocation"><h3>Command</h3><pre><code>{run.command || 'Invocation details were not recorded for this run.'}</code></pre></section>
-      <section className="agent-invocation prompt"><h3>Prompt</h3><pre><code>{run.prompt || 'Prompt details were not recorded for this run.'}</code></pre></section>
+      <section className="agent-invocation prompt"><h3>Prompt</h3><pre><code>{run.prompt || (run.status === 'running' ? 'Prompt details were not recorded for this run.' : 'Prompts are cleared after an agent run finishes.')}</code></pre></section>
+      {run.output && <section className="agent-invocation output"><h3>Output</h3><pre><code>{run.output}</code></pre></section>}
       {run.error && <p className="inline-error">{run.error}</p>}
     </div>}
   </aside></div>;
 }
 
-function ReviewDrawer({ id, timezone, now, onClose, onChanged }: { id: string; timezone: string | undefined; now: number; onClose: () => void; onChanged: () => Promise<void> }) {
+function AgentFailureDialog({ id, timezone, now, onClose }: {
+  id: string;
+  timezone: string | undefined;
+  now: number;
+  onClose: () => void;
+}) {
+  const [detail, setDetail] = useState<AgentFailureDetail | null>(null);
+  const [loadError, setLoadError] = useState('');
+  useCloseOnEscape(onClose);
+  useEffect(() => {
+    let active = true;
+    setDetail(null);
+    setLoadError('');
+    void api<AgentFailureDetail>(`/api/reviews/${encodeURIComponent(id)}/agent-failure`)
+      .then((value) => { if (active) setDetail(value); })
+      .catch((caught) => {
+        if (active) setLoadError(caught instanceof Error ? caught.message : String(caught));
+      });
+    return () => { active = false; };
+  }, [id]);
+  return <div className="modal-backdrop" onMouseDown={onClose}>
+    <section className="failure-modal" role="dialog" aria-modal="true" aria-labelledby="agent-failure-title" onMouseDown={(event) => event.stopPropagation()}>
+      <button className="drawer-close" type="button" aria-label="Close agent failure details" onClick={onClose}>×</button>
+      <span className="section-label">AI REVIEW FAILURE</span>
+      <h2 id="agent-failure-title">{detail ? `${repositoryName(detail.review.repository)} #${detail.review.number}` : 'Agent failed'}</h2>
+      {detail && <p className="failure-title">{detail.review.title}</p>}
+      {!detail && !loadError && <p className="failure-loading">Loading failure details…</p>}
+      {loadError && <p className="inline-error">{loadError}</p>}
+      {detail && <div className="failure-content">
+        <section className="failure-section">
+          <h3>Error</h3>
+          <pre><code>{detail.error || 'The agent failed without recording an error message.'}</code></pre>
+        </section>
+        {detail.runs.map((run) => <section className="failure-run" key={run.id}>
+          <header>
+            <strong>{run.agent}</strong>
+            <span>{run.status}</span>
+            <span>{run.model}</span>
+            <span>{run.effort === 'CLI default' ? 'default effort' : `${run.effort} effort`}</span>
+            <time title={formatSyncTimestamp(run.finished_at || run.started_at, timezone)}>{formatElapsed(run.finished_at || run.started_at, now)} ago</time>
+          </header>
+          {run.error && run.error !== detail.error && <div className="failure-section"><h3>Agent error</h3><pre><code>{run.error}</code></pre></div>}
+          {run.output && <div className="failure-section"><h3>Log output</h3><pre><code>{run.output}</code></pre></div>}
+        </section>)}
+        {!detail.runs.length && <p className="failure-empty">No agent-run log was recorded for this failure.</p>}
+      </div>}
+    </section>
+  </div>;
+}
+
+function ReviewDrawer({ id, timezone, now, onClose, onChanged, onAgentFailed }: { id: string; timezone: string | undefined; now: number; onClose: () => void; onChanged: () => Promise<void>; onAgentFailed: () => void }) {
   const [review, setReview] = useState<Review | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [timeline, setTimeline] = useState<ReviewTimelineEvent[]>([]);
@@ -597,11 +748,14 @@ function ReviewDrawer({ id, timezone, now, onClose, onChanged }: { id: string; t
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+  const [agentWorkspace, setAgentWorkspace] = useState<ReviewAgentWorkspace | null>(null);
+  const [workspaceWrite, setWorkspaceWrite] = useState(false);
   useCloseOnEscape(onClose);
-  const load = useCallback(async () => { const detail = await api<{ review: Review; messages: ChatMessage[]; timeline?: ReviewTimelineEvent[] }>(`/api/reviews/${encodeURIComponent(id)}`); setReview(detail.review); setMessages(detail.messages); setTimeline(detail.timeline || []); }, [id]);
+  const load = useCallback(async () => { const detail = await api<{ review: Review; messages: ChatMessage[]; timeline?: ReviewTimelineEvent[]; agentWorkspace?: ReviewAgentWorkspace | null }>(`/api/reviews/${encodeURIComponent(id)}`); setReview(detail.review); setMessages(detail.messages); setTimeline(detail.timeline || []); setAgentWorkspace(detail.agentWorkspace || null); }, [id]);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { setWorkspaceWrite(false); }, [id]);
   const action = async (name: string, operation: () => Promise<unknown>) => { setBusy(name); setError(''); try { await operation(); await load(); await onChanged(); } catch (caught) { setError(caught instanceof Error ? caught.message : String(caught)); } finally { setBusy(''); } };
-  const send = async (event: FormEvent) => { event.preventDefault(); if (busy || !message.trim()) return; const text = message; setMessage(''); await action('chat', () => api(`/api/reviews/${encodeURIComponent(id)}/chat`, { method: 'POST', body: JSON.stringify({ message: text }) })); };
+  const send = async (event: FormEvent) => { event.preventDefault(); if (busy || !message.trim()) return; const text = message; setMessage(''); await action('chat', () => api(`/api/reviews/${encodeURIComponent(id)}/chat`, { method: 'POST', body: JSON.stringify({ message: text, workspaceWrite }) })); };
   const submitOnEnter = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (!shouldSubmitChat(event.key, event.shiftKey, event.nativeEvent.isComposing)) return;
     event.preventDefault();
@@ -609,7 +763,7 @@ function ReviewDrawer({ id, timezone, now, onClose, onChanged }: { id: string; t
   };
 
   return <div className="drawer-backdrop" onMouseDown={onClose}><aside className="drawer" onMouseDown={(event) => event.stopPropagation()}><button className="drawer-close" onClick={onClose}>×</button>
-    {!review ? <p>Loading review…</p> : <><div className="drawer-details"><div className="drawer-review-heading"><span className="section-label">{review.repository} · #{review.number} · BY {review.author.startsWith('@') ? review.author : `@${review.author}`}</span><div className="drawer-status"><ReviewStatusBadge status={reviewDisplayStatus(review)} />{review.pending_reason && <span>Queued: {review.pending_reason.replaceAll('_', ' ')}</span>}</div></div><h2>{review.title}</h2><p className="plain-summary"><InlineCode text={review.simple_summary} /></p><FixedIssues review={review} />
+    {!review ? <p>Loading review…</p> : <><div className="drawer-details"><div className="drawer-review-heading"><span className="section-label">{review.repository} · #{review.number} · BY {review.author.startsWith('@') ? review.author : `@${review.author}`}</span><div className="drawer-status"><ReviewStatusBadge status={reviewDisplayStatus(review)} onAgentFailed={onAgentFailed} />{review.pending_reason && <span>Queued: {review.pending_reason.replaceAll('_', ' ')}</span>}</div></div><h2>{review.title}</h2><p className="plain-summary"><InlineCode text={review.simple_summary} /></p><FixedIssues review={review} />
       <div className="drawer-review-metadata"><ReviewMetadata review={review} timezone={timezone} now={now} /></div>
       <div className="drawer-actions"><button disabled={!!busy || review.is_draft} onClick={() => void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: '{}' }))}>{review.is_draft ? 'Draft — no review' : busy === 'review' ? 'Starting…' : '▶ Agent review'}</button><button disabled={!!busy} onClick={() => void action('workspace', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'POST', body: '{}' }))}>{busy === 'workspace' ? 'Cloning & building…' : review.workspace_path ? 'Rebuild workspace' : 'Prepare locally'}</button>{review.workspace_path && <button disabled={!!busy} onClick={() => void action('cleanup', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'DELETE' }))}>Clean up</button>}<a href={review.url} target="_blank">Open GitHub ↗</a></div>
       {review.workspace_path && <code className="workspace-path">{review.workspace_path}</code>}{error && <p className="inline-error">{error}</p>}</div>
@@ -618,7 +772,7 @@ function ReviewDrawer({ id, timezone, now, onClose, onChanged }: { id: string; t
         <button type="button" role="tab" aria-selected={tab === 'timeline'} className={tab === 'timeline' ? 'active' : ''} onClick={() => setTab('timeline')}>Timeline</button>
       </div>
       {tab === 'review-room' ? <section className="review-room" role="tabpanel"><div className="chat-log">{!messages.length && <p className="chat-empty">Ask what changed, why it matters, what could break, or how to test it.</p>}{messages.map((entry) => <div className={`message ${entry.role}`} key={entry.id}><span>{entry.author}</span><div className="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(entry.content) }} /></div>)}{busy === 'chat' && <div className="message assistant"><span>agent</span><p className="typing">Thinking…</p></div>}</div>
-      <form className="chat-form" onSubmit={(event) => void send(event)}><textarea value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={submitOnEnter} placeholder="Ask about this pull request…" /></form></section>
+      <form className="chat-form" onSubmit={(event) => void send(event)}>{agentWorkspace && <label className="chat-workspace"><input type="checkbox" checked={workspaceWrite} onChange={(event) => setWorkspaceWrite(event.target.checked)} /><span>Work in local branch <strong>{agentWorkspace.branchName}</strong><small>{agentWorkspace.path}</small></span></label>}<textarea value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={submitOnEnter} placeholder="Ask about this pull request…" /></form></section>
       : <section className="review-timeline" role="tabpanel">{timeline.length ? <ol>{timeline.map((event) => <li key={event.id}>
         <time title={formatSyncTimestamp(event.created_at, timezone)}>{formatTimelineTime(event.created_at, timezone)}</time>
         {event.agents.length ? <span className="timeline-agent" tabIndex={0} title={event.agents.map((agent) => `${agent.provider}: ${agent.model}, ${agent.effort === 'CLI default' ? 'default effort' : `${agent.effort} effort`}`).join('\n')}>{event.label}<span className="timeline-agent-tooltip" role="tooltip">{event.agents.map((agent) => <span key={`${event.id}:${agent.provider}`}><strong>{agent.provider}</strong><span>{agent.model}</span><span>{agent.effort === 'CLI default' ? 'Default effort' : `${agent.effort} effort`}</span></span>)}</span></span> : <span>{event.label}</span>}

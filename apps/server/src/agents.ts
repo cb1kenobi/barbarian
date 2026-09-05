@@ -120,6 +120,7 @@ export async function executeAgent(
   const runId = options.runId || createAgentRun(
     database, config, reviewId, task, prompt, requestedProvider, claim, options,
   );
+  let capturedOutput = '';
   if (options.runId) {
     database.connection.prepare('UPDATE agent_runs SET prompt=? WHERE id=? AND status=\'running\'')
       .run(prompt, runId);
@@ -137,6 +138,7 @@ export async function executeAgent(
       ...(options.cwd ? { cwd: options.cwd } : {}),
       ...(signal ? { signal } : {}),
     });
+    capturedOutput = result.stdout;
     if (result.exitCode !== 0) throw new Error(result.stderr.trim() || `${provider.command} exited ${result.exitCode}`);
     database.connection.prepare(`
       UPDATE agent_runs SET status='complete', finished_at=?, output=?, prompt='' WHERE id=?
@@ -146,8 +148,8 @@ export async function executeAgent(
     const cancelled = Boolean(signal?.aborted);
     const message = cancelled ? 'Stopped by user' : error instanceof Error ? error.message : String(error);
     database.connection.prepare(`
-      UPDATE agent_runs SET status=?, finished_at=?, error=?, prompt='' WHERE id=?
-    `).run(cancelled ? 'cancelled' : 'failed', new Date().toISOString(), message, runId);
+      UPDATE agent_runs SET status=?, finished_at=?, output=?, error=?, prompt='' WHERE id=?
+    `).run(cancelled ? 'cancelled' : 'failed', new Date().toISOString(), capturedOutput, message, runId);
     throw error;
   }
 }

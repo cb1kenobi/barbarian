@@ -17,7 +17,7 @@ export function authoredPullRequestsNeedingAttention(
     SELECT review_queue.*,
       CASE WHEN review_decision='APPROVED' THEN 1 ELSE 0 END AS approved,
       CASE WHEN status='issues_found'
-        OR review_decision='CHANGES_REQUESTED'
+        OR (review_decision='CHANGES_REQUESTED' AND status<>'ready_to_merge')
         OR EXISTS (
           SELECT 1 FROM review_findings
           WHERE review_findings.review_id=review_queue.id

@@ -24,10 +24,13 @@ import { reviewCardMetadata, type ReviewCardMetadata } from './review-card-metad
 import { fixedIssueReferences } from './fixed-issues.js';
 import { configuredAgentEffort, configuredAgentModel } from './agent-display.js';
 import { agentSelectionForTask } from './agent-config.js';
-import { agentProviderCapabilities, agentProviderFamily } from './agent-provider.js';
+import {
+  agentProviderCapabilities, agentProviderFamily, agentProviderSupportsWorkspaceWrite,
+} from './agent-provider.js';
 import { discoverAgentModels, type AgentModelOption } from './agent-models.js';
 import { authoredPullRequestsNeedingAttention } from './authored-pull-requests.js';
 import { authenticatedGithubLogin } from './github-identity.js';
+import { resolveReviewWorkspace, type ReviewWorkspace } from './review-workspace.js';
 import {
   askLocalBranchAgent,
   LocalBranchInputError,
@@ -42,6 +45,7 @@ const chatBody = z.object({
   provider: z.string().optional(),
   askAgent: z.boolean().default(true),
   author: z.string().default('Developer'),
+  workspaceWrite: z.boolean().default(false),
   selection: z.object({
     text: z.string().max(16_000),
     path: z.string().max(2_000).optional(),
@@ -277,6 +281,7 @@ function agentRunView(config: BarbarianConfig, row: Record<string, unknown>) {
   const agent = String(row.provider);
   const repository = row.review_repository || row.issue_repository || row.branch_repository || null;
   const title = row.review_title || row.issue_title || row.branch_name || String(row.task).replaceAll('_', ' ');
+  const pullRequestUrl = row.review_url || row.branch_pull_request_url || null;
   return {
     id: Number(row.id),
     review_id: row.review_id ? String(row.review_id) : null,
@@ -293,7 +298,8 @@ function agentRunView(config: BarbarianConfig, row: Record<string, unknown>) {
       ? row.issue_number === null || row.issue_number === undefined ? null : Number(row.issue_number)
       : Number(row.review_number),
     title: String(title),
-    url: row.review_url || row.issue_url ? String(row.review_url || row.issue_url) : null,
+    url: pullRequestUrl || row.issue_url ? String(pullRequestUrl || row.issue_url) : null,
+    pull_request_url: pullRequestUrl ? String(pullRequestUrl) : null,
     branch_name: row.branch_name ? String(row.branch_name) : null,
   };
 }
@@ -403,7 +409,8 @@ const agentRunColumns = `
   work_items.title AS issue_title,
   work_items.url AS issue_url,
   local_branches.repository AS branch_repository,
-  local_branches.branch_name AS branch_name
+  local_branches.branch_name AS branch_name,
+  local_branches.pull_request_url AS branch_pull_request_url
 `;
 
 const agentRunJoins = `
@@ -419,9 +426,14 @@ const agentRunSelect = `
 `;
 
 const agentRunDetailSelect = `
-  SELECT agent_runs.command, agent_runs.prompt, agent_runs.error, ${agentRunColumns}
+  SELECT agent_runs.command, agent_runs.prompt, agent_runs.output, agent_runs.error, ${agentRunColumns}
   ${agentRunJoins}
 `;
+
+const agentRunHistoryQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  before: z.coerce.number().int().positive().optional(),
+});
 
 function normalizedHostname(host: string): string | null {
   try { return new URL(`http://${host}`).hostname.replace(/^\[|\]$/g, '').toLowerCase(); }
@@ -526,6 +538,7 @@ export async function createApp(
   const initialConfig = configStore.get();
   const activeServer = services.activeServer || initialConfig.server;
   const runtime = services.runtime || new AgentRuntime(initialConfig.agents.maxConcurrent);
+  const activeWritableBranches = new Set<string>();
   const dispatcher = services.dispatcher || new ReviewDispatcher(database, () => configStore.get(), runtime, app.log);
   const refreshReview = services.refreshReview || refreshReviewContext;
   const refreshIssue = services.refreshIssue || refreshGithubIssue;
@@ -653,6 +666,28 @@ export async function createApp(
     };
   });
 
+  app.get('/api/agent-runs', async (request, reply) => {
+    if (!dashboardApiAllowed(request.headers.origin, request.headers.host, activeServer)) return reply.code(403).send({ error: 'Dashboard access required' });
+    const query = agentRunHistoryQuery.safeParse(request.query);
+    if (!query.success) return reply.code(400).send({ error: 'Invalid agent run history query' });
+    const { before, limit } = query.data;
+    const rows = (before
+      ? database.connection.prepare(`
+        ${agentRunSelect}
+        WHERE agent_runs.id < ?
+        ORDER BY agent_runs.id DESC LIMIT ?
+      `).all(before, limit + 1)
+      : database.connection.prepare(`
+        ${agentRunSelect}
+        ORDER BY agent_runs.id DESC LIMIT ?
+      `).all(limit + 1)) as Array<Record<string, unknown>>;
+    const page = rows.slice(0, limit);
+    return {
+      runs: page.map((row) => agentRunView(configStore.get(), row)),
+      nextBefore: rows.length > limit ? Number(page.at(-1)!.id) : null,
+    };
+  });
+
   app.get('/api/agent-runs/:id/status', async (request, reply) => {
     if (!dashboardApiAllowed(request.headers.origin, request.headers.host, activeServer)) return reply.code(403).send({ error: 'Dashboard access required' });
     const id = z.coerce.number().int().positive().safeParse((request.params as { id: string }).id);
@@ -675,6 +710,7 @@ export async function createApp(
       ...agentRunView(configStore.get(), row),
       command: String(row.command || ''),
       prompt: String(row.prompt || ''),
+      output: String(row.output || ''),
       error: row.error ? String(row.error) : null,
     };
   });
@@ -755,6 +791,53 @@ export async function createApp(
     });
   });
 
+  app.get('/api/reviews/:id/agent-failure', async (request, reply) => {
+    if (!dashboardApiAllowed(request.headers.origin, request.headers.host, activeServer)) {
+      return reply.code(403).send({ error: 'Dashboard access required' });
+    }
+    const config = configStore.get();
+    const id = decodeURIComponent((request.params as { id: string }).id);
+    const review = database.connection.prepare(`
+      SELECT id, repository, number, title, last_agent_error FROM review_queue WHERE id=?
+    `).get(id) as {
+      id: string; repository: string; number: number; title: string; last_agent_error: string | null;
+    } | undefined;
+    if (!review) return reply.code(404).send({ error: 'Review not found' });
+    const runs = database.connection.prepare(`
+      WITH latest_round AS (
+        SELECT created_at FROM activity_events
+        WHERE subject_id=? AND kind='review_started'
+        ORDER BY created_at DESC, id DESC LIMIT 1
+      ), latest_run AS (
+        SELECT id FROM agent_runs
+        WHERE review_id=? AND task LIKE 'code_review:%'
+        ORDER BY id DESC LIMIT 1
+      )
+      SELECT id, provider, task, status, started_at, finished_at, model, effort, output, error
+      FROM agent_runs
+      WHERE review_id=? AND task LIKE 'code_review:%' AND (
+        started_at>=(SELECT created_at FROM latest_round)
+        OR ((SELECT created_at FROM latest_round) IS NULL AND id=(SELECT id FROM latest_run))
+      )
+      ORDER BY id ASC
+    `).all(id, id, id) as Array<Record<string, unknown>>;
+    return {
+      review: { id: review.id, repository: review.repository, number: review.number, title: review.title },
+      error: review.last_agent_error || runs.find((run) => run.error)?.error || null,
+      runs: runs.map((run) => ({
+        id: Number(run.id),
+        agent: String(run.provider),
+        model: String(run.model || '') || configuredAgentModel(config, String(run.provider), String(run.task)),
+        effort: String(run.effort || '') || configuredAgentEffort(config, String(run.provider), String(run.task)),
+        status: String(run.status),
+        started_at: String(run.started_at),
+        finished_at: run.finished_at ? String(run.finished_at) : null,
+        error: run.error ? String(run.error) : null,
+        output: String(run.output || ''),
+      })),
+    };
+  });
+
   app.get('/api/reviews/:id', async (request, reply) => {
     const config = configStore.get();
     const id = decodeURIComponent((request.params as { id: string }).id);
@@ -768,7 +851,17 @@ export async function createApp(
       FROM agent_runs WHERE review_id=? ORDER BY id DESC LIMIT 20
     `).all(id);
     const record = review as Record<string, unknown>;
-    const payload = { ...reviewContextPayload(database, config, record), messages, runs, timeline: reviewTimeline(database, config, id) };
+    let agentWorkspace: ReviewWorkspace | null = null;
+    const chatProvider = config.agents.providers[config.agents.chat.provider];
+    if (chatProvider
+      && agentProviderSupportsWorkspaceWrite(chatProvider.command)
+      && localAgentApiAllowed(request.headers.origin, request.headers.host, activeServer)) {
+      agentWorkspace = await resolveReviewWorkspace(database, id);
+    }
+    const payload = {
+      ...reviewContextPayload(database, config, record), messages, runs,
+      timeline: reviewTimeline(database, config, id), agentWorkspace,
+    };
     markAuthoredFeedbackSeen(database, config, record);
     return payload;
   });
@@ -789,23 +882,50 @@ export async function createApp(
     const body = chatBody.parse(request.body);
     const review = database.connection.prepare('SELECT id FROM review_queue WHERE id=?').get(id);
     if (!review) return reply.code(404).send({ error: 'Review not found' });
-    const now = new Date().toISOString();
-    database.connection.prepare(`
-      INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'user', ?, ?, ?)
-    `).run(id, body.author, body.message, now);
-    if (!body.askAgent) return { message: null };
-    const runtimeKey = `agent-run:${randomUUID()}`;
-    const response = await runtime.run(
-      (signal) => askAgent(database, config, id, body.message, body.provider, signal, {
+    let agentWorkspace: ReviewWorkspace | null = null;
+    const selectedProvider = body.provider || config.agents.chat.provider;
+    const provider = config.agents.providers[selectedProvider];
+    if (body.askAgent && body.workspaceWrite
+      && localAgentApiAllowed(request.headers.origin, request.headers.host, activeServer)) {
+      if (!provider || !agentProviderSupportsWorkspaceWrite(provider.command)) {
+        return reply.code(409).send({ error: 'The selected agent does not support editable local workspaces' });
+      }
+      agentWorkspace = await resolveReviewWorkspace(database, id);
+      if (!agentWorkspace) {
+        return reply.code(409).send({ error: 'The linked local branch is no longer available or checked out' });
+      }
+      if (activeWritableBranches.has(agentWorkspace.branchId)) {
+        return reply.code(409).send({ error: 'An agent is already working in this local branch' });
+      }
+      activeWritableBranches.add(agentWorkspace.branchId);
+    }
+    const writableBranchId = agentWorkspace?.branchId;
+    try {
+      const now = new Date().toISOString();
+      database.connection.prepare(`
+        INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'user', ?, ?, ?)
+      `).run(id, body.author, body.message, now);
+      if (!body.askAgent) return { message: null };
+      const runtimeKey = `agent-run:${randomUUID()}`;
+      const response = await runtime.run(
+        (signal) => askAgent(database, config, id, body.message, body.provider, signal, {
+          runtimeKey,
+          ...(agentWorkspace ? {
+            branchId: agentWorkspace.branchId,
+            cwd: agentWorkspace.path,
+            workspaceWrite: true,
+          } : {}),
+          ...(body.selection ? { untrustedSelection: body.selection } : {}),
+        }),
         runtimeKey,
-        ...(body.selection ? { untrustedSelection: body.selection } : {}),
-      }),
-      runtimeKey,
-    );
-    const inserted = database.connection.prepare(`
-      INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'assistant', ?, ?, ?)
-    `).run(id, body.provider || agentSelectionForTask(config, 'chat').provider, response, new Date().toISOString());
-    return { message: { id: Number(inserted.lastInsertRowid), role: 'assistant', author: body.provider || agentSelectionForTask(config, 'chat').provider, content: response } };
+      );
+      const inserted = database.connection.prepare(`
+        INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'assistant', ?, ?, ?)
+      `).run(id, body.provider || agentSelectionForTask(config, 'chat').provider, response, new Date().toISOString());
+      return { message: { id: Number(inserted.lastInsertRowid), role: 'assistant', author: body.provider || agentSelectionForTask(config, 'chat').provider, content: response } };
+    } finally {
+      if (writableBranchId) activeWritableBranches.delete(writableBranchId);
+    }
   });
 
   app.post('/api/reviews/:id/track', async (request, reply) => {

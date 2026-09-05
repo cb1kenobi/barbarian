@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { agentInvocationArgs, agentProviderCapabilities } from './agent-provider.js';
+import {
+  agentInvocationArgs, agentProviderCapabilities, agentProviderSupportsWorkspaceWrite,
+} from './agent-provider.js';
 
 describe('agent provider options', () => {
   it('applies Codex model and effort before the stdin prompt', () => {
@@ -55,5 +57,12 @@ describe('agent provider options', () => {
     expect(agentInvocationArgs({ command: 'custom-reviewer', args: ['review'], model: 'metadata-only' }))
       .toEqual(['review']);
     expect(agentProviderCapabilities('custom-reviewer')).toEqual({ model: false, effort: false });
+  });
+
+  it('offers editable workspaces only for providers with a non-interactive write mode', () => {
+    expect(agentProviderSupportsWorkspaceWrite('/usr/local/bin/codex')).toBe(true);
+    expect(agentProviderSupportsWorkspaceWrite('cursor-agent')).toBe(true);
+    expect(agentProviderSupportsWorkspaceWrite('claude')).toBe(false);
+    expect(agentProviderSupportsWorkspaceWrite('custom-reviewer')).toBe(false);
   });
 });

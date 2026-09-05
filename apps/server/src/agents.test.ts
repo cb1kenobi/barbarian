@@ -332,6 +332,20 @@ describe('runReviewAgent', () => {
     database.close();
   });
 
+  it('keeps stdout from a failed agent as diagnostic log output', async () => {
+    const { database, config, claim } = setup(
+      "console.log('partial diagnostic'); console.error('provider exploded'); process.exit(2)",
+    );
+    await expect(runReviewAgent(database, config, claim, undefined, dependencies))
+      .rejects.toThrow('provider exploded');
+    expect(database.connection.prepare(`
+      SELECT status, output, error FROM agent_runs ORDER BY id DESC LIMIT 1
+    `).get()).toMatchObject({
+      status: 'failed', output: 'partial diagnostic\n', error: 'provider exploded',
+    });
+    database.close();
+  });
+
   it('releases the claim when the configured provider is unavailable', async () => {
     const { database, config, claim } = setup("console.log('unused')");
     config.agents.codeReview = { missing: { enabled: true, model: '', effort: '' } };

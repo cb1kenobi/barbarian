@@ -23,6 +23,11 @@ export function agentProviderCapabilities(command: string): AgentProviderCapabil
   };
 }
 
+export function agentProviderSupportsWorkspaceWrite(command: string): boolean {
+  const family = agentProviderFamily(command);
+  return family === 'codex' || family === 'cursor';
+}
+
 function withoutOption(args: string[], names: string[]): string[] {
   const filtered: string[] = [];
   for (let index = 0; index < args.length; index += 1) {

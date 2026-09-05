@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -72,6 +72,129 @@ describe('browser origin policy', () => {
 });
 
 describe('agent runs', () => {
+  it('pages every run newest first and exposes retained details only to the dashboard', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-agent-history-test-'));
+    directories.push(directory);
+    const database = new BarbarianDatabase(path.join(directory, 'test.db'));
+    const now = new Date().toISOString();
+    database.connection.prepare(`
+      INSERT INTO review_queue(
+        id, repository, number, title, url, author, head_sha, head_ref_name, base_ref_name,
+        first_seen_at, updated_at, last_seen_at
+      ) VALUES ('github:Acme/storage#6', 'Acme/storage', 6, 'Review run',
+        'https://github.com/Acme/storage/pull/6', 'author', 'head', 'feature', 'main', ?, ?, ?)
+    `).run(now, now, now);
+    database.connection.prepare(`
+      INSERT INTO local_branches(
+        id,repository,remote_url,branch_name,base_branch,base_ref,head_sha,workspace_path,
+        pull_request_url,first_seen_at,updated_at,last_seen_at
+      ) VALUES ('branch:history','Acme/storage','git@github.com:Acme/storage.git','feature/history',
+        'main','origin/main','abcdef1','/tmp/storage','https://github.com/Acme/storage/pull/7',?,?,?)
+    `).run(now, now, now);
+    const reviewRun = database.connection.prepare(`
+      INSERT INTO agent_runs(review_id,provider,task,status,started_at,finished_at,command,prompt,output)
+      VALUES ('github:Acme/storage#6','codex','code_review:manual','complete',?,?,'codex exec -','','review output')
+    `).run(now, now);
+    const branchRun = database.connection.prepare(`
+      INSERT INTO agent_runs(branch_id,provider,task,status,started_at,finished_at,error)
+      VALUES ('branch:history','codex','local_branch_review','failed',?,?,'review failed')
+    `).run(now, now);
+    const runningRun = database.connection.prepare(`
+      INSERT INTO agent_runs(provider,task,status,started_at,prompt)
+      VALUES ('codex','chat','running',?,'current prompt')
+    `).run(now);
+    const app = await createApp(database, new ConfigStore(config));
+    try {
+      const firstPageResponse = await app.inject({ method: 'GET', url: '/api/agent-runs?limit=2' });
+      expect(firstPageResponse.statusCode).toBe(200);
+      const firstPage = firstPageResponse.json() as {
+        runs: Array<Record<string, unknown>>;
+        nextBefore: number | null;
+      };
+      expect(firstPage.runs.map((run) => run.id)).toEqual([
+        Number(runningRun.lastInsertRowid), Number(branchRun.lastInsertRowid),
+      ]);
+      expect(firstPage.nextBefore).toBe(Number(branchRun.lastInsertRowid));
+      expect(firstPage.runs[0]).not.toHaveProperty('command');
+      expect(firstPage.runs[0]).not.toHaveProperty('prompt');
+      expect(firstPage.runs[0]).not.toHaveProperty('output');
+
+      const secondPageResponse = await app.inject({
+        method: 'GET', url: `/api/agent-runs?limit=2&before=${firstPage.nextBefore}`,
+      });
+      expect(secondPageResponse.statusCode).toBe(200);
+      expect(secondPageResponse.json()).toMatchObject({
+        runs: [{ id: Number(reviewRun.lastInsertRowid) }], nextBefore: null,
+      });
+
+      const reviewDetail = await app.inject({
+        method: 'GET', url: `/api/agent-runs/${Number(reviewRun.lastInsertRowid)}`,
+      });
+      expect(reviewDetail.statusCode).toBe(200);
+      expect(reviewDetail.json()).toMatchObject({
+        prompt: '', output: 'review output',
+        pull_request_url: 'https://github.com/Acme/storage/pull/6',
+      });
+      const branchDetail = await app.inject({
+        method: 'GET', url: `/api/agent-runs/${Number(branchRun.lastInsertRowid)}`,
+      });
+      expect(branchDetail.json()).toMatchObject({
+        pull_request_url: 'https://github.com/Acme/storage/pull/7',
+      });
+
+      const extensionHistory = await app.inject({
+        method: 'GET', url: '/api/agent-runs',
+        headers: { origin: 'chrome-extension://unrelated-extension' },
+      });
+      expect(extensionHistory.statusCode).toBe(403);
+      const otherLocalAppHistory = await app.inject({
+        method: 'GET', url: '/api/agent-runs',
+        headers: { origin: 'http://localhost:3000' },
+      });
+      expect(otherLocalAppHistory.statusCode).toBe(403);
+
+      database.connection.prepare(`
+        UPDATE review_queue SET status='agent_failed', last_agent_error='Latest review round failed'
+        WHERE id='github:Acme/storage#6'
+      `).run();
+      const roundStarted = new Date(Date.parse(now) + 1_000).toISOString();
+      database.connection.prepare(`
+        INSERT INTO activity_events(kind,subject_id,summary,created_at)
+        VALUES ('review_started','github:Acme/storage#6','Review started',?)
+      `).run(roundStarted);
+      const failedRun = database.connection.prepare(`
+        INSERT INTO agent_runs(
+          review_id,provider,task,status,started_at,finished_at,output,error,owner,model,effort
+        ) VALUES (
+          'github:Acme/storage#6','codex','code_review:manual','failed',?,?,'partial log','provider failed',
+          'round-2','gpt-review','high'
+        )
+      `).run(roundStarted, roundStarted);
+      const completedPeer = database.connection.prepare(`
+        INSERT INTO agent_runs(review_id,provider,task,status,started_at,finished_at,output,owner)
+        VALUES ('github:Acme/storage#6','claude','code_review:manual','complete',?,?,'peer log','round-2')
+      `).run(roundStarted, roundStarted);
+      const failureDetail = await app.inject({
+        method: 'GET', url: '/api/reviews/github%3AAcme%2Fstorage%236/agent-failure',
+      });
+      expect(failureDetail.statusCode).toBe(200);
+      expect(failureDetail.json()).toMatchObject({
+        review: { id: 'github:Acme/storage#6', repository: 'Acme/storage', number: 6 },
+        error: 'Latest review round failed',
+        runs: [
+          {
+            id: Number(failedRun.lastInsertRowid), agent: 'codex', status: 'failed',
+            model: 'gpt-review', effort: 'high', error: 'provider failed', output: 'partial log',
+          },
+          { id: Number(completedPeer.lastInsertRowid), agent: 'claude', status: 'complete', output: 'peer log' },
+        ],
+      });
+    } finally {
+      await app.close();
+      database.close();
+    }
+  });
+
   it('rejects a manual agent review for a draft pull request', async () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-draft-review-test-'));
     directories.push(directory);
@@ -396,6 +519,10 @@ describe('dashboard reviews', () => {
     addReview(5, 'cb1kenobi', 'unreviewed', null, '', null);
     addReview(6, 'cb1kenobi', 'unreviewed', 'APPROVED', '2026-01-02T06:00:00Z', '2026-01-01T06:00:00Z');
     addReview(7, 'cb1kenobi', 'unreviewed', null, '2026-01-02T07:00:00Z', null);
+    addReview(9, 'cb1kenobi', 'ready_to_merge', 'CHANGES_REQUESTED', '2026-01-02T09:00:00Z', null);
+    database.connection.prepare(`
+      UPDATE review_queue SET author_seen_watermark=discussion_watermark WHERE number=9
+    `).run();
 
     const app = await createApp(database, new ConfigStore(config));
     try {
@@ -411,6 +538,7 @@ describe('dashboard reviews', () => {
         expect.objectContaining({ number: 1, is_draft: false, display_status: 'unreviewed' }),
       ]);
       expect(payload.feedback).toEqual([
+        expect.objectContaining({ number: 9, approved: false, has_new_feedback: false }),
         expect.objectContaining({ number: 7, approved: false, has_new_feedback: true }),
         expect.objectContaining({ number: 6, approved: true, has_new_feedback: true }),
         expect.objectContaining({ number: 5, approved: false, has_new_feedback: false }),
@@ -663,6 +791,7 @@ describe('local branch context', () => {
     if (!existsSync(path.join(workspacePath, '.git'))) {
       execFileSync('git', ['init', '-b', 'main'], { cwd: workspacePath });
       execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:Acme/storage.git'], { cwd: workspacePath });
+      execFileSync('git', ['checkout', '-b', 'feature/local-review'], { cwd: workspacePath });
     }
     return ({
     remote: 'git@github.com:Acme/storage.git',
@@ -870,6 +999,107 @@ describe('local branch context', () => {
       expect(database.connection.prepare(`
         SELECT branch_id FROM agent_runs ORDER BY id DESC LIMIT 1
       `).get()).toEqual({ branch_id: branch.id });
+    } finally {
+      await app.close();
+      database.close();
+    }
+  });
+
+  it('lets the dashboard explicitly run a pull request room agent in its validated local branch', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-dashboard-chat-cwd-test-'));
+    directories.push(directory);
+    const database = new BarbarianDatabase(path.join(directory, 'test.db'));
+    const current = structuredClone(config);
+    const codexStub = path.join(directory, 'codex');
+    writeFileSync(
+      codexStub,
+      `#!/bin/sh\n${JSON.stringify(process.execPath)} -e 'console.log(process.cwd())'\n`,
+      { mode: 0o755 },
+    );
+    current.agents.chat.provider = 'fake';
+    current.agents.providers = {
+      fake: { command: codexStub, args: ['exec', '--sandbox', 'read-only', '-'] },
+    };
+    const now = new Date().toISOString();
+    database.connection.prepare(`
+      INSERT INTO review_queue(
+        id, repository, number, title, url, author, head_sha, head_ref_name, base_ref_name,
+        first_seen_at, updated_at, last_seen_at
+      ) VALUES (
+        'github:Acme/storage#8', 'Acme/storage', 8, 'Dashboard PR',
+        'https://github.com/Acme/storage/pull/8', 'author', ?, 'feature/local-review', 'main', ?, ?, ?
+      )
+    `).run(branchPayload(directory).headSha, now, now, now);
+    const app = await createApp(database, new ConfigStore(current));
+    try {
+      const context = await app.inject({
+        method: 'POST', url: '/api/local/branches/context', payload: branchPayload(directory),
+      });
+      const branch = (context.json() as { branch: { id: string } }).branch;
+
+      const detail = await app.inject({
+        method: 'GET', url: '/api/reviews/github%3AAcme%2Fstorage%238',
+      });
+      expect(detail.json()).toMatchObject({
+        agentWorkspace: {
+          branchId: branch.id, branchName: 'feature/local-review', path: realpathSync(directory),
+        },
+      });
+
+      const readOnly = await app.inject({
+        method: 'POST', url: '/api/reviews/github%3AAcme%2Fstorage%238/chat',
+        payload: { message: 'Explain the fix.' },
+      });
+      expect(readOnly.statusCode).toBe(200);
+      expect(database.connection.prepare(`
+        SELECT branch_id, command FROM agent_runs ORDER BY id DESC LIMIT 1
+      `).get()).toMatchObject({
+        branch_id: null, command: expect.stringContaining('--sandbox read-only'),
+      });
+
+      const response = await app.inject({
+        method: 'POST', url: '/api/reviews/github%3AAcme%2Fstorage%238/chat',
+        payload: { message: 'Apply the fix.', workspaceWrite: true },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ message: { content: realpathSync(directory) } });
+      expect(database.connection.prepare(`
+        SELECT branch_id, command FROM agent_runs ORDER BY id DESC LIMIT 1
+      `).get()).toMatchObject({
+        branch_id: branch.id, command: expect.stringContaining('--sandbox workspace-write'),
+      });
+
+      const extensionDetail = await app.inject({
+        method: 'GET', url: '/api/reviews/github%3AAcme%2Fstorage%238',
+        headers: { origin: 'chrome-extension://barbarian' },
+      });
+      expect(extensionDetail.statusCode).toBe(200);
+      expect(extensionDetail.json()).toMatchObject({ agentWorkspace: null });
+      const extension = await app.inject({
+        method: 'POST', url: '/api/reviews/github%3AAcme%2Fstorage%238/chat',
+        headers: { origin: 'chrome-extension://barbarian' },
+        payload: { message: 'Apply from the extension.', workspaceWrite: true },
+      });
+      expect(extension.statusCode).toBe(200);
+      expect(database.connection.prepare(`
+        SELECT branch_id FROM agent_runs ORDER BY id DESC LIMIT 1
+      `).get()).toEqual({ branch_id: null });
+
+      database.connection.prepare('UPDATE local_branches SET branch_name=? WHERE id=?')
+        .run('feature/stale-link', branch.id);
+      const staleDetail = await app.inject({
+        method: 'GET', url: '/api/reviews/github%3AAcme%2Fstorage%238',
+      });
+      expect(staleDetail.statusCode).toBe(200);
+      expect(staleDetail.json()).toMatchObject({ agentWorkspace: null });
+      const staleWrite = await app.inject({
+        method: 'POST', url: '/api/reviews/github%3AAcme%2Fstorage%238/chat',
+        payload: { message: 'Apply from a stale checkout.', workspaceWrite: true },
+      });
+      expect(staleWrite.statusCode).toBe(409);
+      expect(staleWrite.json()).toEqual({
+        error: 'The linked local branch is no longer available or checked out',
+      });
     } finally {
       await app.close();
       database.close();
