@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent } from 'react';
+import { createPortal } from 'react-dom';
 import { formatLastSync, formatNextSync, formatSyncTimestamp, type SyncRun } from './sync-time';
 import { sortReviews, type ReviewSort } from './review-sort';
 import { countReviewsNeedingApproval, reviewDisplayStatus, reviewStatusGuide, statusLabel, statusTone } from './review-display';
@@ -750,6 +751,67 @@ function AgentFailureDialog({ id, timezone, now, onClose }: {
   </div>;
 }
 
+function ReviewAgentPicker({ reviewAgents, busy, isDraft, onSelect }: { reviewAgents: ReviewAgentOptions | null; busy: boolean; isDraft: boolean; onSelect: (agentId?: string) => void }) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [menuStyle, setMenuStyle] = useState<CSSProperties | null>(null);
+  const automaticAvailable = Boolean(reviewAgents?.agents.some((agent) => agent.available));
+  const positionMenu = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const edge = 12;
+    const gap = 5;
+    const width = Math.min(360, window.innerWidth - edge * 2);
+    const left = Math.max(edge, Math.min(rect.right - width, window.innerWidth - width - edge));
+    const spaceAbove = Math.max(0, rect.top - gap - edge);
+    const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - gap - edge);
+    const openAbove = spaceBelow < 220 && spaceAbove > spaceBelow;
+    setMenuStyle({
+      left,
+      width,
+      maxHeight: Math.min(360, openAbove ? spaceAbove : spaceBelow),
+      ...(openAbove ? { bottom: window.innerHeight - rect.top + gap } : { top: rect.bottom + gap }),
+    });
+  }, []);
+  useLayoutEffect(() => {
+    if (!open) return;
+    positionMenu();
+    window.addEventListener('resize', positionMenu);
+    window.addEventListener('scroll', positionMenu, true);
+    return () => {
+      window.removeEventListener('resize', positionMenu);
+      window.removeEventListener('scroll', positionMenu, true);
+    };
+  }, [open, positionMenu]);
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!triggerRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
+    };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.stopImmediatePropagation();
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    window.addEventListener('pointerdown', closeOutside);
+    window.addEventListener('keydown', closeOnEscape, true);
+    return () => {
+      window.removeEventListener('pointerdown', closeOutside);
+      window.removeEventListener('keydown', closeOnEscape, true);
+    };
+  }, [open]);
+  const select = (agentId?: string) => {
+    setOpen(false);
+    onSelect(agentId);
+  };
+
+  return <><button ref={triggerRef} className="review-agent-trigger" type="button" aria-label="Choose review agent" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((current) => !current)}>▾</button>{open && createPortal(<div ref={menuRef} className="review-agent-menu" role="menu" style={{ ...menuStyle, visibility: menuStyle ? 'visible' : 'hidden' }}><button type="button" role="menuitem" disabled={busy || isDraft || !automaticAvailable} onClick={() => select()}><strong>Automatic</strong><span>{reviewAgents?.algorithm.replace('_', ' ') || 'configured routing'}</span></button>{reviewAgents?.agents.map((agent) => <button type="button" role="menuitem" key={agent.id} disabled={busy || isDraft || !agent.available} title={agent.usageError} onClick={() => select(agent.id)}><strong>{agent.provider}</strong><span>{agent.model || 'CLI default'} · {agent.effort || 'default effort'}{agent.usedPercent === null ? ' · usage unknown' : ` · ${agent.usedPercent}% used`}</span>{agent.usageError && <span className="usage-error">{agent.usageError}</span>}</button>)}{reviewAgents && !reviewAgents.agents.length && <p>No review agents configured.</p>}</div>, document.body)}</>;
+}
+
 function ReviewDrawer({ id, timezone, now, onClose, onChanged, onAgentFailed }: { id: string; timezone: string | undefined; now: number; onClose: () => void; onChanged: () => Promise<void>; onAgentFailed: () => void }) {
   const [review, setReview] = useState<Review | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -782,9 +844,9 @@ function ReviewDrawer({ id, timezone, now, onClose, onChanged, onAgentFailed }: 
   };
 
   return <div className="drawer-backdrop" onMouseDown={onClose}><aside className="drawer" onMouseDown={(event) => event.stopPropagation()}><button className="drawer-close" onClick={onClose}>×</button>
-    {!review ? <p>Loading review…</p> : <><div className="drawer-details"><div className="drawer-review-heading"><span className="section-label">{review.repository} · #{review.number} · BY {review.author.startsWith('@') ? review.author : `@${review.author}`}</span><div className="drawer-status"><ReviewStatusBadge status={reviewDisplayStatus(review)} onAgentFailed={onAgentFailed} />{review.pending_reason && <span>Queued: {review.pending_reason.replaceAll('_', ' ')}</span>}</div></div><h2>{review.title}</h2><p className="plain-summary"><InlineCode text={review.simple_summary} /></p><FixedIssues review={review} />
+    {!review ? <p>Loading review…</p> : <><div className="drawer-details"><div className="drawer-review-heading"><span className="section-label">{review.repository} · #{review.number} · BY {review.author.startsWith('@') ? review.author : `@${review.author}`}</span><div className="drawer-status"><ReviewStatusBadge status={reviewDisplayStatus(review)} onAgentFailed={onAgentFailed} />{review.pending_reason && <span>Queued: {review.pending_reason.replaceAll('_', ' ')}</span>}</div></div><h2>{review.title}</h2><div className="drawer-description"><p className="plain-summary"><InlineCode text={review.simple_summary} /></p><FixedIssues review={review} /></div>
       <div className="drawer-review-metadata"><ReviewMetadata review={review} timezone={timezone} now={now} /></div>
-      <div className="drawer-actions"><div className="review-combo"><button disabled={!!busy || review.is_draft || !automaticReviewAvailable} onClick={() => void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: '{}' }))}>{review.is_draft ? 'Draft — no review' : busy === 'review' ? 'Starting…' : '▶ Agent review'}</button><details><summary aria-label="Choose review agent">▾</summary><div className="review-agent-menu"><button type="button" disabled={!!busy || review.is_draft || !automaticReviewAvailable} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: '{}' })); }}><strong>Automatic</strong><span>{reviewAgents?.algorithm.replace('_', ' ') || 'configured routing'}</span></button>{reviewAgents?.agents.map((agent) => <button type="button" key={agent.id} disabled={!!busy || review.is_draft || !agent.available} title={agent.usageError} onClick={(event) => { event.currentTarget.closest('details')?.removeAttribute('open'); void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: JSON.stringify({ agentId: agent.id }) })); }}><strong>{agent.provider}</strong><span>{agent.model || 'CLI default'} · {agent.effort || 'default effort'}{agent.usedPercent === null ? ' · usage unknown' : ` · ${agent.usedPercent}% used`}</span>{agent.usageError && <span className="usage-error">{agent.usageError}</span>}</button>)}{reviewAgents && !reviewAgents.agents.length && <p>No review agents configured.</p>}</div></details></div><button disabled={!!busy} onClick={() => void action('workspace', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'POST', body: '{}' }))}>{busy === 'workspace' ? 'Cloning & building…' : review.workspace_path ? 'Rebuild workspace' : 'Prepare locally'}</button>{review.workspace_path && <button disabled={!!busy} onClick={() => void action('cleanup', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'DELETE' }))}>Clean up</button>}<a href={review.url} target="_blank">Open GitHub ↗</a></div>
+      <div className="drawer-actions"><div className="review-combo"><button disabled={!!busy || review.is_draft || !automaticReviewAvailable} onClick={() => void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: '{}' }))}>{review.is_draft ? 'Draft — no review' : busy === 'review' ? 'Starting…' : '▶ Agent review'}</button><ReviewAgentPicker reviewAgents={reviewAgents} busy={!!busy} isDraft={review.is_draft} onSelect={(agentId) => void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: JSON.stringify(agentId ? { agentId } : {}) }))} /></div><button disabled={!!busy} onClick={() => void action('workspace', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'POST', body: '{}' }))}>{busy === 'workspace' ? 'Cloning & building…' : review.workspace_path ? 'Rebuild workspace' : 'Prepare locally'}</button>{review.workspace_path && <button disabled={!!busy} onClick={() => void action('cleanup', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'DELETE' }))}>Clean up</button>}<a href={review.url} target="_blank">Open GitHub ↗</a></div>
       {review.workspace_path && <code className="workspace-path">{review.workspace_path}</code>}{error && <p className="inline-error">{error}</p>}</div>
       <div className="drawer-tabs" role="tablist" aria-label="Pull request details">
         <button type="button" role="tab" aria-selected={tab === 'review-room'} className={tab === 'review-room' ? 'active' : ''} onClick={() => setTab('review-room')}>Review Room</button>
