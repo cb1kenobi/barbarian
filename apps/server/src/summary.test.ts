@@ -1,5 +1,57 @@
 import { describe, expect, it } from 'vitest';
-import { explainPullRequest, simplify, summarizePullRequest } from './summary.js';
+import { explainPullRequest, normalizeSummaryMarkup, simplify, summarizePullRequest } from './summary.js';
+
+describe('normalizeSummaryMarkup', () => {
+  it('preserves structure and safe inline code while removing HTML-only content', () => {
+    const normalized = normalizeSummaryMarkup(`
+<h2>Changes</h2><ul><li>Alpha</li><li><code>beta()</code></li></ul>
+<script>hidden()</script><style>.hidden { display: none }</style><!-- omitted -->
+`);
+
+    expect(normalized).toContain('## Changes');
+    expect(normalized).toContain('- Alpha');
+    expect(normalized).toContain('- `beta()`');
+    expect(normalized).not.toContain('AlphaBeta');
+    expect(normalized).not.toMatch(/<\/?[a-z][^>]*>/i);
+    expect(normalized).not.toContain('hidden');
+  });
+
+  it('is total, bounded, idempotent, and unchanged for ordinary Markdown', () => {
+    const markdown = '## Summary\n\nKeeps `inline_code` and [a link](https://example.test).';
+    expect(normalizeSummaryMarkup(markdown)).toBe(markdown);
+    expect(normalizeSummaryMarkup(normalizeSummaryMarkup('<p>Safe&nbsp;text</p>')))
+      .toBe(normalizeSummaryMarkup('<p>Safe&nbsp;text</p>'));
+    expect(() => normalizeSummaryMarkup('&#1114112; &#xD800; &#not-a-number;')).not.toThrow();
+
+    for (const adversarial of [
+      '<a "'.repeat(10_000),
+      '&'.repeat(100_000),
+      '<code>'.repeat(10_000),
+      '<h6>'.repeat(25_000),
+    ]) {
+      expect(normalizeSummaryMarkup(adversarial).length).toBeLessThanOrEqual(100_000);
+    }
+  });
+
+  it('preserves Markdown angle-bracket syntax without letting it hide known tags', () => {
+    expect(normalizeSummaryMarkup('Keep if (a < b), Array<T>, <https://example.test>, and <API_KEY>; <strong>retain this</strong>.'))
+      .toBe('Keep if (a < b), Array<T>, <https://example.test>, and <API_KEY>; retain this.');
+    expect(normalizeSummaryMarkup('<!doctype html><p>Readable</p>')).toBe('\n\nReadable\n\n');
+  });
+
+  it('keeps later prose after malformed markup and protects Markdown code spans', () => {
+    const normalized = normalizeSummaryMarkup('Use `<template>` here. <script>Keep the later migration steps. <!-- unfinished note');
+    expect(normalized).toContain('`<template>`');
+    expect(normalized).toContain('Keep the later migration steps.');
+    expect(normalized).toContain('unfinished note');
+  });
+
+  it('renders deliberately escaped tags as inline code', () => {
+    const normalized = normalizeSummaryMarkup('Use &lt;template&gt; or &#60;slot&#62; in the layout.');
+    expect(normalized).toBe('Use `<template>` or `<slot>` in the layout.');
+    expect(normalizeSummaryMarkup(normalized)).toBe(normalized);
+  });
+});
 
 describe('simplify', () => {
   it('removes conventional-commit cruft and keeps the first useful sentence', () => {
@@ -9,6 +61,11 @@ describe('simplify', () => {
 
   it('falls back to the cleaned title', () => {
     expect(simplify('chore: update docs', '')).toBe('update docs');
+  });
+
+  it('does not leak converted HTML list markers', () => {
+    expect(simplify('fix: preserve recovery data', '<ul><li>Recovery preserves audit entries before retrying.</li></ul>'))
+      .toBe('preserve recovery data. Recovery preserves audit entries before retrying.');
   });
 });
 
@@ -78,5 +135,25 @@ The \`delete_audit_logs_before\` operation now returns the value computed by \`d
     const summary = summarizePullRequest('fix: generated description', `## Summary\n\n${'word '.repeat(2_000)}.`);
     expect(summary.length).toBeLessThanOrEqual(2_400);
     expect(summary.endsWith('…')).toBe(true);
+  });
+
+  it('turns Dependabot HTML into a short readable dependency summary', () => {
+    const summary = summarizePullRequest('chore(deps-dev): bump tsdown', `
+Bumps the minor-development group with 1 update: [tsdown](https://github.com/rolldown/tsdown).
+
+Updates \`tsdown\` from 0.22.14 to 0.23.0
+<details>
+<summary>Release notes</summary>
+<blockquote><h3>🧭 Migration Guide</h3>
+<p>Most users can upgrade directly. Before upgrading, run one final build with <code>tsdown@0.22.14</code> and resolve all deprecation warnings.</p>
+<ul><li><code>bundle: false</code> → <code>unbundle: true</code></li><li>Node.js 25 is no longer supported</li></ul>
+<script>ignoreThis()</script><!-- raw HTML omitted -->
+</blockquote>
+</details>
+`);
+
+    expect(summary).toBe('Bumps the minor-development group with 1 update: tsdown. Most users can upgrade directly. Before upgrading, run one final build with `tsdown@0.22.14` and resolve all deprecation warnings.');
+    expect(summary).not.toMatch(/<\/?[a-z][^>]*>/i);
+    expect(summary).not.toContain('ignoreThis');
   });
 });

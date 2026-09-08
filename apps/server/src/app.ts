@@ -16,7 +16,7 @@ import { AgentRuntime } from './agent-runtime.js';
 import { ReviewDispatcher, reviewTrigger } from './dispatcher.js';
 import { cleanupWorkspace, prepareWorkspace } from './workspaces.js';
 import { buildStatusDraft } from './status.js';
-import { summarizePullRequest } from './summary.js';
+import { explainPullRequest, simplify, summarizePullRequest } from './summary.js';
 import { recordActivity } from './activity.js';
 import { buildReviewAssessment, refreshReviewContext, storedReviewFindings } from './review-context.js';
 import { completedReviewStatus, displayReviewStatus, newCommitsSinceReview, reviewPriorityScore } from './review-state.js';
@@ -30,6 +30,7 @@ import {
 import { discoverAgentModels, type AgentModelOption } from './agent-models.js';
 import { openAuthoredPullRequests } from './authored-pull-requests.js';
 import { authenticatedGithubLogin } from './github-identity.js';
+import { summarizeReviewComment } from './github.js';
 import { reviewAgentAvailability, type ReviewAgentAvailability } from './review-router.js';
 import {
   resolveLocalBranchWorkspace, resolveReviewWorkspace, type ReviewWorkspace,
@@ -488,17 +489,47 @@ function localAgentApiAllowed(origin: string | undefined, host: string | undefin
 
 function refreshStoredReviewSummaries(database: BarbarianDatabase): void {
   const key = 'review_summary_version';
-  const version = '2';
+  const version = '3';
   const current = database.connection.prepare('SELECT value FROM app_metadata WHERE key=?')
     .get(key) as { value: string } | undefined;
   if (current?.value === version) return;
-  const rows = database.connection.prepare(`
-    SELECT id, title, body FROM review_queue WHERE trim(body)<>''
-  `).all() as Array<{ id: string; title: string; body: string }>;
-  const update = database.connection.prepare('UPDATE review_queue SET simple_summary=? WHERE id=?');
+  const reviews = database.connection.prepare(`
+    SELECT id, title, body FROM review_queue
+    WHERE trim(body)<>'' AND (instr(body, '<')>0 OR instr(body, '&')>0)
+  `);
+  const updateReview = database.connection.prepare(`
+    UPDATE review_queue SET
+      simple_summary=?,
+      plain_summary=CASE
+        WHEN plain_summary='' OR plain_summary LIKE 'Problem: %' || char(10) || char(10) || 'Solution: %'
+        THEN ? ELSE plain_summary END
+    WHERE id=?
+  `);
+  const workItems = database.connection.prepare(`
+    SELECT id, title, body FROM work_items
+    WHERE trim(body)<>'' AND (instr(body, '<')>0 OR instr(body, '&')>0)
+  `);
+  const updateWorkItem = database.connection.prepare('UPDATE work_items SET simple_summary=? WHERE id=?');
+  const findings = database.connection.prepare(`
+    SELECT id, body FROM review_findings
+    WHERE trim(body)<>'' AND (instr(body, '<')>0 OR instr(body, '&')>0)
+  `);
+  const updateFinding = database.connection.prepare('UPDATE review_findings SET summary=? WHERE id=?');
   database.connection.exec('BEGIN IMMEDIATE');
   try {
-    for (const row of rows) update.run(summarizePullRequest(row.title, row.body), row.id);
+    for (const review of reviews.iterate() as Iterable<{ id: string; title: string; body: string }>) {
+      updateReview.run(
+        summarizePullRequest(review.title, review.body),
+        explainPullRequest(review.title, review.body),
+        review.id,
+      );
+    }
+    for (const workItem of workItems.iterate() as Iterable<{ id: string; title: string; body: string }>) {
+      updateWorkItem.run(simplify(workItem.title, workItem.body), workItem.id);
+    }
+    for (const finding of findings.iterate() as Iterable<{ id: string; body: string }>) {
+      updateFinding.run(summarizeReviewComment(finding.body), finding.id);
+    }
     database.connection.prepare(`
       INSERT INTO app_metadata(key, value) VALUES (?, ?)
       ON CONFLICT(key) DO UPDATE SET value=excluded.value

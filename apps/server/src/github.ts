@@ -6,6 +6,7 @@ import type {
   RepositoryConfig,
 } from './types.js';
 import { runProcess } from './process.js';
+import { normalizeSummaryMarkup } from './summary.js';
 
 export interface GithubIssueNode {
   number: number;
@@ -724,6 +725,7 @@ export function isAiReviewComment(author: string, body: string): boolean {
 }
 
 export function summarizeReviewComment(body: string): string {
+  body = normalizeSummaryMarkup(body);
   const heading = body.match(/^#{1,6}\s+(.+)$/m)?.[1];
   const clean = (heading || body)
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '')

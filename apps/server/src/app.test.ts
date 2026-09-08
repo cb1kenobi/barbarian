@@ -605,27 +605,76 @@ describe('status updates', () => {
 });
 
 describe('browser context appearance', () => {
-  it('refreshes summaries written by an older summarizer once at startup', async () => {
+  it('refreshes stored summaries without replacing completed agent output', async () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-summary-backfill-test-'));
     directories.push(directory);
     const database = new BarbarianDatabase(path.join(directory, 'test.db'));
     const now = new Date().toISOString();
     database.connection.prepare(`
       INSERT INTO review_queue(
-        id, repository, number, title, simple_summary, body, url, author, head_sha,
-        head_ref_name, base_ref_name, first_seen_at, updated_at, last_seen_at
+        id, repository, number, title, simple_summary, plain_summary, body, url, author, head_sha,
+        head_ref_name, base_ref_name, last_reviewed_sha, first_seen_at, updated_at, last_seen_at
       ) VALUES (
-        'github:Acme/storage#88', 'Acme/storage', 88, 'Fix audit logs', 'Old clipped summary…',
-        'The \`delete_audit_logs_before\` operation now returns the complete result to callers.',
-        'https://github.com/Acme/storage/pull/88', 'author', 'head', 'feature', 'main', ?, ?, ?
+        'github:Acme/storage#88', 'Acme/storage', 88, 'Bump tsdown', 'Old <details> summary…',
+        'Problem: Old <details> explanation…\n\nSolution: Old generated output.',
+        'Bumps tsdown from 0.22.14 to 0.23.0. <details><summary>Release notes</summary>
+        <h3>Migration Guide</h3><p>Run one final build with <code>tsdown@0.22.14</code>.</p></details>',
+        'https://github.com/Acme/storage/pull/88', 'author', 'head', 'feature', 'main', 'head', ?, ?, ?
       )
     `).run(now, now, now);
+    database.connection.prepare(`
+      INSERT INTO review_queue(
+        id, repository, number, title, simple_summary, plain_summary, body, url, author, head_sha,
+        head_ref_name, base_ref_name, first_seen_at, updated_at, last_seen_at
+      ) VALUES (
+        'github:Acme/storage#89', 'Acme/storage', 89, 'Reviewed change', 'Old <p>summary</p>',
+        'Agent verified the migration is safe.', '<p>Raw pull request body.</p>',
+        'https://github.com/Acme/storage/pull/89', 'author', 'reviewed-head', 'feature', 'main',
+        ?, ?, ?
+      )
+    `).run(now, now, now);
+    database.connection.prepare(`
+      INSERT INTO agent_runs(review_id, provider, task, status, started_at, finished_at)
+      VALUES ('github:Acme/storage#89', 'codex', 'code_review:new_pr', 'complete', ?, ?)
+    `).run(now, now);
+    database.connection.prepare(`
+      INSERT INTO work_items(
+        id, provider, repository, number, kind, title, body, simple_summary, url,
+        first_seen_at, updated_at, last_seen_at
+      ) VALUES (
+        'github:Acme/storage#issue-90', 'github', 'Acme/storage', 90, 'issue', 'Fix recovery',
+        '<p>Recovery should preserve <code>audit entries</code>.</p>', 'Old <p>issue summary</p>',
+        'https://github.com/Acme/storage/issues/90', ?, ?, ?
+      )
+    `).run(now, now, now);
+    database.connection.prepare(`
+      INSERT INTO review_findings(
+        id, review_id, remote_id, author, body, summary, url, created_at, updated_at
+      ) VALUES (
+        'finding:html', 'github:Acme/storage#88', 9001, 'reviewer',
+        '<h3>Potential regression</h3><p>The fallback can return stale data.</p>',
+        'Old <h3>finding</h3>', 'https://github.com/Acme/storage/pull/88#discussion_r9001', ?, ?
+      )
+    `).run(now, now);
     const app = await createApp(database, new ConfigStore(config));
     try {
-      expect(database.connection.prepare('SELECT simple_summary FROM review_queue WHERE number=88').get())
-        .toEqual({ simple_summary: 'The `delete_audit_logs_before` operation now returns the complete result to callers.' });
+      const refreshed = database.connection.prepare(`
+        SELECT simple_summary, plain_summary FROM review_queue WHERE number=88
+      `).get() as { simple_summary: string; plain_summary: string };
+      expect(refreshed.simple_summary).toContain('tsdown from 0.22.14 to 0.23.0');
+      expect(refreshed.plain_summary).toContain('Run one final build with `tsdown@0.22.14`');
+      expect(`${refreshed.simple_summary} ${refreshed.plain_summary}`).not.toMatch(/<\/?[a-z][^>]*>/i);
+      expect(database.connection.prepare('SELECT plain_summary FROM review_queue WHERE number=89').get())
+        .toEqual({ plain_summary: 'Agent verified the migration is safe.' });
+      const workItem = database.connection.prepare(`
+        SELECT simple_summary FROM work_items WHERE number=90
+      `).get() as { simple_summary: string };
+      expect(workItem.simple_summary).toContain('Recovery should preserve `audit entries`.');
+      expect(workItem.simple_summary).not.toMatch(/<\/?[a-z][^>]*>/i);
+      expect(database.connection.prepare("SELECT summary FROM review_findings WHERE id='finding:html'").get())
+        .toEqual({ summary: 'Potential regression' });
       expect(database.connection.prepare("SELECT value FROM app_metadata WHERE key='review_summary_version'").get())
-        .toEqual({ value: '2' });
+        .toEqual({ value: '3' });
     } finally {
       await app.close();
       database.close();

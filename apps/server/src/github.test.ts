@@ -8,6 +8,7 @@ import {
   reviewPublication,
   reviewPublicationPayload,
   reviewableDiffLines,
+  summarizeReviewComment,
   validateReviewCommentLocations,
   type DiscussionEntry,
   type GithubDiscussionNode,
@@ -60,6 +61,14 @@ describe('discussionWatermark', () => {
       entry('1', 'cb1kenobi', '2026-09-01T10:00:00Z', 'OWNER'),
       entry('2', 'random-reader', '2026-09-01T11:00:00Z'),
     ]), 'cb1kenobi')).toBe('');
+  });
+});
+
+describe('summarizeReviewComment', () => {
+  it('keeps the readable heading from an HTML review comment without leaking tags', () => {
+    const summary = summarizeReviewComment('<details><summary>Review details</summary><h3>Potential regression</h3><p>Body text</p></details>');
+    expect(summary).toBe('Potential regression');
+    expect(summary).not.toMatch(/<\/?[a-z][^>]*>/i);
   });
 });
 

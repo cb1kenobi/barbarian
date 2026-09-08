@@ -47,6 +47,42 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 }
 
 describe('applyDiscovery', () => {
+  it('stores readable summaries for pull requests with mixed Markdown and HTML', async () => {
+    const db = database();
+    const body = `Bumps tsdown from 0.22.14 to 0.23.0.
+
+<details><summary>Release notes</summary>
+<h3>Migration Guide</h3>
+<p>Before upgrading, run one final build with <code>tsdown@0.22.14</code>.</p>
+<ul><li><code>bundle: false</code> → <code>unbundle: true</code></li></ul>
+</details>`;
+    const discovery: DiscoveryResult = {
+      discoveredAt: '2026-09-08T12:00:00Z', githubLogin: 'cb1kenobi', warnings: [], issues: [],
+      pullRequests: [{
+        provider: 'github', repository: 'Acme/storage', number: 841,
+        title: 'chore(deps-dev): bump tsdown', body,
+        url: 'https://github.com/Acme/storage/pull/841', author: 'dependabot[bot]',
+        additions: 1, deletions: 1, commitCount: 1, headSha: 'dependency-head',
+        headRefName: 'dependabot/npm_and_yarn/tsdown-0.23.0', baseRefName: 'main',
+        createdAt: '2026-09-08T10:00:00Z', updatedAt: '2026-09-08T11:00:00Z',
+        isDraft: false, reviewDecision: null, requestedReviewers: ['cb1kenobi'],
+        requestedTeams: [], reviewedBy: [], viewerReviewState: null, viewerReviewSha: null,
+        otherApprovals: 0, linkedIssues: [], mergedAt: null, state: 'OPEN', discussionWatermark: '',
+      }],
+    };
+
+    await applyDiscovery(db, config, discovery);
+
+    const stored = db.connection.prepare(`
+      SELECT body, simple_summary, plain_summary FROM review_queue WHERE number=841
+    `).get() as { body: string; simple_summary: string; plain_summary: string };
+    expect(stored.body).toBe(body);
+    expect(stored.simple_summary).toContain('Before upgrading, run one final build with `tsdown@0.22.14`');
+    expect(stored.plain_summary).toContain('`bundle: false` → `unbundle: true`');
+    expect(`${stored.simple_summary} ${stored.plain_summary}`).not.toMatch(/<\/?[a-z][^>]*>/i);
+    db.close();
+  });
+
   it('keeps assignment and progress metadata for every discovered issue', async () => {
     const db = database();
     const base = { provider: 'github' as const, repository: 'Acme/storage', body: '', updatedAt: '2026-08-31T10:00:00Z', labels: [], assignees: [] as string[], milestone: null, priority: 10, priorityReasons: [] };
