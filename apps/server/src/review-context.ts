@@ -171,15 +171,13 @@ export async function refreshReviewContext(database: BarbarianDatabase, reviewId
           WHEN head_sha<>? OR ?>discussion_watermark THEN 0 ELSE review_paused END,
         feedback_retry_after=CASE WHEN ?>discussion_watermark THEN NULL ELSE feedback_retry_after END,
         feedback_last_error=CASE WHEN ?>discussion_watermark THEN NULL ELSE feedback_last_error END,
-        feedback_needs_input=CASE WHEN ?>discussion_watermark THEN 0 ELSE feedback_needs_input END,
-        feedback_input_message_id=CASE WHEN ?>discussion_watermark THEN NULL ELSE feedback_input_message_id END,
         head_sha=?, discussion_watermark=?,
         last_reviewed_watermark=COALESCE(last_reviewed_watermark, ?), updated_at=? WHERE id=?
     `).run(
       status, openFindings, remote.reviewDecision, remote.state, remote.additions, remote.deletions,
       remote.commitCount, approvalCarryover ? 1 : 0,
       remote.viewerReviewState, remote.viewerReviewSha, remote.otherApprovals, remote.mergedAt,
-      remote.headSha, watermark, watermark, watermark, watermark, watermark,
+      remote.headSha, watermark, watermark, watermark,
       remote.headSha, watermark, reviewedWatermark, now, reviewId,
     );
     database.connection.exec('COMMIT');

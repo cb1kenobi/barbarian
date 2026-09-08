@@ -168,12 +168,6 @@ export function upsertReview(database: BarbarianDatabase, config: BarbarianConfi
       feedback_last_error=CASE
         WHEN excluded.discussion_watermark>review_queue.discussion_watermark THEN NULL
         ELSE review_queue.feedback_last_error END,
-      feedback_needs_input=CASE
-        WHEN excluded.discussion_watermark>review_queue.discussion_watermark THEN 0
-        ELSE review_queue.feedback_needs_input END,
-      feedback_input_message_id=CASE
-        WHEN excluded.discussion_watermark>review_queue.discussion_watermark THEN NULL
-        ELSE review_queue.feedback_input_message_id END,
       claim_owner=CASE WHEN excluded.is_draft=1 THEN NULL ELSE review_queue.claim_owner END,
       claimed_at=CASE WHEN excluded.is_draft=1 THEN NULL ELSE review_queue.claimed_at END,
       manual_requested_at=CASE WHEN excluded.is_draft=1 THEN NULL ELSE review_queue.manual_requested_at END,

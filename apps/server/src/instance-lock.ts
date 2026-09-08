@@ -22,10 +22,17 @@ function processExists(pid: number): boolean {
   }
 }
 
-async function processIsBarbarian(pid: number): Promise<boolean> {
+async function processOwnsLock(pid: number, lockStartedAt: string | undefined): Promise<boolean> {
   if (!processExists(pid)) return false;
   if (pid === process.pid) return true;
   try {
+    if (lockStartedAt) {
+      const lockTime = Date.parse(lockStartedAt);
+      const processTime = Date.parse((await execFileAsync('ps', ['-p', String(pid), '-o', 'lstart='])).stdout.trim());
+      if (Number.isFinite(lockTime) && Number.isFinite(processTime)) {
+        return processTime <= lockTime + 2_000;
+      }
+    }
     const command = process.platform === 'linux'
       ? (await readFile(`/proc/${pid}/cmdline`, 'utf8')).replaceAll('\0', ' ')
       : (await execFileAsync('ps', ['-p', String(pid), '-o', 'command='])).stdout;
@@ -49,10 +56,10 @@ export async function acquireInstanceLock(filename = paths.lockPath): Promise<In
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       const observed = await stat(filename).catch(() => null);
-      const owner: { pid?: number } = await readFile(filename, 'utf8')
-        .then((value) => JSON.parse(value) as { pid?: number })
+      const owner: { pid?: number; startedAt?: string } = await readFile(filename, 'utf8')
+        .then((value) => JSON.parse(value) as { pid?: number; startedAt?: string })
         .catch(() => ({}));
-      if (owner.pid && await processIsBarbarian(owner.pid)) {
+      if (owner.pid && await processOwnsLock(owner.pid, owner.startedAt)) {
         throw new Error(`Barbarian is already running as process ${owner.pid}`);
       }
       if (!owner.pid && observed && Date.now() - observed.mtimeMs < 30_000) {

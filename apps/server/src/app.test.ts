@@ -903,7 +903,7 @@ describe('review room feedback answers', () => {
         FROM review_queue WHERE id=?
       `).get(id)).toEqual({
         last_feedback_handled_watermark: '', feedback_attempt_count: 0,
-        feedback_attempt_watermark: null, feedback_last_error: null, feedback_needs_input: 0,
+        feedback_attempt_watermark: 'watermark-1', feedback_last_error: null, feedback_needs_input: 0,
         feedback_input_message_id: 2,
       });
       expect(database.connection.prepare(`

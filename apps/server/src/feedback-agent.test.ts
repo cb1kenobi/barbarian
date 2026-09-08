@@ -105,11 +105,12 @@ describe('feedback agent result', () => {
     expect(prompt).toContain('Do not commit or modify Git metadata');
     expect(database.connection.prepare(`
       SELECT last_feedback_handled_watermark, feedback_claim_owner, feedback_needs_input,
-        last_feedback_pushed_sha
+        last_feedback_pushed_sha, head_sha, feedback_input_message_id
       FROM review_queue WHERE id=?
     `).get(claim.reviewId)).toEqual({
       last_feedback_handled_watermark: 'watermark-1', feedback_claim_owner: null,
       feedback_needs_input: 0, last_feedback_pushed_sha: 'head-2',
+      head_sha: 'head-2', feedback_input_message_id: null,
     });
     expect(database.connection.prepare('SELECT content FROM chat_messages WHERE review_id=? ORDER BY id DESC LIMIT 1').get(claim.reviewId))
       .toMatchObject({ content: expect.stringContaining('head-2') });

@@ -226,7 +226,7 @@ export class FeedbackDispatcher {
   resumeFeedbackAfterInput(reviewId: string, messageId: number): boolean {
     const changed = this.database.connection.prepare(`
       UPDATE review_queue SET last_feedback_handled_watermark='', feedback_attempt_count=0,
-        feedback_attempt_watermark=NULL, feedback_retry_after=NULL, feedback_last_error=NULL,
+        feedback_retry_after=NULL, feedback_last_error=NULL,
         feedback_needs_input=0, feedback_input_message_id=?, updated_at=?
       WHERE id=? AND feedback_needs_input=1 AND feedback_claim_owner IS NULL
     `).run(messageId, new Date().toISOString(), reviewId);
@@ -267,7 +267,7 @@ export class FeedbackDispatcher {
               ), '') ELSE '' END) AS feedback_watermark
           FROM review_queue
           WHERE remote_state='OPEN' AND is_draft=0 AND feedback_claim_owner IS NULL
-            AND lower(author)=?
+            AND feedback_needs_input=0 AND lower(author)=?
         ) WHERE feedback_watermark<>''
           AND feedback_watermark>COALESCE(last_feedback_handled_watermark, '')
         ORDER BY updated_at ASC LIMIT 50
@@ -287,9 +287,10 @@ export class FeedbackDispatcher {
         const changed = this.database.connection.prepare(`
           UPDATE review_queue SET feedback_claim_owner=?, feedback_claimed_at=?,
             feedback_attempt_count=?, feedback_attempt_watermark=?,
+            feedback_input_message_id=CASE WHEN ?=1 THEN feedback_input_message_id ELSE NULL END,
             feedback_retry_after=NULL, feedback_last_error=NULL, updated_at=?
           WHERE id=? AND feedback_claim_owner IS NULL
-        `).run(claimOwner, now, attemptCount, row.feedback_watermark, now, row.id);
+        `).run(claimOwner, now, attemptCount, row.feedback_watermark, sameAttempt ? 1 : 0, now, row.id);
         if (!changed.changes) continue;
         this.database.connection.exec('COMMIT');
         return {

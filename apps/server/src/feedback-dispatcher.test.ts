@@ -241,9 +241,31 @@ describe('FeedbackDispatcher', () => {
       FROM review_queue WHERE id=?
     `).get(id)).toEqual({
       last_feedback_handled_watermark: '', feedback_attempt_count: 0,
-      feedback_attempt_watermark: null, feedback_last_error: null, feedback_needs_input: 0,
+      feedback_attempt_watermark: 'watermark-1', feedback_last_error: null, feedback_needs_input: 0,
       feedback_input_message_id: 42,
     });
+    dispatcher.stop();
+    database.close();
+  });
+
+  it('keeps accumulated feedback parked while a developer question is pending', async () => {
+    const database = testDatabase();
+    const id = seedReview(database);
+    database.connection.prepare(`
+      UPDATE review_queue SET discussion_watermark='watermark-2',
+        last_feedback_handled_watermark='watermark-1', feedback_attempt_watermark='watermark-1',
+        feedback_needs_input=1 WHERE id=?
+    `).run(id);
+    let ran = false;
+    const dispatcher = new FeedbackDispatcher(
+      database, testConfig(), new AgentRuntime(1), { error: () => undefined }, async () => { ran = true; },
+    );
+
+    await dispatcher.pump();
+    expect(ran).toBe(false);
+    expect(database.connection.prepare(`
+      SELECT feedback_needs_input, feedback_claim_owner FROM review_queue WHERE id=?
+    `).get(id)).toEqual({ feedback_needs_input: 1, feedback_claim_owner: null });
     dispatcher.stop();
     database.close();
   });

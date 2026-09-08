@@ -212,7 +212,9 @@ export async function pushFeedbackWorkspace(
   signal?.throwIfAborted();
   await checked('git', ['config', '--unset-all', 'remote.origin.pushurl'], workspace);
   try {
-    await checked('git', ['push', 'origin', `${newHead}:refs/heads/${headRefName}`], workspace, 15 * 60_000, signal);
+    await checked('git', [
+      '-c', 'core.hooksPath=/dev/null', 'push', 'origin', `${newHead}:refs/heads/${headRefName}`,
+    ], workspace, 15 * 60_000, signal);
   } finally {
     await checked('git', ['config', '--replace-all', 'remote.origin.pushurl', disabledFeedbackPushUrl], workspace);
   }

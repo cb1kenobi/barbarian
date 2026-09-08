@@ -271,11 +271,14 @@ export async function runFeedbackAgent(
         feedback_last_error=NULL, feedback_needs_input=?,
         feedback_input_message_id=NULL,
         last_feedback_pushed_sha=CASE WHEN ? IS NOT NULL THEN ? ELSE last_feedback_pushed_sha END,
+        head_sha=CASE WHEN ? IS NOT NULL THEN ? ELSE head_sha END,
         updated_at=?
       WHERE id=? AND feedback_claim_owner=?
     `).run(
       claim.feedbackWatermark,
       result.status === 'needs_input' ? 1 : 0,
+      pushedHead,
+      pushedHead,
       pushedHead,
       pushedHead,
       now,
