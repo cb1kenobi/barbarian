@@ -14,6 +14,7 @@ import { refreshGithubIssue, synchronize, trackGithubPullRequest } from './sync.
 import { askAgent, askIssueAgent } from './agents.js';
 import { AgentRuntime } from './agent-runtime.js';
 import { ReviewDispatcher, reviewTrigger } from './dispatcher.js';
+import { FeedbackDispatcher } from './feedback-dispatcher.js';
 import { cleanupWorkspace, prepareWorkspace } from './workspaces.js';
 import { buildStatusDraft } from './status.js';
 import { summarizePullRequest } from './summary.js';
@@ -164,6 +165,7 @@ function settingsView(config: BarbarianConfig, activeServer: BarbarianConfig['se
         reviewRouting: config.agents.reviewRouting,
         usageHeadroomPercent: config.agents.usageHeadroomPercent,
         autoReview: config.agents.autoReview,
+        autoAddressFeedback: config.agents.autoAddressFeedback,
         maxConcurrent: config.agents.maxConcurrent,
         maxAutomaticAttempts: config.agents.maxAutomaticAttempts,
         retryBaseMinutes: config.agents.retryBaseMinutes,
@@ -339,7 +341,8 @@ function reviewTimeline(database: BarbarianDatabase, config: BarbarianConfig, re
     SELECT id, kind, payload_json, created_at FROM activity_events
     WHERE subject_id=? AND kind IN (
       'review_discovered', 'review_ready', 'review_updated', 'review_started',
-      'agent_review_completed', 'agent_review_cancelled', 'pr_merged', 'pr_closed'
+      'agent_review_completed', 'agent_review_cancelled', 'feedback_fix_started',
+      'feedback_fix_completed', 'feedback_fix_reviewed', 'pr_merged', 'pr_closed'
     )
     ORDER BY created_at ASC, id ASC
   `).all(reviewId) as Array<{ id: number; kind: string; payload_json: string; created_at: string }>;
@@ -388,6 +391,9 @@ function reviewTimeline(database: BarbarianDatabase, config: BarbarianConfig, re
         completedIndex += 1;
         break;
       case 'agent_review_cancelled': label = 'AI review stopped'; break;
+      case 'feedback_fix_started': label = 'AI started addressing feedback'; break;
+      case 'feedback_fix_completed': label = 'AI feedback fix pushed'; break;
+      case 'feedback_fix_reviewed': label = 'AI reviewed feedback'; break;
       case 'pr_merged': label = 'PR merged'; break;
       case 'pr_closed': label = 'PR closed'; break;
     }
@@ -531,6 +537,7 @@ export async function createApp(
   services: {
     runtime?: AgentRuntime;
     dispatcher?: ReviewDispatcher;
+    feedbackDispatcher?: FeedbackDispatcher;
     onConfigUpdated?: (previous: BarbarianConfig, next: BarbarianConfig) => void | Promise<void>;
     onManualSyncStarted?: () => void;
     onManualSyncFinished?: () => void;
@@ -553,6 +560,8 @@ export async function createApp(
     agents: Promise<ReviewAgentAvailability[]>;
   } | null = null;
   const dispatcher = services.dispatcher || new ReviewDispatcher(database, () => configStore.get(), runtime, app.log);
+  const feedbackDispatcher = services.feedbackDispatcher
+    || new FeedbackDispatcher(database, () => configStore.get(), runtime, app.log);
   const refreshReview = services.refreshReview || refreshReviewContext;
   const refreshIssue = services.refreshIssue || refreshGithubIssue;
   const trackReview = services.trackReview || trackGithubPullRequest;
@@ -566,6 +575,9 @@ export async function createApp(
     for (const client of dashboardClients) client.write(message);
   };
   dispatcher.setReviewChangedListener(publishReviewUpdated);
+  feedbackDispatcher.setReviewChangedListener(publishReviewUpdated);
+  dispatcher.setAgentFinishedListener?.(() => { void feedbackDispatcher.pump(); });
+  feedbackDispatcher.setAgentFinishedListener?.(() => { void dispatcher.pump(); });
   await app.register(cors, {
     delegator(request, callback) {
       const origin = request.headers.origin;
@@ -631,6 +643,7 @@ export async function createApp(
         ...review,
         approved: record.approved,
         has_new_feedback: record.has_new_feedback,
+        needs_input: record.needs_input,
       };
     });
     const lastSync = database.connection.prepare(`
@@ -746,6 +759,10 @@ export async function createApp(
       const result = dispatcher.cancelReview(run.review_id);
       if (!result.found) return reply.code(409).send({ error: 'Agent is no longer running' });
       cancelled = result.cancelled;
+    } else if (run.task === 'address_feedback' && run.review_id) {
+      const result = feedbackDispatcher.cancelFeedback(run.review_id);
+      if (!result.stopped) return reply.code(409).send({ error: 'Agent is no longer running' });
+      cancelled = result.cancelled;
     } else {
       if (!run.runtime_key) return reply.code(409).send({ error: 'This agent run cannot be stopped' });
       cancelled = runtime.cancel(run.runtime_key, new Error('Stopped by user'));
@@ -773,7 +790,8 @@ export async function createApp(
       const config = configStore.get();
       const result = await synchronize(database, config);
       dispatcher.cancelDraftReviews();
-      await dispatcher.pump();
+      feedbackDispatcher.cancelIneligibleFeedback();
+      await Promise.all([dispatcher.pump(), feedbackDispatcher.pump()]);
       return reply.send(result);
     } finally {
       services.onManualSyncFinished?.();

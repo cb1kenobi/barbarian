@@ -9,6 +9,7 @@ import { cleanupCompletedWorkspaces } from './workspaces.js';
 import { acquireInstanceLock } from './instance-lock.js';
 import { AgentRuntime } from './agent-runtime.js';
 import { ReviewDispatcher } from './dispatcher.js';
+import { FeedbackDispatcher } from './feedback-dispatcher.js';
 
 const currentPath = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
 for (const candidate of [
@@ -35,12 +36,23 @@ const dispatcher = new ReviewDispatcher(database, () => configStore.get(), runti
     else console.error(message || 'review dispatcher failed', error);
   },
 });
+const feedbackDispatcher = new FeedbackDispatcher(database, () => configStore.get(), runtime, {
+  error(error, message) {
+    if (appLogger) appLogger.error(error, message);
+    else console.error(message || 'feedback dispatcher failed', error);
+  },
+});
 const app = await createApp(database, configStore, monitorRuntime, {
   runtime,
   dispatcher,
+  feedbackDispatcher,
   onConfigUpdated(previous, next) {
-    if (previous.monitor.intervalMinutes === next.monitor.intervalMinutes) return;
-    scheduleNextMonitorTick();
+    if (previous.agents.autoAddressFeedback && !next.agents.autoAddressFeedback) {
+      feedbackDispatcher.cancelAllFeedback();
+    } else if (!previous.agents.autoAddressFeedback && next.agents.autoAddressFeedback) {
+      void feedbackDispatcher.pump();
+    }
+    if (previous.monitor.intervalMinutes !== next.monitor.intervalMinutes) scheduleNextMonitorTick();
   },
   onManualSyncStarted() {
     pauseMonitorTimer();
@@ -85,8 +97,9 @@ async function monitorTick(): Promise<void> {
   try {
     await synchronize(database, config);
     dispatcher.cancelDraftReviews();
+    feedbackDispatcher.cancelIneligibleFeedback();
     if (config.review.autoCleanup) await cleanupCompletedWorkspaces(database, config);
-    await dispatcher.pump();
+    await Promise.all([dispatcher.pump(), feedbackDispatcher.pump()]);
   } catch (error) {
     app.log.error(error, 'monitor sweep failed; state is preserved for the next sweep');
   } finally {
@@ -95,11 +108,12 @@ async function monitorTick(): Promise<void> {
 }
 
 dispatcher.recoverInterruptedRuns();
+feedbackDispatcher.recoverInterruptedRuns();
 await app.listen(address);
 app.log.info(`Barbarian is listening at http://${address.host}:${address.port}`);
 if (startupConfig.monitor.runOnStartup) void monitorTick();
 else {
-  void dispatcher.pump();
+  void Promise.all([dispatcher.pump(), feedbackDispatcher.pump()]);
   scheduleNextMonitorTick();
 }
 
@@ -107,6 +121,7 @@ async function shutdown(signal: string): Promise<void> {
   app.log.info({ signal }, 'stopping Barbarian');
   if (timer) clearTimeout(timer);
   dispatcher.stop();
+  feedbackDispatcher.stop();
   try {
     await runtime.shutdown();
     await app.close();

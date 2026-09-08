@@ -77,6 +77,14 @@ export class BarbarianDatabase {
         discussion_watermark TEXT NOT NULL DEFAULT '',
         last_reviewed_watermark TEXT,
         author_seen_watermark TEXT,
+        last_feedback_handled_watermark TEXT,
+        feedback_claim_owner TEXT,
+        feedback_claimed_at TEXT,
+        feedback_attempt_count INTEGER NOT NULL DEFAULT 0,
+        feedback_attempt_watermark TEXT,
+        feedback_retry_after TEXT,
+        feedback_last_error TEXT,
+        feedback_needs_input INTEGER NOT NULL DEFAULT 0,
         claim_owner TEXT,
         claimed_at TEXT,
         manual_requested_at TEXT,
@@ -88,6 +96,7 @@ export class BarbarianDatabase {
         retry_after TEXT,
         last_agent_error TEXT,
         workspace_path TEXT,
+        feedback_workspace_path TEXT,
         is_draft INTEGER NOT NULL DEFAULT 0,
         remote_state TEXT NOT NULL DEFAULT 'OPEN',
         remote_created_at TEXT,
@@ -109,6 +118,7 @@ export class BarbarianDatabase {
         url TEXT NOT NULL,
         path TEXT,
         line INTEGER,
+        trusted_for_feedback INTEGER NOT NULL DEFAULT 0,
         resolved INTEGER NOT NULL DEFAULT 0,
         outdated INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
@@ -269,6 +279,15 @@ export class BarbarianDatabase {
       ['discussion_watermark', "TEXT NOT NULL DEFAULT ''"],
       ['last_reviewed_watermark', 'TEXT'],
       ['author_seen_watermark', 'TEXT'],
+      ['last_feedback_handled_watermark', 'TEXT'],
+      ['feedback_claim_owner', 'TEXT'],
+      ['feedback_claimed_at', 'TEXT'],
+      ['feedback_attempt_count', 'INTEGER NOT NULL DEFAULT 0'],
+      ['feedback_attempt_watermark', 'TEXT'],
+      ['feedback_retry_after', 'TEXT'],
+      ['feedback_last_error', 'TEXT'],
+      ['feedback_needs_input', 'INTEGER NOT NULL DEFAULT 0'],
+      ['feedback_workspace_path', 'TEXT'],
       ['claim_owner', 'TEXT'],
       ['claimed_at', 'TEXT'],
       ['manual_requested_at', 'TEXT'],
@@ -292,6 +311,10 @@ export class BarbarianDatabase {
     ];
     for (const [name, definition] of reviewAdditions) {
       if (!reviewColumns.has(name)) this.connection.exec(`ALTER TABLE review_queue ADD COLUMN ${name} ${definition}`);
+    }
+    const findingColumns = new Set((this.connection.prepare('PRAGMA table_info(review_findings)').all() as Array<{ name: string }>).map((column) => column.name));
+    if (!findingColumns.has('trusted_for_feedback')) {
+      this.connection.exec('ALTER TABLE review_findings ADD COLUMN trusted_for_feedback INTEGER NOT NULL DEFAULT 0');
     }
     this.connection.exec('UPDATE review_queue SET remote_updated_at=updated_at WHERE remote_updated_at IS NULL');
     const runColumns = new Set((this.connection.prepare('PRAGMA table_info(agent_runs)').all() as Array<{ name: string }>).map((column) => column.name));

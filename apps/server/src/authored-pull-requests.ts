@@ -4,6 +4,7 @@ import { authenticatedGithubLogin } from './github-identity.js';
 export interface AuthoredPullRequestRow extends Record<string, unknown> {
   approved: boolean;
   has_new_feedback: boolean;
+  needs_input: boolean;
 }
 
 export function openAuthoredPullRequests(
@@ -16,7 +17,8 @@ export function openAuthoredPullRequests(
   const rows = database.connection.prepare(`
     SELECT review_queue.*,
       CASE WHEN review_decision='APPROVED' THEN 1 ELSE 0 END AS approved,
-      CASE WHEN status='issues_found'
+      CASE WHEN feedback_needs_input=1
+        OR status='issues_found'
         OR (review_decision='CHANGES_REQUESTED' AND status<>'ready_to_merge')
         OR EXISTS (
           SELECT 1 FROM review_findings
@@ -34,5 +36,6 @@ export function openAuthoredPullRequests(
     ...row,
     approved: Boolean(row.approved),
     has_new_feedback: Boolean(row.has_new_feedback),
+    needs_input: Boolean(row.feedback_needs_input),
   })) as AuthoredPullRequestRow[];
 }

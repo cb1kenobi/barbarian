@@ -153,14 +153,15 @@ export async function refreshReviewContext(database: BarbarianDatabase, reviewId
     const insert = database.connection.prepare(`
       INSERT INTO review_findings(
         id, review_id, remote_id, author, body, summary, url, path, line,
-        resolved, outdated, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        trusted_for_feedback, resolved, outdated, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     for (const finding of remote.findings) {
       insert.run(
         `${reviewId}:${finding.remoteId}`, reviewId, finding.remoteId, finding.author,
         finding.body, finding.summary, finding.url, finding.path, finding.line,
-        finding.resolved ? 1 : 0, finding.outdated ? 1 : 0, finding.createdAt, now,
+        finding.trustedForFeedback ? 1 : 0,
+        finding.resolved ? 1 : 0, finding.outdated ? 1 : 0, finding.createdAt, finding.updatedAt,
       );
     }
     database.connection.prepare(`
@@ -168,13 +169,17 @@ export async function refreshReviewContext(database: BarbarianDatabase, reviewId
         additions=?, deletions=?, commit_count=?, approval_carryover=?,
         viewer_review_state=?, viewer_review_sha=?, other_approvals=?, merged_at=?, review_paused=CASE
           WHEN head_sha<>? OR ?>discussion_watermark THEN 0 ELSE review_paused END,
+        feedback_retry_after=CASE WHEN ?>discussion_watermark THEN NULL ELSE feedback_retry_after END,
+        feedback_last_error=CASE WHEN ?>discussion_watermark THEN NULL ELSE feedback_last_error END,
+        feedback_needs_input=CASE WHEN ?>discussion_watermark THEN 0 ELSE feedback_needs_input END,
         head_sha=?, discussion_watermark=?,
         last_reviewed_watermark=COALESCE(last_reviewed_watermark, ?), updated_at=? WHERE id=?
     `).run(
       status, openFindings, remote.reviewDecision, remote.state, remote.additions, remote.deletions,
       remote.commitCount, approvalCarryover ? 1 : 0,
       remote.viewerReviewState, remote.viewerReviewSha, remote.otherApprovals, remote.mergedAt,
-      remote.headSha, watermark, remote.headSha, watermark, reviewedWatermark, now, reviewId,
+      remote.headSha, watermark, watermark, watermark, watermark,
+      remote.headSha, watermark, reviewedWatermark, now, reviewId,
     );
     database.connection.exec('COMMIT');
   } catch (error) {

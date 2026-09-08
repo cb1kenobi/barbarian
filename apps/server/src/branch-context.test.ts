@@ -49,7 +49,7 @@ describe('local branch agent review', () => {
       review: { requestedReviewer: '', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
       linear: { enabled: false, command: [] },
       agents: {
-        autoReview: false, maxConcurrent: 1, maxAutomaticAttempts: 1,
+        autoReview: false, autoAddressFeedback: false, maxConcurrent: 1, maxAutomaticAttempts: 1,
         codeReview: [
           { id: 'invalid', provider: 'invalid', model: '', effort: '', priority: 0 },
           { id: 'fake', provider: 'fake', model: '', effort: '', priority: 0 },

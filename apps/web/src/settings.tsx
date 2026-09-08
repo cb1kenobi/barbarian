@@ -30,6 +30,7 @@ export interface SettingsConfig {
     reviewRouting: 'random' | 'round_robin' | 'priority';
     usageHeadroomPercent: number;
     autoReview: boolean;
+    autoAddressFeedback: boolean;
     maxConcurrent: number;
     maxAutomaticAttempts: number;
     retryBaseMinutes: number;
@@ -462,6 +463,7 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
             <label><span>Runs / PR / hour</span><input type="number" min="1" max="20" value={draft.agents.maxRunsPerPullRequestPerHour} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, maxRunsPerPullRequestPerHour: Number(event.target.value) } })} /></label>
             <label><span>Retry base (minutes)</span><input type="number" min="1" max="120" value={draft.agents.retryBaseMinutes} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, retryBaseMinutes: Number(event.target.value) } })} /></label>
             <label className="check-field"><input type="checkbox" checked={draft.agents.autoReview} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, autoReview: event.target.checked } })} /><span>Automatically review</span></label>
+            <label className="check-field"><input type="checkbox" checked={draft.agents.autoAddressFeedback} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, autoAddressFeedback: event.target.checked } })} /><span>Automatically address feedback on my PRs</span></label>
           </div></fieldset>
 
           <fieldset className="settings-section"><legend>Status updates &amp; Linear</legend><div className="settings-grid two">

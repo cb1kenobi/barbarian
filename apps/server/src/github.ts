@@ -63,7 +63,7 @@ export interface DiscussionEntry {
   id: string;
   fullDatabaseId: string | null;
   updatedAt: string;
-  author: { login: string } | null;
+  author: { login: string; __typename?: string } | null;
   authorAssociation: string;
 }
 
@@ -247,7 +247,7 @@ export function validateReviewCommentLocations(diff: string, comments: ReviewCom
 
 export async function fetchPullRequestReviewBundle(repository: string, number: number): Promise<ReviewBundle> {
   const commands = [
-    ['pr', 'view', String(number), '--repo', repository, '--json', 'number,title,body,url,author,headRefOid,headRefName,baseRefName,files,commits,closingIssuesReferences,reviews,reviewDecision,statusCheckRollup'],
+    ['pr', 'view', String(number), '--repo', repository, '--json', 'number,title,body,url,author,headRefOid,headRefName,headRepository,headRepositoryOwner,isCrossRepository,baseRefName,files,commits,closingIssuesReferences,reviews,reviewDecision,statusCheckRollup'],
     ['pr', 'diff', String(number), '--repo', repository],
     ['api', `repos/${repository}/pulls/${number}/comments?per_page=100`, '--paginate', '--slurp'],
     ['api', `repos/${repository}/issues/${number}/comments?per_page=100`, '--paginate', '--slurp'],
@@ -678,7 +678,7 @@ interface ReviewThreadCommentNode {
   body: string;
   createdAt: string;
   updatedAt: string;
-  author: { login: string } | null;
+  author: { login: string; __typename?: string } | null;
   authorAssociation: string;
 }
 
@@ -697,9 +697,11 @@ export interface GithubReviewFinding {
   url: string;
   path: string | null;
   line: number | null;
+  trustedForFeedback: boolean;
   resolved: boolean;
   outdated: boolean;
   createdAt: string;
+  updatedAt: string;
 }
 
 export interface GithubPullRequestReviewContext {
@@ -750,10 +752,10 @@ query($owner:String!, $repo:String!, $number:Int!, $cursor:String) {
         nodes {
           isResolved isOutdated
           comments(first:1) {
-            nodes { databaseId id fullDatabaseId url path line originalLine body createdAt updatedAt author { login } authorAssociation }
+            nodes { databaseId id fullDatabaseId url path line originalLine body createdAt updatedAt author { login __typename } authorAssociation }
           }
           recentComments: comments(last:100) {
-            nodes { databaseId id fullDatabaseId url path line originalLine body createdAt updatedAt author { login } authorAssociation }
+            nodes { databaseId id fullDatabaseId url path line originalLine body createdAt updatedAt author { login __typename } authorAssociation }
           }
         }
       }
@@ -830,9 +832,11 @@ export async function fetchPullRequestReviewContext(
       url: comment.url,
       path: comment.path,
       line: comment.line || comment.originalLine,
+      trustedForFeedback: comment.author?.__typename === 'Bot' || trustedAssociations.has(comment.authorAssociation),
       resolved: thread.isResolved,
       outdated: thread.isOutdated,
       createdAt: comment.createdAt,
+      updatedAt: comment.updatedAt,
     }];
   });
   const discussionNode: GithubDiscussionNode = {

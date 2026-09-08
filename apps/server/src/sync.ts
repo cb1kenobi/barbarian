@@ -162,6 +162,15 @@ export function upsertReview(database: BarbarianDatabase, config: BarbarianConfi
       requested_reviewers=excluded.requested_reviewers, requested_teams=excluded.requested_teams,
       linked_issues=excluded.linked_issues, review_skill=excluded.review_skill,
       discussion_watermark=excluded.discussion_watermark,
+      feedback_retry_after=CASE
+        WHEN excluded.discussion_watermark>review_queue.discussion_watermark THEN NULL
+        ELSE review_queue.feedback_retry_after END,
+      feedback_last_error=CASE
+        WHEN excluded.discussion_watermark>review_queue.discussion_watermark THEN NULL
+        ELSE review_queue.feedback_last_error END,
+      feedback_needs_input=CASE
+        WHEN excluded.discussion_watermark>review_queue.discussion_watermark THEN 0
+        ELSE review_queue.feedback_needs_input END,
       claim_owner=CASE WHEN excluded.is_draft=1 THEN NULL ELSE review_queue.claim_owner END,
       claimed_at=CASE WHEN excluded.is_draft=1 THEN NULL ELSE review_queue.claimed_at END,
       manual_requested_at=CASE WHEN excluded.is_draft=1 THEN NULL ELSE review_queue.manual_requested_at END,

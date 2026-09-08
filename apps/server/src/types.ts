@@ -71,6 +71,7 @@ export interface BarbarianConfig {
     reviewRouting: ReviewRoutingAlgorithm;
     usageHeadroomPercent: number;
     autoReview: boolean;
+    autoAddressFeedback: boolean;
     maxConcurrent: number;
     maxAutomaticAttempts: number;
     retryBaseMinutes: number;

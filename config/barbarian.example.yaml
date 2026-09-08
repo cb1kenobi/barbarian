@@ -55,6 +55,7 @@ agents:
     model: ""
     effort: ""
   autoReview: false
+  autoAddressFeedback: false
   maxConcurrent: 2
   maxAutomaticAttempts: 3
   retryBaseMinutes: 5

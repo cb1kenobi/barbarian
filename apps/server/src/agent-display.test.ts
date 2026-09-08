@@ -14,7 +14,7 @@ function config(provider: BarbarianConfig['agents']['providers'][string]): Barba
     review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '', autoCleanup: true },
     linear: { enabled: false, command: [] },
     agents: {
-      autoReview: true, maxConcurrent: 2, maxAutomaticAttempts: 3,
+      autoReview: true, autoAddressFeedback: false, maxConcurrent: 2, maxAutomaticAttempts: 3,
       codeReview: [{ id: 'codex', provider: 'codex', model: provider.model || '', effort: provider.effort || '', priority: 0 }],
       chat: { provider: 'codex', model: provider.model || '', effort: provider.effort || '' },
       reviewRouting: 'round_robin', usageHeadroomPercent: 20,

@@ -52,6 +52,7 @@ export class ReviewDispatcher {
   private stopped = false;
   private retryTimer: NodeJS.Timeout | undefined;
   private reviewChanged: (reviewId: string) => void = () => undefined;
+  private agentFinished: () => void = () => undefined;
   private readonly runner: ReviewRunner;
   private readonly runnerSchedulesAgents: boolean;
 
@@ -74,6 +75,10 @@ export class ReviewDispatcher {
 
   setReviewChangedListener(listener: (reviewId: string) => void): void {
     this.reviewChanged = listener;
+  }
+
+  setAgentFinishedListener(listener: () => void): void {
+    this.agentFinished = listener;
   }
 
   private publishReviewChanged(reviewId: string): void {
@@ -243,6 +248,7 @@ export class ReviewDispatcher {
           .finally(() => {
             if (this.runnerSchedulesAgents) this.activeGroups -= 1;
             this.publishReviewChanged(claim.reviewId);
+            this.agentFinished();
             void this.pump();
           });
       }

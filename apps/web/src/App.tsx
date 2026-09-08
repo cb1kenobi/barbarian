@@ -42,6 +42,7 @@ interface Review {
 interface FeedbackReview extends Review {
   approved: boolean;
   has_new_feedback: boolean;
+  needs_input: boolean;
 }
 
 interface FixedIssueReference {
@@ -478,7 +479,9 @@ function Empty({ message }: { message: string }) { return <div className="empty"
 
 function FeedbackBadges({ review }: { review: FeedbackReview }) {
   return <span className="feedback-badges">
-    {review.has_new_feedback && <span className="tag feedback">New feedback</span>}
+    {review.needs_input
+      ? <span className="tag feedback">Needs input</span>
+      : review.has_new_feedback && <span className="tag feedback">New feedback</span>}
     {review.approved && <ReviewStatusBadge status="approved" />}
     {!review.has_new_feedback && !review.approved && <span className="tag quiet">Awaiting review</span>}
   </span>;
