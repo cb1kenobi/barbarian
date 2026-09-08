@@ -10,7 +10,7 @@ import { restoreFailedChatMessage, shouldSubmitChat } from './chat-editor';
 import { renderMarkdown } from './markdown';
 import { repositoryBookmark, sortRepositoryBookmarks, type RepositoryBookmark } from './repository-links';
 import { sortWorkItems, type WorkSort } from './work-sort';
-import { matchesQueueSearch } from './queue-search';
+import { isQueueSearchShortcut, matchesQueueSearch } from './queue-search';
 import { useCloseOnEscape } from './escape-layers';
 import { greetingForTime } from './greeting';
 import {
@@ -250,6 +250,7 @@ export function App() {
   const [workSort, setWorkSort] = useState<WorkSort>('in-progress');
   const [workRepository, setWorkRepository] = useState('all');
   const [queueSearch, setQueueSearch] = useState('');
+  const queueSearchRef = useRef<HTMLInputElement>(null);
   const [feedbackViewportRef, feedbackScrollable] = useScrollableViewport();
   const [reviewViewportRef, reviewsScrollable] = useScrollableViewport();
   const [issueViewportRef, issuesScrollable] = useScrollableViewport();
@@ -291,6 +292,18 @@ export function App() {
     return () => events.close();
   }, [load]);
   useEffect(() => { const interval = window.setInterval(() => setNow(Date.now()), 15_000); return () => window.clearInterval(interval); }, []);
+  useEffect(() => {
+    if (!window.barbarianDesktop) return;
+    const focusQueueSearch = (event: globalThis.KeyboardEvent) => {
+      if (!isQueueSearchShortcut(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      queueSearchRef.current?.focus();
+      queueSearchRef.current?.select();
+    };
+    window.addEventListener('keydown', focusQueueSearch, true);
+    return () => window.removeEventListener('keydown', focusQueueSearch, true);
+  }, []);
   useEffect(() => {
     if (dashboard?.appearance) applyAppearance(dashboard.appearance);
   }, [dashboard?.appearance.theme, dashboard?.appearance.fontSize, dashboard?.appearance.weapon]);
@@ -404,7 +417,7 @@ export function App() {
         <div className="queue-search">
           <label htmlFor="queue-search-input">
             <svg className="queue-search-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" /><path d="m12.5 12.5 4 4" /></svg>
-            <input id="queue-search-input" type="search" aria-label="Search feedback, code reviews, and issues" value={queueSearch} onChange={(event) => setQueueSearch(event.target.value)} placeholder="Search feedback, reviews, and issues by number, title, or description" />
+            <input ref={queueSearchRef} id="queue-search-input" type="search" aria-label="Search feedback, code reviews, and issues" value={queueSearch} onChange={(event) => setQueueSearch(event.target.value)} placeholder="Search feedback, reviews, and issues by number, title, or description" />
             {queueSearch && <button className="queue-search-clear" type="button" onClick={() => setQueueSearch('')} aria-label="Clear queue search"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg></button>}
           </label>
         </div>
