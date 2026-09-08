@@ -31,7 +31,7 @@ const namedHtmlEntities: Record<string, string> = {
   rdquo: '”', reg: '®', rarr: '→', rsquo: '’', trade: '™', zwnj: '', zwj: '',
 };
 const escapedHtmlTagPattern = new RegExp(
-  `${escapedLessThan}(/?[A-Za-z][^${escapedLessThan}${escapedGreaterThan}\n\`]*?)${escapedGreaterThan}`,
+  `${escapedLessThan}(/?[A-Za-z][^${escapedLessThan}${escapedGreaterThan}\n\`]*?)>`,
   'g',
 );
 
@@ -138,7 +138,18 @@ function pairedHtmlContainers(source: string): Map<number, number> {
       cursor = commentEnd < 0 ? nextTag + 4 : commentEnd + 3;
       continue;
     }
+    if (source.startsWith('<!', nextTag) || source.startsWith('<?', nextTag)) {
+      const declarationEnd = findHtmlTagEnd(source, nextTag);
+      cursor = declarationEnd < 0 ? nextTag + 2 : declarationEnd + 1;
+      continue;
+    }
     if (!/^<\/?[A-Za-z]/.test(source.slice(nextTag, nextTag + 8))) {
+      cursor = nextTag + 1;
+      continue;
+    }
+    const pairedName = /^<\/?([A-Za-z][A-Za-z0-9:-]*)/
+      .exec(source.slice(nextTag, Math.min(source.length, nextTag + 80)))?.[1]?.toLowerCase();
+    if (!pairedName || !pairedHtmlElements.has(pairedName)) {
       cursor = nextTag + 1;
       continue;
     }
@@ -151,7 +162,8 @@ function pairedHtmlContainers(source: string): Map<number, number> {
         const opening = stacks.get(name)?.pop();
         if (opening !== undefined) pairs.set(opening, nextTag);
       }
-      cursor = nextTag + 1;
+      const followingTag = source.indexOf('<', nextTag + 1);
+      cursor = followingTag < 0 ? source.length : followingTag;
       continue;
     }
     const candidate = source.slice(nextTag + 1, tagEnd);
@@ -180,7 +192,7 @@ export function normalizeSummaryMarkup(value: string): string {
     .replaceAll(escapedLessThan, '')
     .replaceAll(escapedGreaterThan, '');
   if (!bounded.includes('<') && !bounded.includes('&')) return bounded;
-  const source = decodeHtmlEntities(bounded);
+  const source = decodeHtmlEntities(bounded).replaceAll(escapedGreaterThan, '>');
   if (!source.includes('<')) return restoreEscapedAngles(source);
   const output: string[] = [];
   const pairedContainers = pairedHtmlContainers(source);
@@ -218,13 +230,13 @@ export function normalizeSummaryMarkup(value: string): string {
     const tagEnd = findHtmlTagEnd(source, cursor);
     if (tagEnd < 0) {
       const name = /^<\/?([A-Za-z][A-Za-z0-9:-]*)/.exec(source.slice(cursor, cursor + 80))?.[1]?.toLowerCase();
-      if (name && discardedHtmlContainers.has(name)) {
-        output.push('\n\n');
-        cursor = source.length;
+      if (!name || !knownHtmlElements.has(name)) {
+        output.push('<');
+        cursor += 1;
         continue;
       }
-      if (!name || !knownHtmlElements.has(name)) output.push('<');
-      cursor += 1;
+      const followingTag = source.indexOf('<', cursor + 1);
+      cursor = followingTag < 0 ? source.length : followingTag;
       continue;
     }
     const tag = source.slice(cursor + 1, tagEnd);
@@ -245,7 +257,7 @@ export function normalizeSummaryMarkup(value: string): string {
       const closingStart = pairedContainers.get(cursor) ?? -1;
       if (closingStart >= 0) {
         const closingEnd = findHtmlTagEnd(source, closingStart);
-        cursor = closingEnd < 0 ? source.length : closingEnd + 1;
+        cursor = closingEnd < 0 ? closingStart + name.length + 2 : closingEnd + 1;
         output.push('\n\n');
         continue;
       }

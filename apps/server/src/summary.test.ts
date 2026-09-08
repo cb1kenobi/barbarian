@@ -72,6 +72,9 @@ Everything else is unchanged.`);
 
   it('drops a discarded container through a malformed closing tag', () => {
     expect(normalizeSummaryMarkup('Before.<script>hidden()</script')).toBe('Before.\n\n');
+    const withLaterText = normalizeSummaryMarkup('Before.<script>hidden()</script After.');
+    expect(withLaterText).not.toContain('hidden');
+    expect(withLaterText).toContain('After.');
   });
 
   it('does not let unmatched backticks or oversized tags bypass normalization', () => {
@@ -79,15 +82,22 @@ Everything else is unchanged.`);
     expect(unmatchedBacktick).not.toContain('hidden');
     expect(unmatchedBacktick).toContain('After.');
 
-    const oversizedTag = normalizeSummaryMarkup(`<script data-padding="${'x'.repeat(1_100)}">hidden()</script>`);
+    const oversizedTag = normalizeSummaryMarkup(`<script data-padding="${'x'.repeat(1_100)}">hidden()</script> After.`);
     expect(oversizedTag).not.toContain('hidden');
     expect(oversizedTag).not.toMatch(/<\/?script/i);
+    expect(oversizedTag).toContain('After.');
+
+    const oversizedLink = normalizeSummaryMarkup(`<a href="${'x'.repeat(1_100)}">Dashboard</a> After link.`);
+    expect(oversizedLink).not.toContain('href');
+    expect(oversizedLink).not.toContain('xxx');
+    expect(oversizedLink).toContain('After link.');
   });
 
   it('renders deliberately escaped tags as inline code', () => {
     const normalized = normalizeSummaryMarkup('Use &lt;template&gt; or &#60;slot&#62; in the layout.');
     expect(normalized).toBe('Use `<template>` or `<slot>` in the layout.');
     expect(normalizeSummaryMarkup(normalized)).toBe(normalized);
+    expect(normalizeSummaryMarkup('Show &lt;script> literally.')).toBe('Show `<script>` literally.');
   });
 
   it('restores escaped comparisons without fabricating a code span', () => {
