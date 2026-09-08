@@ -605,7 +605,7 @@ describe('status updates', () => {
 });
 
 describe('browser context appearance', () => {
-  it('refreshes stored summaries without replacing completed agent output', async () => {
+  it('refreshes stored summaries without replacing existing summary prose', async () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-summary-backfill-test-'));
     directories.push(directory);
     const database = new BarbarianDatabase(path.join(directory, 'test.db'));
@@ -636,10 +636,6 @@ describe('browser context appearance', () => {
       )
     `).run(now, now, now);
     database.connection.prepare(`
-      INSERT INTO agent_runs(review_id, provider, task, status, started_at, finished_at)
-      VALUES ('github:Acme/storage#89', 'codex', 'code_review:new_pr', 'complete', ?, ?)
-    `).run(now, now);
-    database.connection.prepare(`
       INSERT INTO work_items(
         id, provider, repository, number, kind, title, body, simple_summary, url,
         first_seen_at, updated_at, last_seen_at
@@ -656,6 +652,14 @@ describe('browser context appearance', () => {
         'finding:html', 'github:Acme/storage#88', 9001, 'reviewer',
         '<h3>Potential regression</h3><p>The fallback can return stale data.</p>',
         'Old <h3>finding</h3>', 'https://github.com/Acme/storage/pull/88#discussion_r9001', ?, ?
+      )
+    `).run(now, now);
+    database.connection.prepare(`
+      INSERT INTO review_findings(
+        id, review_id, remote_id, author, body, summary, url, created_at, updated_at
+      ) VALUES (
+        'finding:stored-html', 'github:Acme/storage#88', 9002, 'reviewer', '',
+        '<strong>Stored finding title</strong>', 'https://github.com/Acme/storage/pull/88#discussion_r9002', ?, ?
       )
     `).run(now, now);
     const insertBatchItem = database.connection.prepare(`
@@ -694,6 +698,8 @@ describe('browser context appearance', () => {
       expect(workItem.simple_summary).not.toMatch(/<\/?[a-z][^>]*>/i);
       expect(database.connection.prepare("SELECT summary FROM review_findings WHERE id='finding:html'").get())
         .toEqual({ summary: 'Potential regression' });
+      expect(database.connection.prepare("SELECT summary FROM review_findings WHERE id='finding:stored-html'").get())
+        .toEqual({ summary: 'Stored finding title' });
       expect(database.connection.prepare(`
         SELECT COUNT(*) AS total FROM work_items
         WHERE number>=1000 AND simple_summary NOT LIKE '%<%'

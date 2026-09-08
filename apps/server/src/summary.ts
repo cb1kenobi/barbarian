@@ -6,6 +6,7 @@ const maximumHtmlTagLength = 1_024;
 const escapedLessThan = '\ue000';
 const escapedGreaterThan = '\ue001';
 const discardedHtmlContainers = new Set(['canvas', 'iframe', 'object', 'pre', 'script', 'style', 'svg', 'template']);
+const pairedHtmlElements = new Set([...discardedHtmlContainers, 'code']);
 const knownHtmlElements = new Set([
   'a', 'abbr', 'address', 'area', 'article', 'aside', 'audio', 'b', 'base', 'bdi', 'bdo',
   'big', 'blockquote', 'body', 'br', 'button', 'canvas',
@@ -117,13 +118,12 @@ function markdownCodeEnd(source: string, start: number): number {
   while (source[delimiterEnd] === '`') delimiterEnd += 1;
   const delimiter = source.slice(start, delimiterEnd);
   const closingStart = source.indexOf(delimiter, delimiterEnd);
-  return closingStart < 0 ? source.length : closingStart + delimiter.length;
+  return closingStart < 0 ? delimiterEnd : closingStart + delimiter.length;
 }
 
 function pairedHtmlContainers(source: string): Map<number, number> {
   const pairs = new Map<number, number>();
   const stacks = new Map<string, number[]>();
-  const pairedElements = new Set([...discardedHtmlContainers, 'code']);
   let cursor = 0;
   while (cursor < source.length) {
     const nextCode = source.indexOf('`', cursor);
@@ -133,11 +133,31 @@ function pairedHtmlContainers(source: string): Map<number, number> {
       continue;
     }
     if (nextTag < 0) break;
+    if (source.startsWith('<!--', nextTag)) {
+      const commentEnd = source.indexOf('-->', nextTag + 4);
+      cursor = commentEnd < 0 ? nextTag + 4 : commentEnd + 3;
+      continue;
+    }
+    if (!/^<\/?[A-Za-z]/.test(source.slice(nextTag, nextTag + 8))) {
+      cursor = nextTag + 1;
+      continue;
+    }
     const tagEnd = findHtmlTagEnd(source, nextTag);
-    const candidate = source.slice(nextTag + 1, tagEnd < 0 ? Math.min(source.length, nextTag + 80) : tagEnd);
+    if (tagEnd < 0) {
+      const malformedClose = /^<\/([A-Za-z][A-Za-z0-9:-]*)(?:\s|$)/
+        .exec(source.slice(nextTag, Math.min(source.length, nextTag + 80)));
+      const name = malformedClose?.[1]?.toLowerCase();
+      if (name && pairedHtmlElements.has(name)) {
+        const opening = stacks.get(name)?.pop();
+        if (opening !== undefined) pairs.set(opening, nextTag);
+      }
+      cursor = nextTag + 1;
+      continue;
+    }
+    const candidate = source.slice(nextTag + 1, tagEnd);
     const match = /^(\/)?([A-Za-z][A-Za-z0-9:-]*)(?:\s|\/|$)/.exec(candidate);
     const name = match?.[2]?.toLowerCase();
-    if (name && pairedElements.has(name)) {
+    if (name && pairedHtmlElements.has(name)) {
       if (match?.[1]) {
         const opening = stacks.get(name)?.pop();
         if (opening !== undefined) pairs.set(opening, nextTag);
@@ -150,7 +170,6 @@ function pairedHtmlContainers(source: string): Map<number, number> {
         stack.push(nextTag);
       }
     }
-    if (tagEnd < 0) break;
     cursor = tagEnd + 1;
   }
   return pairs;
@@ -198,7 +217,13 @@ export function normalizeSummaryMarkup(value: string): string {
     }
     const tagEnd = findHtmlTagEnd(source, cursor);
     if (tagEnd < 0) {
-      output.push('<');
+      const name = /^<\/?([A-Za-z][A-Za-z0-9:-]*)/.exec(source.slice(cursor, cursor + 80))?.[1]?.toLowerCase();
+      if (name && discardedHtmlContainers.has(name)) {
+        output.push('\n\n');
+        cursor = source.length;
+        continue;
+      }
+      if (!name || !knownHtmlElements.has(name)) output.push('<');
       cursor += 1;
       continue;
     }

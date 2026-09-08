@@ -64,8 +64,24 @@ Everything else is unchanged.`);
     expect(normalized).toContain('Everything else is unchanged.');
   });
 
+  it('still pairs discarded containers after bare or malformed angle text', () => {
+    const normalized = normalizeSummaryMarkup('Ensure a < b first. <a href="unfinished then <style>.hidden { display: none }</style> Done.');
+    expect(normalized).not.toContain('hidden');
+    expect(normalized).toContain('Done.');
+  });
+
   it('drops a discarded container through a malformed closing tag', () => {
     expect(normalizeSummaryMarkup('Before.<script>hidden()</script')).toBe('Before.\n\n');
+  });
+
+  it('does not let unmatched backticks or oversized tags bypass normalization', () => {
+    const unmatchedBacktick = normalizeSummaryMarkup('Before ` <script>hidden()</script> After.');
+    expect(unmatchedBacktick).not.toContain('hidden');
+    expect(unmatchedBacktick).toContain('After.');
+
+    const oversizedTag = normalizeSummaryMarkup(`<script data-padding="${'x'.repeat(1_100)}">hidden()</script>`);
+    expect(oversizedTag).not.toContain('hidden');
+    expect(oversizedTag).not.toMatch(/<\/?script/i);
   });
 
   it('renders deliberately escaped tags as inline code', () => {

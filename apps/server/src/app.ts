@@ -516,7 +516,7 @@ function refreshStoredReviewSummaries(database: BarbarianDatabase): void {
   `);
   const updateWorkItem = database.connection.prepare('UPDATE work_items SET simple_summary=? WHERE id=?');
   const findings = database.connection.prepare(`
-    SELECT id, body FROM review_findings
+    SELECT id, body, summary FROM review_findings
     WHERE id>? AND (
       instr(body, '<')>0 OR instr(body, '&')>0
       OR instr(summary, '<')>0 OR instr(summary, '&')>0
@@ -551,9 +551,12 @@ function refreshStoredReviewSummaries(database: BarbarianDatabase): void {
     }
     afterId = '';
     while (true) {
-      const batch = findings.all(afterId, batchSize) as Array<{ id: string; body: string }>;
+      const batch = findings.all(afterId, batchSize) as Array<{ id: string; body: string; summary: string }>;
       if (!batch.length) break;
-      for (const finding of batch) updateFinding.run(summarizeReviewComment(finding.body), finding.id);
+      for (const finding of batch) {
+        const summary = finding.body ? summarizeReviewComment(finding.body) : normalizeSummaryMarkup(finding.summary);
+        updateFinding.run(summary, finding.id);
+      }
       afterId = batch.at(-1)!.id;
     }
     database.connection.prepare(`
