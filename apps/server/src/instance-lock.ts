@@ -5,6 +5,10 @@ import { paths } from './paths.js';
 
 const execFileAsync = promisify(execFile);
 
+export function commandLooksLikeBarbarian(command: string): boolean {
+  return /(?:^|[\s/])(?:dist\/server\/index\.js|apps\/server\/src\/index\.ts)(?:\s|$)/i.test(command);
+}
+
 export interface InstanceLock {
   release(): Promise<void>;
 }
@@ -25,7 +29,7 @@ async function processIsBarbarian(pid: number): Promise<boolean> {
     const command = process.platform === 'linux'
       ? (await readFile(`/proc/${pid}/cmdline`, 'utf8')).replaceAll('\0', ' ')
       : (await execFileAsync('ps', ['-p', String(pid), '-o', 'command='])).stdout;
-    return /(?:^|\s)\S*barbarian\S*\/dist\/server\/index\.js(?:\s|$)/i.test(command);
+    return commandLooksLikeBarbarian(command);
   } catch {
     return process.platform !== 'darwin' && process.platform !== 'linux';
   }

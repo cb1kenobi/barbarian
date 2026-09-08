@@ -492,6 +492,14 @@ function localAgentApiAllowed(origin: string | undefined, host: string | undefin
   return dashboardApiAllowed(origin, host, server);
 }
 
+function interactiveDashboardAllowed(
+  origin: string | undefined,
+  host: string | undefined,
+  server: BarbarianConfig['server'],
+): boolean {
+  return Boolean(origin) && dashboardApiAllowed(origin, host, server);
+}
+
 function refreshStoredReviewSummaries(database: BarbarianDatabase): void {
   const key = 'review_summary_version';
   const version = '2';
@@ -937,10 +945,12 @@ export async function createApp(
     let feedbackResumed = false;
     try {
       const now = new Date().toISOString();
-      database.connection.prepare(`
+      const insertedUser = database.connection.prepare(`
         INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'user', ?, ?, ?)
       `).run(id, body.author, body.message, now);
-      feedbackResumed = feedbackDispatcher.resumeFeedbackAfterInput(id);
+      if (interactiveDashboardAllowed(request.headers.origin, request.headers.host, activeServer)) {
+        feedbackResumed = feedbackDispatcher.resumeFeedbackAfterInput(id, Number(insertedUser.lastInsertRowid));
+      }
       if (!body.askAgent) return { message: null };
       const runtimeKey = `agent-run:${randomUUID()}`;
       const response = await runtime.run(

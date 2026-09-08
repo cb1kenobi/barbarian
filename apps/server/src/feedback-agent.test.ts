@@ -4,7 +4,9 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BarbarianDatabase } from './database.js';
 import type { BarbarianConfig } from './types.js';
-import { parseFeedbackAgentResult, runFeedbackAgent, type FeedbackClaim } from './feedback-agent.js';
+import {
+  feedbackSourceRepository, parseFeedbackAgentResult, runFeedbackAgent, type FeedbackClaim,
+} from './feedback-agent.js';
 
 const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
@@ -52,6 +54,20 @@ function setup(): { database: BarbarianDatabase; claim: FeedbackClaim } {
 }
 
 describe('feedback agent result', () => {
+  it('resolves same-repository and fork branch sources from GitHub metadata', () => {
+    expect(feedbackSourceRepository('Acme/repo', { isCrossRepository: false })).toBe('Acme/repo');
+    expect(feedbackSourceRepository('Acme/repo', {
+      isCrossRepository: true,
+      headRepository: { nameWithOwner: 'Contributor/repo' },
+    })).toBe('Contributor/repo');
+    expect(feedbackSourceRepository('Acme/repo', {
+      isCrossRepository: true,
+      headRepository: { name: 'repo' },
+      headRepositoryOwner: { login: 'Contributor' },
+    })).toBe('Contributor/repo');
+    expect(feedbackSourceRepository('Acme/repo', { isCrossRepository: true })).toBe('');
+  });
+
   it('parses the final machine-readable result', () => {
     expect(parseFeedbackAgentResult('notes\nBARBARIAN_FEEDBACK_RESULT: {"status":"fixed","summary":"Done"}'))
       .toEqual({ status: 'fixed', summary: 'Done' });
@@ -60,10 +76,12 @@ describe('feedback agent result', () => {
 
   it('pushes a committed fix and reports it in the review room', async () => {
     const { database, claim } = setup();
-    database.connection.prepare(`
+    const input = database.connection.prepare(`
       INSERT INTO chat_messages(review_id, role, author, content, created_at)
       VALUES (?, 'user', 'Developer', 'Preserve the fallback behavior.', ?)
     `).run(claim.reviewId, new Date().toISOString());
+    database.connection.prepare('UPDATE review_queue SET feedback_input_message_id=? WHERE id=?')
+      .run(Number(input.lastInsertRowid), claim.reviewId);
     let pushed = false;
     let prompt = '';
     await runFeedbackAgent(database, config, claim, undefined, {
@@ -82,7 +100,8 @@ describe('feedback agent result', () => {
 
     expect(pushed).toBe(true);
     expect(prompt).toContain('Preserve the fallback behavior.');
-    expect(prompt).toContain('Treat role=user entries as direct developer');
+    expect(prompt).toContain('TRUSTED_DEVELOPER_ANSWER_JSON');
+    expect(prompt).toContain('submitted from Barbarian\'s interactive dashboard');
     expect(prompt).toContain('Do not commit or modify Git metadata');
     expect(database.connection.prepare(`
       SELECT last_feedback_handled_watermark, feedback_claim_owner, feedback_needs_input,

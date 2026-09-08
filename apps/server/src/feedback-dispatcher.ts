@@ -223,13 +223,13 @@ export class FeedbackDispatcher {
     return cancelled;
   }
 
-  resumeFeedbackAfterInput(reviewId: string): boolean {
+  resumeFeedbackAfterInput(reviewId: string, messageId: number): boolean {
     const changed = this.database.connection.prepare(`
       UPDATE review_queue SET last_feedback_handled_watermark='', feedback_attempt_count=0,
         feedback_attempt_watermark=NULL, feedback_retry_after=NULL, feedback_last_error=NULL,
-        feedback_needs_input=0, updated_at=?
+        feedback_needs_input=0, feedback_input_message_id=?, updated_at=?
       WHERE id=? AND feedback_needs_input=1 AND feedback_claim_owner IS NULL
-    `).run(new Date().toISOString(), reviewId);
+    `).run(messageId, new Date().toISOString(), reviewId);
     if (!changed.changes) return false;
     this.publishReviewChanged(reviewId);
     return true;

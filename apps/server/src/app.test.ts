@@ -881,20 +881,33 @@ describe('review room feedback answers', () => {
     `).run(id, now, now, now);
     const app = await createApp(database, new ConfigStore(config));
     try {
+      const extensionResponse = await app.inject({
+        method: 'POST', url: `/api/reviews/${encodeURIComponent(id)}/chat`,
+        headers: { host: 'localhost:80', origin: 'chrome-extension://extension-id' },
+        payload: { message: 'Untrusted extension direction.', askAgent: false, author: 'Extension' },
+      });
+      expect(extensionResponse.statusCode).toBe(200);
+      expect(database.connection.prepare(`
+        SELECT feedback_needs_input, feedback_input_message_id FROM review_queue WHERE id=?
+      `).get(id)).toEqual({ feedback_needs_input: 1, feedback_input_message_id: null });
+
       const response = await app.inject({
         method: 'POST', url: `/api/reviews/${encodeURIComponent(id)}/chat`,
+        headers: { host: 'localhost:4142', origin: 'http://localhost:4142' },
         payload: { message: 'Keep the fallback behavior.', askAgent: false, author: 'Developer' },
       });
       expect(response.statusCode).toBe(200);
       expect(database.connection.prepare(`
         SELECT last_feedback_handled_watermark, feedback_attempt_count, feedback_attempt_watermark,
-          feedback_last_error, feedback_needs_input FROM review_queue WHERE id=?
+          feedback_last_error, feedback_needs_input, feedback_input_message_id
+        FROM review_queue WHERE id=?
       `).get(id)).toEqual({
         last_feedback_handled_watermark: '', feedback_attempt_count: 0,
         feedback_attempt_watermark: null, feedback_last_error: null, feedback_needs_input: 0,
+        feedback_input_message_id: 2,
       });
       expect(database.connection.prepare(`
-        SELECT role, author, content FROM chat_messages WHERE review_id=?
+        SELECT role, author, content FROM chat_messages WHERE review_id=? ORDER BY id DESC LIMIT 1
       `).get(id)).toEqual({ role: 'user', author: 'Developer', content: 'Keep the fallback behavior.' });
     } finally {
       await app.close();

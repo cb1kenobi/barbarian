@@ -233,14 +233,16 @@ describe('FeedbackDispatcher', () => {
       database, testConfig(), new AgentRuntime(1), { error: () => undefined }, async () => undefined,
     );
 
-    expect(dispatcher.resumeFeedbackAfterInput(id)).toBe(true);
-    expect(dispatcher.resumeFeedbackAfterInput(id)).toBe(false);
+    expect(dispatcher.resumeFeedbackAfterInput(id, 42)).toBe(true);
+    expect(dispatcher.resumeFeedbackAfterInput(id, 43)).toBe(false);
     expect(database.connection.prepare(`
       SELECT last_feedback_handled_watermark, feedback_attempt_count, feedback_attempt_watermark,
-        feedback_last_error, feedback_needs_input FROM review_queue WHERE id=?
+        feedback_last_error, feedback_needs_input, feedback_input_message_id
+      FROM review_queue WHERE id=?
     `).get(id)).toEqual({
       last_feedback_handled_watermark: '', feedback_attempt_count: 0,
       feedback_attempt_watermark: null, feedback_last_error: null, feedback_needs_input: 0,
+      feedback_input_message_id: 42,
     });
     dispatcher.stop();
     database.close();

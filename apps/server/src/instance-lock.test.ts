@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { acquireInstanceLock } from './instance-lock.js';
+import { acquireInstanceLock, commandLooksLikeBarbarian } from './instance-lock.js';
 
 const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
@@ -37,5 +37,11 @@ describe('acquireInstanceLock', () => {
     } finally {
       child.kill();
     }
+  });
+
+  it('recognizes production and development server entrypoints', () => {
+    expect(commandLooksLikeBarbarian('node /projects/barbarian/dist/server/index.js')).toBe(true);
+    expect(commandLooksLikeBarbarian('tsx watch apps/server/src/index.ts')).toBe(true);
+    expect(commandLooksLikeBarbarian('node -e setInterval(() => undefined, 1000)')).toBe(false);
   });
 });
