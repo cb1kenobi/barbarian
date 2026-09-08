@@ -884,9 +884,21 @@ describe('review room feedback answers', () => {
       const extensionResponse = await app.inject({
         method: 'POST', url: `/api/reviews/${encodeURIComponent(id)}/chat`,
         headers: { host: 'localhost:80', origin: 'chrome-extension://extension-id' },
-        payload: { message: 'Untrusted extension direction.', askAgent: false, author: 'Extension' },
+        payload: {
+          message: 'Untrusted extension direction.', askAgent: false, author: 'Extension', feedbackAnswer: true,
+        },
       });
       expect(extensionResponse.statusCode).toBe(200);
+      expect(database.connection.prepare(`
+        SELECT feedback_needs_input, feedback_input_message_id FROM review_queue WHERE id=?
+      `).get(id)).toEqual({ feedback_needs_input: 1, feedback_input_message_id: null });
+
+      const ordinaryMessage = await app.inject({
+        method: 'POST', url: `/api/reviews/${encodeURIComponent(id)}/chat`,
+        headers: { host: 'localhost:4142', origin: 'http://localhost:4142' },
+        payload: { message: 'What was the question?', askAgent: false, author: 'Developer' },
+      });
+      expect(ordinaryMessage.statusCode).toBe(200);
       expect(database.connection.prepare(`
         SELECT feedback_needs_input, feedback_input_message_id FROM review_queue WHERE id=?
       `).get(id)).toEqual({ feedback_needs_input: 1, feedback_input_message_id: null });
@@ -894,7 +906,9 @@ describe('review room feedback answers', () => {
       const response = await app.inject({
         method: 'POST', url: `/api/reviews/${encodeURIComponent(id)}/chat`,
         headers: { host: 'localhost:4142', origin: 'http://localhost:4142' },
-        payload: { message: 'Keep the fallback behavior.', askAgent: false, author: 'Developer' },
+        payload: {
+          message: 'Keep the fallback behavior.', askAgent: false, author: 'Developer', feedbackAnswer: true,
+        },
       });
       expect(response.statusCode).toBe(200);
       expect(database.connection.prepare(`
@@ -904,7 +918,9 @@ describe('review room feedback answers', () => {
       `).get(id)).toEqual({
         last_feedback_handled_watermark: '', feedback_attempt_count: 0,
         feedback_attempt_watermark: 'watermark-1', feedback_last_error: null, feedback_needs_input: 0,
-        feedback_input_message_id: 2,
+        feedback_input_message_id: Number((database.connection.prepare(`
+          SELECT id FROM chat_messages WHERE review_id=? AND content='Keep the fallback behavior.'
+        `).get(id) as { id: number }).id),
       });
       expect(database.connection.prepare(`
         SELECT role, author, content FROM chat_messages WHERE review_id=? ORDER BY id DESC LIMIT 1

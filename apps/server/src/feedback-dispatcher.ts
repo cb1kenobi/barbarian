@@ -239,7 +239,30 @@ export class FeedbackDispatcher {
     const rows = this.database.connection.prepare(`
       SELECT id FROM review_queue WHERE feedback_claim_owner IS NOT NULL
     `).all() as Array<{ id: string }>;
-    return rows.reduce((total, row) => total + this.cancelFeedback(row.id).cancelled, 0);
+    let cancelled = 0;
+    for (const row of rows) {
+      cancelled += this.runtime.cancel(`${row.id}:feedback`, new Error('Automatic feedback fixes were disabled'));
+    }
+    const now = new Date().toISOString();
+    this.database.connection.exec('BEGIN IMMEDIATE');
+    try {
+      this.database.connection.prepare(`
+        UPDATE review_queue SET feedback_claim_owner=NULL, feedback_claimed_at=NULL,
+          feedback_retry_after=NULL, feedback_last_error=NULL, updated_at=?
+        WHERE feedback_claim_owner IS NOT NULL
+      `).run(now);
+      this.database.connection.prepare(`
+        UPDATE agent_runs SET status='cancelled', finished_at=?,
+          error='Automatic feedback fixes were disabled', prompt=''
+        WHERE task='address_feedback' AND status='running'
+      `).run(now);
+      this.database.connection.exec('COMMIT');
+    } catch (error) {
+      this.database.connection.exec('ROLLBACK');
+      throw error;
+    }
+    for (const row of rows) this.publishReviewChanged(row.id);
+    return cancelled;
   }
 
   private claimNext(config: BarbarianConfig): FeedbackClaim | null {

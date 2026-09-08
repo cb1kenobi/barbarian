@@ -333,4 +333,33 @@ describe('FeedbackDispatcher', () => {
     dispatcher.stop();
     database.close();
   });
+
+  it('leaves disabled in-flight feedback eligible when automatic fixes are re-enabled', () => {
+    const database = testDatabase();
+    const id = seedReview(database);
+    const now = new Date().toISOString();
+    database.connection.prepare(`
+      UPDATE review_queue SET feedback_claim_owner='owner-1', feedback_claimed_at=?,
+        feedback_attempt_watermark='watermark-1' WHERE id=?
+    `).run(now, id);
+    database.connection.prepare(`
+      INSERT INTO agent_runs(review_id, provider, task, status, started_at, prompt)
+      VALUES (?, 'codex', 'address_feedback', 'running', ?, 'feedback prompt')
+    `).run(id, now);
+    const dispatcher = new FeedbackDispatcher(
+      database, testConfig(), new AgentRuntime(1), { error: () => undefined }, async () => undefined,
+    );
+
+    dispatcher.cancelAllFeedback();
+    expect(database.connection.prepare(`
+      SELECT feedback_claim_owner, last_feedback_handled_watermark FROM review_queue WHERE id=?
+    `).get(id)).toEqual({ feedback_claim_owner: null, last_feedback_handled_watermark: null });
+    expect(database.connection.prepare(`
+      SELECT status, error, prompt FROM agent_runs WHERE review_id=? AND task='address_feedback'
+    `).get(id)).toEqual({
+      status: 'cancelled', error: 'Automatic feedback fixes were disabled', prompt: '',
+    });
+    dispatcher.stop();
+    database.close();
+  });
 });

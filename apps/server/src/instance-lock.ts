@@ -38,11 +38,14 @@ async function processOwnsLock(pid: number, lockStartedAt: string | undefined): 
       : (await execFileAsync('ps', ['-p', String(pid), '-o', 'command='])).stdout;
     return commandLooksLikeBarbarian(command);
   } catch {
-    return process.platform !== 'darwin' && process.platform !== 'linux';
+    return true;
   }
 }
 
-export async function acquireInstanceLock(filename = paths.lockPath): Promise<InstanceLock> {
+export async function acquireInstanceLock(
+  filename = paths.lockPath,
+  ownsLock: (pid: number, startedAt: string | undefined) => Promise<boolean> = processOwnsLock,
+): Promise<InstanceLock> {
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
       const handle = await open(filename, 'wx', 0o600);
@@ -59,7 +62,7 @@ export async function acquireInstanceLock(filename = paths.lockPath): Promise<In
       const owner: { pid?: number; startedAt?: string } = await readFile(filename, 'utf8')
         .then((value) => JSON.parse(value) as { pid?: number; startedAt?: string })
         .catch(() => ({}));
-      if (owner.pid && await processOwnsLock(owner.pid, owner.startedAt)) {
+      if (owner.pid && await ownsLock(owner.pid, owner.startedAt)) {
         throw new Error(`Barbarian is already running as process ${owner.pid}`);
       }
       if (!owner.pid && observed && Date.now() - observed.mtimeMs < 30_000) {

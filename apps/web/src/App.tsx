@@ -34,6 +34,7 @@ interface Review {
   remote_created_at: string; remote_updated_at: string; last_agent_review_at: string | null;
   new_commit_count: number; review_round_count: number;
   is_draft: boolean;
+  needs_input: boolean;
   issue_counts: { high: number; medium: number; low: number };
   linked_issues?: number[];
   fixed_issues?: FixedIssueReference[];
@@ -42,7 +43,6 @@ interface Review {
 interface FeedbackReview extends Review {
   approved: boolean;
   has_new_feedback: boolean;
-  needs_input: boolean;
 }
 
 interface FixedIssueReference {
@@ -839,7 +839,7 @@ function ReviewDrawer({ id, timezone, now, onClose, onChanged, onAgentFailed }: 
   }, [id]);
   useEffect(() => { setWorkspaceWrite(false); }, [id]);
   const action = async (name: string, operation: () => Promise<unknown>) => { setBusy(name); setError(''); try { await operation(); await load(); await onChanged(); return true; } catch (caught) { setError(caught instanceof Error ? caught.message : String(caught)); return false; } finally { setBusy(''); } };
-  const send = async (event: FormEvent) => { event.preventDefault(); if (busy || !message.trim()) return; const text = message; setMessage(''); const sent = await action('chat', () => api(`/api/reviews/${encodeURIComponent(id)}/chat`, { method: 'POST', body: JSON.stringify({ message: text, workspaceWrite }) })); if (!sent) setMessage((current) => restoreFailedChatMessage(text, current)); };
+  const send = async (event: FormEvent) => { event.preventDefault(); if (busy || !message.trim()) return; const text = message; setMessage(''); const feedbackAnswer = review?.needs_input === true; const sent = await action('chat', () => api(`/api/reviews/${encodeURIComponent(id)}/chat`, { method: 'POST', body: JSON.stringify({ message: text, workspaceWrite, feedbackAnswer, askAgent: !feedbackAnswer }) })); if (!sent) setMessage((current) => restoreFailedChatMessage(text, current)); };
   const submitOnEnter = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (!shouldSubmitChat(event.key, event.shiftKey, event.nativeEvent.isComposing)) return;
     event.preventDefault();

@@ -62,7 +62,7 @@ export class LocalBranchInputError extends Error {}
 
 export function repositoryFromRemote(remote: string): string | null {
   const trimmed = remote.trim().replace(/\/$/, '');
-  const match = trimmed.match(/github\.com[/:]([^/]+)\/([^/]+)$/i);
+  const match = trimmed.match(/^(?:https?:\/\/github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:)([^/]+)\/([^/]+)$/i);
   if (!match?.[1] || !match[2]) return null;
   return `${match[1]}/${match[2].replace(/\.git$/i, '')}`;
 }

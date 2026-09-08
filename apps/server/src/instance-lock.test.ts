@@ -32,7 +32,7 @@ describe('acquireInstanceLock', () => {
     });
     try {
       await writeFile(filename, JSON.stringify({ pid: child.pid, startedAt: '2020-01-01T00:00:00Z' }));
-      const lock = await acquireInstanceLock(filename);
+      const lock = await acquireInstanceLock(filename, async () => false);
       await lock.release();
     } finally {
       child.kill();

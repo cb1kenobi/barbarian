@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BarbarianDatabase } from './database.js';
-import { askLocalBranchAgent, localBranchFindings, runLocalBranchReview, upsertLocalBranch } from './branch-context.js';
+import {
+  askLocalBranchAgent, localBranchFindings, repositoryFromRemote, runLocalBranchReview, upsertLocalBranch,
+} from './branch-context.js';
 import type { BarbarianConfig } from './types.js';
 
 const directories: string[] = [];
@@ -13,6 +15,15 @@ afterEach(() => { for (const directory of directories.splice(0)) rmSync(director
 function git(directory: string, args: string[]): string {
   return execFileSync('git', args, { cwd: directory, encoding: 'utf8' }).trim();
 }
+
+describe('repositoryFromRemote', () => {
+  it('accepts canonical GitHub remotes without matching lookalike hosts', () => {
+    expect(repositoryFromRemote('git@github.com:Acme/storage.git')).toBe('Acme/storage');
+    expect(repositoryFromRemote('https://github.com/Acme/storage.git')).toBe('Acme/storage');
+    expect(repositoryFromRemote('ssh://git@github.com/Acme/storage')).toBe('Acme/storage');
+    expect(repositoryFromRemote('https://evilgithub.com/Acme/storage.git')).toBeNull();
+  });
+});
 
 describe('local branch agent review', () => {
   it('reviews the local diff and stores findings against the branch', async () => {

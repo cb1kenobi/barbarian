@@ -50,6 +50,7 @@ const chatBody = z.object({
   askAgent: z.boolean().default(true),
   author: z.string().default('Developer'),
   workspaceWrite: z.boolean().optional(),
+  feedbackAnswer: z.boolean().default(false),
   selection: z.object({
     text: z.string().max(16_000),
     path: z.string().max(2_000).optional(),
@@ -222,6 +223,7 @@ function rowToReview(
     }),
     review_paused: reviewPaused,
     is_draft: isDraft,
+    needs_input: Boolean(row.feedback_needs_input),
     requested_reviewers: parseJson<string[]>(String(row.requested_reviewers)),
     requested_teams: parseJson<string[]>(String(row.requested_teams)),
     linked_issues: linkedIssues,
@@ -948,7 +950,8 @@ export async function createApp(
       const insertedUser = database.connection.prepare(`
         INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'user', ?, ?, ?)
       `).run(id, body.author, body.message, now);
-      if (interactiveDashboardAllowed(request.headers.origin, request.headers.host, activeServer)) {
+      if (body.feedbackAnswer
+        && interactiveDashboardAllowed(request.headers.origin, request.headers.host, activeServer)) {
         feedbackResumed = feedbackDispatcher.resumeFeedbackAfterInput(id, Number(insertedUser.lastInsertRowid));
       }
       if (!body.askAgent) return { message: null };
