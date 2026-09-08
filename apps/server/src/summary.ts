@@ -7,13 +7,18 @@ const escapedLessThan = '\ue000';
 const escapedGreaterThan = '\ue001';
 const discardedHtmlContainers = new Set(['canvas', 'iframe', 'object', 'pre', 'script', 'style', 'svg', 'template']);
 const knownHtmlElements = new Set([
-  'a', 'abbr', 'article', 'aside', 'b', 'bdi', 'bdo', 'big', 'blockquote', 'br', 'canvas',
-  'caption', 'center', 'cite', 'code', 'col', 'colgroup', 'dd', 'del', 'details', 'div', 'dl',
-  'dt', 'em', 'figcaption', 'figure', 'font', 'footer', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-  'header', 'hr', 'i', 'iframe', 'img', 'ins', 'kbd', 'label', 'li', 'main', 'mark', 'nav',
-  'object', 'ol', 'p', 'pre', 'q', 'rp', 'rt', 'ruby', 's', 'samp', 'script', 'section',
-  'small', 'span', 'strike', 'strong', 'style', 'sub', 'summary', 'sup', 'svg', 'table',
-  'tbody', 'td', 'template', 'tfoot', 'th', 'thead', 'time', 'tr', 'tt', 'u', 'ul', 'var', 'wbr',
+  'a', 'abbr', 'address', 'area', 'article', 'aside', 'audio', 'b', 'base', 'bdi', 'bdo',
+  'big', 'blockquote', 'body', 'br', 'button', 'canvas',
+  'caption', 'center', 'cite', 'code', 'col', 'colgroup', 'data', 'datalist', 'dd', 'del',
+  'details', 'dialog', 'div', 'dl', 'dt', 'em', 'embed', 'fieldset', 'figcaption', 'figure',
+  'font', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'header', 'hgroup',
+  'hr', 'html',
+  'i', 'iframe', 'img', 'input', 'ins', 'kbd', 'label', 'legend', 'li', 'link', 'main', 'map',
+  'mark', 'menu', 'meta', 'meter', 'nav', 'noscript', 'object', 'ol', 'optgroup', 'option', 'output',
+  'p', 'picture', 'pre', 'progress', 'q', 'rp', 'rt', 'ruby', 's', 'samp', 'script', 'section',
+  'select', 'slot', 'small', 'source', 'span', 'strike', 'strong', 'style', 'sub', 'summary',
+  'sup', 'svg', 'table', 'tbody', 'td', 'template', 'textarea', 'tfoot', 'th', 'thead', 'time', 'title',
+  'tr', 'track', 'tt', 'u', 'ul', 'var', 'video', 'wbr',
 ]);
 const paragraphHtmlTags = new Set([
   'article', 'aside', 'blockquote', 'details', 'div', 'dl', 'dt', 'dd', 'footer', 'header', 'main',
@@ -24,6 +29,10 @@ const namedHtmlEntities: Record<string, string> = {
   larr: '←', lsquo: '‘', mdash: '—', middot: '·', nbsp: ' ', ndash: '–', quot: '"', raquo: '»',
   rdquo: '”', reg: '®', rarr: '→', rsquo: '’', trade: '™', zwnj: '', zwj: '',
 };
+const escapedHtmlTagPattern = new RegExp(
+  `${escapedLessThan}(/?[A-Za-z][^${escapedLessThan}${escapedGreaterThan}\n\`]*?)${escapedGreaterThan}`,
+  'g',
+);
 
 function decodeHtmlEntity(entity: string): string | null {
   if (!entity.startsWith('#')) {
@@ -98,52 +107,68 @@ function htmlTagReplacement(name: string, closing: boolean): string {
 
 function restoreEscapedAngles(value: string): string {
   return value
-    .replace(new RegExp(`${escapedLessThan}([^${escapedLessThan}${escapedGreaterThan}\n\`]{1,200})${escapedGreaterThan}`, 'g'),
-      (_match, content: string) => `\`<${content}>\``)
+    .replace(escapedHtmlTagPattern, (_match, content: string) => `\`<${content}>\``)
     .replaceAll(escapedLessThan, '<')
     .replaceAll(escapedGreaterThan, '>');
 }
 
-function closingTagStart(lowerSource: string, name: string, start: number, maximumDistance?: number): number {
-  const end = maximumDistance === undefined ? lowerSource.length : Math.min(lowerSource.length, start + maximumDistance);
-  const lowerWindow = maximumDistance === undefined ? lowerSource : lowerSource.slice(start, end);
-  const token = `</${name}`;
-  let position = lowerWindow.indexOf(token, maximumDistance === undefined ? start : 0);
-  while (position >= 0) {
-    const boundary = lowerWindow[position + token.length];
-    if (boundary === undefined || /[\s>]/.test(boundary)) return maximumDistance === undefined ? position : start + position;
-    position = lowerWindow.indexOf(token, position + token.length);
-  }
-  return -1;
+function markdownCodeEnd(source: string, start: number): number {
+  let delimiterEnd = start + 1;
+  while (source[delimiterEnd] === '`') delimiterEnd += 1;
+  const delimiter = source.slice(start, delimiterEnd);
+  const closingStart = source.indexOf(delimiter, delimiterEnd);
+  return closingStart < 0 ? source.length : closingStart + delimiter.length;
 }
 
-function lastClosingTagStart(lowerSource: string, name: string): number {
-  const token = `</${name}`;
-  let position = lowerSource.lastIndexOf(token);
-  while (position >= 0) {
-    const boundary = lowerSource[position + token.length];
-    if (boundary === undefined || /[\s>]/.test(boundary)) return position;
-    position = lowerSource.lastIndexOf(token, position - 1);
+function pairedHtmlContainers(source: string): Map<number, number> {
+  const pairs = new Map<number, number>();
+  const stacks = new Map<string, number[]>();
+  const pairedElements = new Set([...discardedHtmlContainers, 'code']);
+  let cursor = 0;
+  while (cursor < source.length) {
+    const nextCode = source.indexOf('`', cursor);
+    const nextTag = source.indexOf('<', cursor);
+    if (nextCode >= 0 && (nextTag < 0 || nextCode < nextTag)) {
+      cursor = markdownCodeEnd(source, nextCode);
+      continue;
+    }
+    if (nextTag < 0) break;
+    const tagEnd = findHtmlTagEnd(source, nextTag);
+    const candidate = source.slice(nextTag + 1, tagEnd < 0 ? Math.min(source.length, nextTag + 80) : tagEnd);
+    const match = /^(\/)?([A-Za-z][A-Za-z0-9:-]*)(?:\s|\/|$)/.exec(candidate);
+    const name = match?.[2]?.toLowerCase();
+    if (name && pairedElements.has(name)) {
+      if (match?.[1]) {
+        const opening = stacks.get(name)?.pop();
+        if (opening !== undefined) pairs.set(opening, nextTag);
+      } else if (tagEnd >= 0 && !/\/\s*$/.test(candidate)) {
+        let stack = stacks.get(name);
+        if (!stack) {
+          stack = [];
+          stacks.set(name, stack);
+        }
+        stack.push(nextTag);
+      }
+    }
+    if (tagEnd < 0) break;
+    cursor = tagEnd + 1;
   }
-  return -1;
+  return pairs;
 }
 
 export function normalizeSummaryMarkup(value: string): string {
-  const bounded = value.length <= maximumSourceLength ? value : value.slice(0, maximumSourceLength);
+  const bounded = (value.length <= maximumSourceLength ? value : value.slice(0, maximumSourceLength))
+    .replaceAll(escapedLessThan, '')
+    .replaceAll(escapedGreaterThan, '');
   if (!bounded.includes('<') && !bounded.includes('&')) return bounded;
   const source = decodeHtmlEntities(bounded);
   if (!source.includes('<')) return restoreEscapedAngles(source);
-  const lowerSource = source.toLowerCase();
   const output: string[] = [];
-  const discardedClosingTags = new Map<string, number>();
+  const pairedContainers = pairedHtmlContainers(source);
   let cursor = 0;
   while (cursor < source.length) {
     if (source[cursor] === '`') {
-      let delimiterEnd = cursor + 1;
-      while (source[delimiterEnd] === '`') delimiterEnd += 1;
-      const delimiter = source.slice(cursor, delimiterEnd);
-      const closingStart = source.indexOf(delimiter, delimiterEnd);
-      const closingEnd = closingStart < 0 ? source.length : closingStart + delimiter.length;
+      const closingEnd = markdownCodeEnd(source, cursor);
       output.push(source.slice(cursor, closingEnd));
       cursor = closingEnd;
       continue;
@@ -192,24 +217,19 @@ export function normalizeSummaryMarkup(value: string): string {
       continue;
     }
     if (!closing && discardedHtmlContainers.has(name)) {
-      let lastClosing = discardedClosingTags.get(name);
-      if (lastClosing === undefined) {
-        lastClosing = lastClosingTagStart(lowerSource, name);
-        discardedClosingTags.set(name, lastClosing);
-      }
-      const closingStart = lastClosing > tagEnd ? closingTagStart(lowerSource, name, tagEnd + 1) : -1;
+      const closingStart = pairedContainers.get(cursor) ?? -1;
       if (closingStart >= 0) {
         const closingEnd = findHtmlTagEnd(source, closingStart);
-        cursor = closingEnd < 0 ? tagEnd + 1 : closingEnd + 1;
+        cursor = closingEnd < 0 ? source.length : closingEnd + 1;
         output.push('\n\n');
         continue;
       }
     }
     if (!closing && name === 'code') {
-      const closingStart = closingTagStart(lowerSource, 'code', tagEnd + 1, maximumHtmlTagLength);
+      const closingStart = pairedContainers.get(cursor) ?? -1;
       const closingEnd = closingStart < 0 ? -1 : findHtmlTagEnd(source, closingStart);
       const code = closingStart < 0 ? '' : source.slice(tagEnd + 1, closingStart).trim();
-      if (closingEnd >= 0 && code && !/[\n`<>]/.test(code)) {
+      if (closingStart - tagEnd <= maximumHtmlTagLength && closingEnd >= 0 && code && !/[\n`<>]/.test(code)) {
         output.push(`\`${code}\``);
         cursor = closingEnd + 1;
         continue;
@@ -218,7 +238,7 @@ export function normalizeSummaryMarkup(value: string): string {
     output.push(htmlTagReplacement(name, closing));
     cursor = tagEnd + 1;
   }
-  return restoreEscapedAngles(output.join('').slice(0, maximumSourceLength));
+  return restoreEscapedAngles(output.join('').slice(0, maximumSourceLength)).slice(0, maximumSourceLength);
 }
 
 function truncateAtWord(value: string, limit: number): string {
@@ -291,7 +311,7 @@ export function simplify(title: string, body = ''): string {
   const firstSentence = body
     .replace(/<!--[^]*?-->/g, '')
     .replace(/```[^]*?```/g, '')
-    .replace(/^\s*[-+]\s+/gm, '')
+    .replace(/^[ \t]*[-+][ \t]+/gm, '')
     .replace(/[#>*\[\]]/g, '')
     .split(/(?<=[.!?])\s|\n{2,}/)
     .map((part) => part.trim())
@@ -300,8 +320,7 @@ export function simplify(title: string, body = ''): string {
   return `${cleanTitle}. ${firstSentence}`.slice(0, 240);
 }
 
-export function summarizePullRequest(title: string, body = ''): string {
-  body = normalizeSummaryMarkup(body);
+function summarizeNormalizedPullRequest(title: string, body: string): string {
   const cleanTitle = title.replace(cruft, '').replace(/\s+/g, ' ').trim();
   const normalizedTitle = normalizedText(cleanTitle);
   const paragraphs = usefulParagraphs(body)
@@ -343,8 +362,7 @@ export function summarizePullRequest(title: string, body = ''): string {
   return joinCompleteSentences(sentences);
 }
 
-export function explainPullRequest(title: string, body = ''): string {
-  body = normalizeSummaryMarkup(body);
+function explainNormalizedPullRequest(title: string, body: string): string {
   const cleanTitle = title.replace(cruft, '').replace(/\s+/g, ' ').trim();
   const sections = markdownSections(body);
   const paragraphs = usefulParagraphs(body);
@@ -355,4 +373,23 @@ export function explainPullRequest(title: string, body = ''): string {
     || `This change updates the code so ${cleanTitle.charAt(0).toLowerCase()}${cleanTitle.slice(1)}.`;
   const solution = shortExplanation(solutionSection?.body || fallbackSolution);
   return `Problem: ${problem}\n\nSolution: ${solution}`;
+}
+
+export function summarizePullRequest(title: string, body = ''): string {
+  return summarizeNormalizedPullRequest(title, normalizeSummaryMarkup(body));
+}
+
+export function explainPullRequest(title: string, body = ''): string {
+  return explainNormalizedPullRequest(title, normalizeSummaryMarkup(body));
+}
+
+export function pullRequestSummaries(title: string, body = ''): {
+  simpleSummary: string;
+  plainSummary: string;
+} {
+  const normalizedBody = normalizeSummaryMarkup(body);
+  return {
+    simpleSummary: summarizeNormalizedPullRequest(title, normalizedBody),
+    plainSummary: explainNormalizedPullRequest(title, normalizedBody),
+  };
 }

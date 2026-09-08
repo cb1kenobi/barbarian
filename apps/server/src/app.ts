@@ -16,7 +16,7 @@ import { AgentRuntime } from './agent-runtime.js';
 import { ReviewDispatcher, reviewTrigger } from './dispatcher.js';
 import { cleanupWorkspace, prepareWorkspace } from './workspaces.js';
 import { buildStatusDraft } from './status.js';
-import { explainPullRequest, simplify, summarizePullRequest } from './summary.js';
+import { normalizeSummaryMarkup, pullRequestSummaries, simplify } from './summary.js';
 import { recordActivity } from './activity.js';
 import { buildReviewAssessment, refreshReviewContext, storedReviewFindings } from './review-context.js';
 import { completedReviewStatus, displayReviewStatus, newCommitsSinceReview, reviewPriorityScore } from './review-state.js';
@@ -490,45 +490,71 @@ function localAgentApiAllowed(origin: string | undefined, host: string | undefin
 function refreshStoredReviewSummaries(database: BarbarianDatabase): void {
   const key = 'review_summary_version';
   const version = '3';
+  const batchSize = 100;
   const current = database.connection.prepare('SELECT value FROM app_metadata WHERE key=?')
     .get(key) as { value: string } | undefined;
   if (current?.value === version) return;
   const reviews = database.connection.prepare(`
-    SELECT id, title, body FROM review_queue
-    WHERE trim(body)<>'' AND (instr(body, '<')>0 OR instr(body, '&')>0)
+    SELECT id, title, body, plain_summary FROM review_queue
+    WHERE id>? AND (
+      instr(body, '<')>0 OR instr(body, '&')>0
+      OR instr(simple_summary, '<')>0 OR instr(simple_summary, '&')>0
+      OR instr(plain_summary, '<')>0 OR instr(plain_summary, '&')>0
+    )
+    ORDER BY id LIMIT ?
   `);
   const updateReview = database.connection.prepare(`
-    UPDATE review_queue SET
-      simple_summary=?,
-      plain_summary=CASE
-        WHEN plain_summary='' OR plain_summary LIKE 'Problem: %' || char(10) || char(10) || 'Solution: %'
-        THEN ? ELSE plain_summary END
-    WHERE id=?
+    UPDATE review_queue SET simple_summary=?, plain_summary=? WHERE id=?
   `);
   const workItems = database.connection.prepare(`
     SELECT id, title, body FROM work_items
-    WHERE trim(body)<>'' AND (instr(body, '<')>0 OR instr(body, '&')>0)
+    WHERE id>? AND (
+      instr(body, '<')>0 OR instr(body, '&')>0
+      OR instr(simple_summary, '<')>0 OR instr(simple_summary, '&')>0
+    )
+    ORDER BY id LIMIT ?
   `);
   const updateWorkItem = database.connection.prepare('UPDATE work_items SET simple_summary=? WHERE id=?');
   const findings = database.connection.prepare(`
     SELECT id, body FROM review_findings
-    WHERE trim(body)<>'' AND (instr(body, '<')>0 OR instr(body, '&')>0)
+    WHERE id>? AND (
+      instr(body, '<')>0 OR instr(body, '&')>0
+      OR instr(summary, '<')>0 OR instr(summary, '&')>0
+    )
+    ORDER BY id LIMIT ?
   `);
   const updateFinding = database.connection.prepare('UPDATE review_findings SET summary=? WHERE id=?');
   database.connection.exec('BEGIN IMMEDIATE');
   try {
-    for (const review of reviews.iterate() as Iterable<{ id: string; title: string; body: string }>) {
-      updateReview.run(
-        summarizePullRequest(review.title, review.body),
-        explainPullRequest(review.title, review.body),
-        review.id,
-      );
+    let afterId = '';
+    while (true) {
+      const batch = reviews.all(afterId, batchSize) as Array<{
+        id: string; title: string; body: string; plain_summary: string;
+      }>;
+      if (!batch.length) break;
+      for (const review of batch) {
+        const summaries = pullRequestSummaries(review.title, review.body);
+        updateReview.run(
+          summaries.simpleSummary,
+          review.plain_summary ? normalizeSummaryMarkup(review.plain_summary) : summaries.plainSummary,
+          review.id,
+        );
+      }
+      afterId = batch.at(-1)!.id;
     }
-    for (const workItem of workItems.iterate() as Iterable<{ id: string; title: string; body: string }>) {
-      updateWorkItem.run(simplify(workItem.title, workItem.body), workItem.id);
+    afterId = '';
+    while (true) {
+      const batch = workItems.all(afterId, batchSize) as Array<{ id: string; title: string; body: string }>;
+      if (!batch.length) break;
+      for (const workItem of batch) updateWorkItem.run(simplify(workItem.title, workItem.body), workItem.id);
+      afterId = batch.at(-1)!.id;
     }
-    for (const finding of findings.iterate() as Iterable<{ id: string; body: string }>) {
-      updateFinding.run(summarizeReviewComment(finding.body), finding.id);
+    afterId = '';
+    while (true) {
+      const batch = findings.all(afterId, batchSize) as Array<{ id: string; body: string }>;
+      if (!batch.length) break;
+      for (const finding of batch) updateFinding.run(summarizeReviewComment(finding.body), finding.id);
+      afterId = batch.at(-1)!.id;
     }
     database.connection.prepare(`
       INSERT INTO app_metadata(key, value) VALUES (?, ?)

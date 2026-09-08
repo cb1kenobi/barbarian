@@ -4,13 +4,14 @@ import { explainPullRequest, normalizeSummaryMarkup, simplify, summarizePullRequ
 describe('normalizeSummaryMarkup', () => {
   it('preserves structure and safe inline code while removing HTML-only content', () => {
     const normalized = normalizeSummaryMarkup(`
-<h2>Changes</h2><ul><li>Alpha</li><li><code>beta()</code></li></ul>
+<h2>Changes</h2><ul><li>Alpha</li><li><code>beta()</code></li></ul><form><button>Save</button></form>
 <script>hidden()</script><style>.hidden { display: none }</style><!-- omitted -->
 `);
 
     expect(normalized).toContain('## Changes');
     expect(normalized).toContain('- Alpha');
     expect(normalized).toContain('- `beta()`');
+    expect(normalized).toContain('Save');
     expect(normalized).not.toContain('AlphaBeta');
     expect(normalized).not.toMatch(/<\/?[a-z][^>]*>/i);
     expect(normalized).not.toContain('hidden');
@@ -46,10 +47,40 @@ describe('normalizeSummaryMarkup', () => {
     expect(normalized).toContain('unfinished note');
   });
 
+  it('does not pair prose tags with closing tags inside Markdown fences', () => {
+    const normalized = normalizeSummaryMarkup(`Adds a <template> element to the shell.
+
+## Details
+
+The generated markup is:
+
+\`\`\`html
+<template id="sidebar">content</template>
+\`\`\`
+
+Everything else is unchanged.`);
+    expect(normalized).toContain('## Details');
+    expect(normalized).toContain('The generated markup is:');
+    expect(normalized).toContain('Everything else is unchanged.');
+  });
+
+  it('drops a discarded container through a malformed closing tag', () => {
+    expect(normalizeSummaryMarkup('Before.<script>hidden()</script')).toBe('Before.\n\n');
+  });
+
   it('renders deliberately escaped tags as inline code', () => {
     const normalized = normalizeSummaryMarkup('Use &lt;template&gt; or &#60;slot&#62; in the layout.');
     expect(normalized).toBe('Use `<template>` or `<slot>` in the layout.');
     expect(normalizeSummaryMarkup(normalized)).toBe(normalized);
+  });
+
+  it('restores escaped comparisons without fabricating a code span', () => {
+    expect(normalizeSummaryMarkup('Requires Node &lt; 18 and npm &gt; 9.'))
+      .toBe('Requires Node < 18 and npm > 9.');
+  });
+
+  it('removes literal private-use sentinel characters from input', () => {
+    expect(normalizeSummaryMarkup(`Keep ${'\ue000'}script${'\ue001'} readable.`)).toBe('Keep script readable.');
   });
 });
 
@@ -66,6 +97,8 @@ describe('simplify', () => {
   it('does not leak converted HTML list markers', () => {
     expect(simplify('fix: preserve recovery data', '<ul><li>Recovery preserves audit entries before retrying.</li></ul>'))
       .toBe('preserve recovery data. Recovery preserves audit entries before retrying.');
+    expect(simplify('fix: save settings', '<p>Steps to reproduce</p><ul><li>Open the settings panel and click save.</li></ul>'))
+      .toBe('save settings. Open the settings panel and click save.');
   });
 });
 

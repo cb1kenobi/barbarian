@@ -2,7 +2,7 @@ import type { BarbarianDatabase } from './database.js';
 import type { BarbarianConfig, DiscoveryResult, DiscoveredIssue, DiscoveredPullRequest } from './types.js';
 import { discoverGithub, discoverGithubActivity, fetchGithubIssueContext, fetchGithubPullRequest, fetchPullRequestState, resolveGithubLogin } from './github.js';
 import { recordActivity } from './activity.js';
-import { explainPullRequest, simplify, summarizePullRequest } from './summary.js';
+import { pullRequestSummaries, simplify } from './summary.js';
 import { discoverLinear } from './linear.js';
 import { refreshReviewContext } from './review-context.js';
 import { viewerApprovedCurrentHead, viewerRequestedChangesCurrentHead } from './review-state.js';
@@ -143,6 +143,7 @@ export function upsertReview(database: BarbarianDatabase, config: BarbarianConfi
     || (existing.last_reviewed_watermark !== null && watermark > existing.last_reviewed_watermark)
   )) status = 'unreviewed';
   if (pr.isDraft) status = 'unreviewed';
+  const summaries = pullRequestSummaries(pr.title, pr.body);
 
   database.connection.prepare(`
     INSERT INTO review_queue(
@@ -192,7 +193,7 @@ export function upsertReview(database: BarbarianDatabase, config: BarbarianConfi
       merged_at=excluded.merged_at,
       approval_carryover=excluded.approval_carryover
   `).run(
-    id, pr.repository, pr.number, pr.title, summarizePullRequest(pr.title, pr.body), explainPullRequest(pr.title, pr.body), pr.body,
+    id, pr.repository, pr.number, pr.title, summaries.simpleSummary, summaries.plainSummary, pr.body,
     pr.url, pr.author, pr.additions, pr.deletions, pr.commitCount, pr.headSha, pr.headRefName, pr.baseRefName, status,
     pr.reviewDecision, JSON.stringify(pr.requestedReviewers), JSON.stringify(pr.requestedTeams),
     JSON.stringify(pr.linkedIssues), configuredSkill(config, pr.repository), watermark, pr.isDraft ? 1 : 0,

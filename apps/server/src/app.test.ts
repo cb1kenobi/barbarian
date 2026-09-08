@@ -616,7 +616,8 @@ describe('browser context appearance', () => {
         head_ref_name, base_ref_name, last_reviewed_sha, first_seen_at, updated_at, last_seen_at
       ) VALUES (
         'github:Acme/storage#88', 'Acme/storage', 88, 'Bump tsdown', 'Old <details> summary…',
-        'Problem: Old <details> explanation…\n\nSolution: Old generated output.',
+        'Problem: Bumps tsdown from 0.22.14 to 0.23.0. <details>Release notes</details>\n\n
+        Solution: Run one final build with <code>tsdown@0.22.14</code>.',
         'Bumps tsdown from 0.22.14 to 0.23.0. <details><summary>Release notes</summary>
         <h3>Migration Guide</h3><p>Run one final build with <code>tsdown@0.22.14</code>.</p></details>',
         'https://github.com/Acme/storage/pull/88', 'author', 'head', 'feature', 'main', 'head', ?, ?, ?
@@ -628,7 +629,8 @@ describe('browser context appearance', () => {
         head_ref_name, base_ref_name, first_seen_at, updated_at, last_seen_at
       ) VALUES (
         'github:Acme/storage#89', 'Acme/storage', 89, 'Reviewed change', 'Old <p>summary</p>',
-        'Agent verified the migration is safe.', '<p>Raw pull request body.</p>',
+        'Problem: Agent found a risky retry.\n\nSolution: Agent verified the migration is safe.',
+        'Raw pull request body remains readable.',
         'https://github.com/Acme/storage/pull/89', 'author', 'reviewed-head', 'feature', 'main',
         ?, ?, ?
       )
@@ -656,6 +658,23 @@ describe('browser context appearance', () => {
         'Old <h3>finding</h3>', 'https://github.com/Acme/storage/pull/88#discussion_r9001', ?, ?
       )
     `).run(now, now);
+    const insertBatchItem = database.connection.prepare(`
+      INSERT INTO work_items(
+        id, provider, repository, number, kind, title, body, simple_summary, url,
+        first_seen_at, updated_at, last_seen_at
+      ) VALUES (?, 'github', 'Acme/storage', ?, 'issue', 'Batch item', '<p>Readable batch summary.</p>',
+        'Old <p>batch summary</p>', ?, ?, ?, ?)
+    `);
+    for (let index = 0; index < 205; index += 1) {
+      insertBatchItem.run(
+        `github:Acme/storage#batch-${index}`,
+        1_000 + index,
+        `https://github.com/Acme/storage/issues/${1_000 + index}`,
+        now,
+        now,
+        now,
+      );
+    }
     const app = await createApp(database, new ConfigStore(config));
     try {
       const refreshed = database.connection.prepare(`
@@ -665,7 +684,9 @@ describe('browser context appearance', () => {
       expect(refreshed.plain_summary).toContain('Run one final build with `tsdown@0.22.14`');
       expect(`${refreshed.simple_summary} ${refreshed.plain_summary}`).not.toMatch(/<\/?[a-z][^>]*>/i);
       expect(database.connection.prepare('SELECT plain_summary FROM review_queue WHERE number=89').get())
-        .toEqual({ plain_summary: 'Agent verified the migration is safe.' });
+        .toEqual({ plain_summary: 'Problem: Agent found a risky retry.\n\nSolution: Agent verified the migration is safe.' });
+      expect(database.connection.prepare('SELECT simple_summary FROM review_queue WHERE number=89').get())
+        .toEqual({ simple_summary: 'Raw pull request body remains readable.' });
       const workItem = database.connection.prepare(`
         SELECT simple_summary FROM work_items WHERE number=90
       `).get() as { simple_summary: string };
@@ -673,6 +694,10 @@ describe('browser context appearance', () => {
       expect(workItem.simple_summary).not.toMatch(/<\/?[a-z][^>]*>/i);
       expect(database.connection.prepare("SELECT summary FROM review_findings WHERE id='finding:html'").get())
         .toEqual({ summary: 'Potential regression' });
+      expect(database.connection.prepare(`
+        SELECT COUNT(*) AS total FROM work_items
+        WHERE number>=1000 AND simple_summary NOT LIKE '%<%'
+      `).get()).toEqual({ total: 205 });
       expect(database.connection.prepare("SELECT value FROM app_metadata WHERE key='review_summary_version'").get())
         .toEqual({ value: '3' });
     } finally {
