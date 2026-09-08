@@ -44,7 +44,9 @@ async function checked(
 ): Promise<string> {
   const options = { timeoutMs, ...(signal ? { signal } : {}), ...(cwd === undefined ? {} : { cwd }) };
   const result = await runProcess(command, args, options);
-  if (result.exitCode !== 0) throw new Error(result.stderr.trim() || `${command} exited ${result.exitCode}`);
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.trim() || result.stdout.trim() || `${command} exited ${result.exitCode}`);
+  }
   return result.stdout;
 }
 
@@ -117,7 +119,7 @@ export async function commitFeedbackWorkspace(
   if (currentHead !== expectedHead) throw new Error('The feedback agent changed Git history instead of leaving a working-tree fix');
   const status = await checked('git', ['status', '--porcelain'], workspace);
   if (!status.trim()) throw new Error('The feedback agent reported a fix but did not change any files');
-  await checked('git', ['diff', '--check'], workspace);
+  await checked('git', ['diff', '--check', 'HEAD', '--'], workspace);
   await checked('git', ['add', '--all'], workspace);
   signal?.throwIfAborted();
   await checked('git', [

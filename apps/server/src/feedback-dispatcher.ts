@@ -248,7 +248,7 @@ export class FeedbackDispatcher {
     try {
       this.database.connection.prepare(`
         UPDATE review_queue SET feedback_claim_owner=NULL, feedback_claimed_at=NULL,
-          feedback_retry_after=NULL, feedback_last_error=NULL, updated_at=?
+          feedback_attempt_count=0, feedback_retry_after=NULL, feedback_last_error=NULL, updated_at=?
         WHERE feedback_claim_owner IS NOT NULL
       `).run(now);
       this.database.connection.prepare(`

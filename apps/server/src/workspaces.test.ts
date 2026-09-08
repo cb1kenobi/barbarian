@@ -123,6 +123,15 @@ describe('feedback workspace push', () => {
       .toBe('Address review feedback');
   });
 
+  it('rejects whitespace errors even when the agent staged them', async () => {
+    const { workspace, initialHead } = feedbackRepository();
+    writeFileSync(path.join(workspace, 'staged.txt'), 'trailing whitespace  \n');
+    git(workspace, 'add', 'staged.txt');
+
+    await expect(commitFeedbackWorkspace(workspace, initialHead, 'Address review feedback'))
+      .rejects.toThrow('whitespace');
+  });
+
   it('pushes a clean descendant only while the remote branch still matches the claim', async () => {
     const { workspace, initialHead } = feedbackRepository();
     writeFileSync(path.join(workspace, 'file.txt'), 'fixed\n');

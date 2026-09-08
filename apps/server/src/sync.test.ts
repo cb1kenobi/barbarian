@@ -133,7 +133,10 @@ describe('applyDiscovery', () => {
       { number: 14 },
     ]);
 
-    db.connection.prepare('UPDATE review_queue SET review_paused=1 WHERE number=10').run();
+    db.connection.prepare(`
+      UPDATE review_queue SET review_paused=1, feedback_needs_input=1,
+        feedback_last_error='question pending' WHERE number=10
+    `).run();
     await applyDiscovery(db, config, discovery);
     expect(db.connection.prepare('SELECT review_paused FROM review_queue WHERE number=10').get())
       .toEqual({ review_paused: 1 });
@@ -141,9 +144,11 @@ describe('applyDiscovery', () => {
     discovery.pullRequests[0] = { ...discovery.pullRequests[0]!, headSha: 'new-head', commitCount: 5 };
     await applyDiscovery(db, config, discovery);
     expect(db.connection.prepare(`
-      SELECT status, review_paused, approval_carryover, commit_count FROM review_queue WHERE number=10
+      SELECT status, review_paused, approval_carryover, commit_count,
+        feedback_needs_input, feedback_last_error FROM review_queue WHERE number=10
     `).get()).toEqual({
       status: 'unreviewed', review_paused: 0, approval_carryover: 1, commit_count: 5,
+      feedback_needs_input: 0, feedback_last_error: null,
     });
     db.close();
   });

@@ -325,8 +325,11 @@ describe('FeedbackDispatcher', () => {
     );
     dispatcher.cancelIneligibleFeedback();
     expect(database.connection.prepare(`
-      SELECT feedback_claim_owner, last_feedback_handled_watermark FROM review_queue WHERE id=?
-    `).get(id)).toEqual({ feedback_claim_owner: null, last_feedback_handled_watermark: null });
+      SELECT feedback_claim_owner, feedback_attempt_count, last_feedback_handled_watermark
+      FROM review_queue WHERE id=?
+    `).get(id)).toEqual({
+      feedback_claim_owner: null, feedback_attempt_count: 0, last_feedback_handled_watermark: null,
+    });
     expect(database.connection.prepare(`
       SELECT status, prompt FROM agent_runs WHERE review_id=? AND task='address_feedback'
     `).get(id)).toEqual({ status: 'cancelled', prompt: '' });
