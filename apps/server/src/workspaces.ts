@@ -106,6 +106,31 @@ export interface FeedbackWorkspaceSource {
 
 const disabledFeedbackPushUrl = 'barbarian-disabled://server-verified-push-only';
 
+export async function commitFeedbackWorkspace(
+  workspace: string,
+  expectedHead: string,
+  message: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  signal?.throwIfAborted();
+  const currentHead = (await checked('git', ['rev-parse', 'HEAD'], workspace)).trim();
+  if (currentHead !== expectedHead) throw new Error('The feedback agent changed Git history instead of leaving a working-tree fix');
+  const status = await checked('git', ['status', '--porcelain'], workspace);
+  if (!status.trim()) throw new Error('The feedback agent reported a fix but did not change any files');
+  await checked('git', ['diff', '--check'], workspace);
+  await checked('git', ['add', '--all'], workspace);
+  signal?.throwIfAborted();
+  await checked('git', [
+    '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null',
+    'commit', '-m', message,
+  ], workspace, 15 * 60_000, signal);
+  const committedHead = (await checked('git', ['rev-parse', 'HEAD'], workspace)).trim();
+  if (committedHead === expectedHead) throw new Error('Barbarian could not commit the feedback fix');
+  const committedStatus = await checked('git', ['status', '--porcelain'], workspace);
+  if (committedStatus.trim()) throw new Error('The feedback workspace was not clean after Barbarian committed the fix');
+  return committedHead;
+}
+
 export async function prepareFeedbackWorkspace(
   database: BarbarianDatabase,
   config: BarbarianConfig,

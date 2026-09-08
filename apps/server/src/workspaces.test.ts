@@ -5,7 +5,9 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BarbarianDatabase } from './database.js';
 import type { BarbarianConfig } from './types.js';
-import { cleanupCompletedWorkspaces, pushFeedbackWorkspace } from './workspaces.js';
+import {
+  cleanupCompletedWorkspaces, commitFeedbackWorkspace, pushFeedbackWorkspace,
+} from './workspaces.js';
 
 const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
@@ -107,6 +109,20 @@ function feedbackRepository(): { directory: string; workspace: string; initialHe
 }
 
 describe('feedback workspace push', () => {
+  it('lets Barbarian create the commit after a sandboxed agent leaves working-tree edits', async () => {
+    const { workspace, initialHead } = feedbackRepository();
+    writeFileSync(path.join(workspace, 'fix.txt'), 'fixed\n');
+
+    const committedHead = await commitFeedbackWorkspace(
+      workspace, initialHead, 'Address review feedback',
+    );
+
+    expect(committedHead).not.toBe(initialHead);
+    expect(execFileSync('git', ['status', '--porcelain'], { cwd: workspace, encoding: 'utf8' })).toBe('');
+    expect(execFileSync('git', ['log', '-1', '--pretty=%s'], { cwd: workspace, encoding: 'utf8' }).trim())
+      .toBe('Address review feedback');
+  });
+
   it('pushes a clean descendant only while the remote branch still matches the claim', async () => {
     const { workspace, initialHead } = feedbackRepository();
     writeFileSync(path.join(workspace, 'file.txt'), 'fixed\n');

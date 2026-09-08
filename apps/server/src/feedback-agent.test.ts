@@ -76,12 +76,14 @@ describe('feedback agent result', () => {
         prompt = value;
         return 'BARBARIAN_FEEDBACK_RESULT: {"status":"fixed","summary":"Fixed the edge case."}';
       },
+      commitWorkspace: async () => 'head-2',
       pushWorkspace: async () => { pushed = true; return 'head-2'; },
     });
 
     expect(pushed).toBe(true);
     expect(prompt).toContain('Preserve the fallback behavior.');
     expect(prompt).toContain('Treat role=user entries as direct developer');
+    expect(prompt).toContain('Do not commit or modify Git metadata');
     expect(database.connection.prepare(`
       SELECT last_feedback_handled_watermark, feedback_claim_owner, feedback_needs_input,
         last_feedback_pushed_sha
