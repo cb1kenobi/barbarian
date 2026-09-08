@@ -96,6 +96,24 @@ function findHtmlTagEnd(value: string, start: number): number {
   return -1;
 }
 
+function findOversizedHtmlTagEnd(value: string, start: number): number {
+  const recoveryLimit = Math.min(value.length, start + maximumHtmlTagLength * 8);
+  let quote = '';
+  let hasAttributeSyntax = false;
+  for (let index = start + 1; index < recoveryLimit; index += 1) {
+    const character = value[index]!;
+    if (quote) {
+      if (character === quote) quote = '';
+    } else if (character === '"' || character === "'") {
+      quote = character;
+      hasAttributeSyntax = true;
+    } else if (character === '=') hasAttributeSyntax = true;
+    else if (character === '<') return -1;
+    else if (character === '>') return hasAttributeSyntax ? index : -1;
+  }
+  return -1;
+}
+
 function htmlTagReplacement(name: string, closing: boolean): string {
   if (/^h[1-6]$/.test(name)) return closing ? '\n\n' : `\n\n${'#'.repeat(Number(name[1]))} `;
   if (name === 'summary') return '\n\n';
@@ -150,10 +168,13 @@ function pairedHtmlContainers(source: string): Map<number, number> {
     const pairedName = /^<\/?([A-Za-z][A-Za-z0-9:-]*)/
       .exec(source.slice(nextTag, Math.min(source.length, nextTag + 80)))?.[1]?.toLowerCase();
     if (!pairedName || !pairedHtmlElements.has(pairedName)) {
-      cursor = nextTag + 1;
+      let tagEnd = findHtmlTagEnd(source, nextTag);
+      if (tagEnd < 0) tagEnd = findOversizedHtmlTagEnd(source, nextTag);
+      cursor = tagEnd < 0 ? nextTag + 1 : tagEnd + 1;
       continue;
     }
-    const tagEnd = findHtmlTagEnd(source, nextTag);
+    let tagEnd = findHtmlTagEnd(source, nextTag);
+    if (tagEnd < 0) tagEnd = findOversizedHtmlTagEnd(source, nextTag);
     if (tagEnd < 0) {
       const malformedClose = /^<\/([A-Za-z][A-Za-z0-9:-]*)(?:\s|$)/
         .exec(source.slice(nextTag, Math.min(source.length, nextTag + 80)));
@@ -227,7 +248,7 @@ export function normalizeSummaryMarkup(value: string): string {
       cursor += 1;
       continue;
     }
-    const tagEnd = findHtmlTagEnd(source, cursor);
+    let tagEnd = findHtmlTagEnd(source, cursor);
     if (tagEnd < 0) {
       const name = /^<\/?([A-Za-z][A-Za-z0-9:-]*)/.exec(source.slice(cursor, cursor + 80))?.[1]?.toLowerCase();
       if (!name || !knownHtmlElements.has(name)) {
@@ -235,9 +256,12 @@ export function normalizeSummaryMarkup(value: string): string {
         cursor += 1;
         continue;
       }
-      const followingTag = source.indexOf('<', cursor + 1);
-      cursor = followingTag < 0 ? source.length : followingTag;
-      continue;
+      tagEnd = findOversizedHtmlTagEnd(source, cursor);
+      if (tagEnd < 0) {
+        output.push('<');
+        cursor += 1;
+        continue;
+      }
     }
     const tag = source.slice(cursor + 1, tagEnd);
     const match = /^\s*(\/?)\s*([A-Za-z][A-Za-z0-9:-]*)/.exec(tag);

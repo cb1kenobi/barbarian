@@ -68,6 +68,10 @@ Everything else is unchanged.`);
     const normalized = normalizeSummaryMarkup('Ensure a < b first. <a href="unfinished then <style>.hidden { display: none }</style> Done.');
     expect(normalized).not.toContain('hidden');
     expect(normalized).toContain('Done.');
+
+    const attributeCode = normalizeSummaryMarkup('Replace <button onclick="alert(`hi)"> now. <style>.secret{display:none}</style> See `docs`.');
+    expect(attributeCode).not.toContain('secret');
+    expect(attributeCode).toContain('See `docs`.');
   });
 
   it('drops a discarded container through a malformed closing tag', () => {
@@ -87,10 +91,17 @@ Everything else is unchanged.`);
     expect(oversizedTag).not.toMatch(/<\/?script/i);
     expect(oversizedTag).toContain('After.');
 
+    const oversizedTagWithAngle = normalizeSummaryMarkup(`<script data-padding="${'x'.repeat(1_100)}">if (a < b) hidden()</script> After.`);
+    expect(oversizedTagWithAngle).not.toContain('hidden');
+    expect(oversizedTagWithAngle).toContain('After.');
+
     const oversizedLink = normalizeSummaryMarkup(`<a href="${'x'.repeat(1_100)}">Dashboard</a> After link.`);
     expect(oversizedLink).not.toContain('href');
     expect(oversizedLink).not.toContain('xxx');
     expect(oversizedLink).toContain('After link.');
+
+    expect(normalizeSummaryMarkup('A <p without closing it and writes a long paragraph.'))
+      .toBe('A <p without closing it and writes a long paragraph.');
   });
 
   it('renders deliberately escaped tags as inline code', () => {
