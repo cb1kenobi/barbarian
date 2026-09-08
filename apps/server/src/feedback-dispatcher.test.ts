@@ -167,6 +167,31 @@ describe('FeedbackDispatcher', () => {
     database.close();
   });
 
+  it('does not let bot feedback on an AI-pushed head create a push loop', async () => {
+    const database = testDatabase();
+    const id = seedReview(database);
+    database.connection.prepare(`
+      UPDATE review_queue SET discussion_watermark='', last_feedback_pushed_sha=head_sha WHERE id=?
+    `).run(id);
+    database.connection.prepare(`
+      INSERT INTO review_findings(
+        id, review_id, remote_id, author, body, summary, url, trusted_for_feedback,
+        resolved, outdated, created_at, updated_at
+      ) VALUES ('finding-1', ?, 42, 'review-bot', 'Fix this', 'Fix this',
+        'https://example.test/finding', 1, 0, 0, '2026-09-08T12:00:00Z', '2026-09-08T12:00:00Z')
+    `).run(id);
+    let ran = false;
+    const runtime = new AgentRuntime(1);
+    const dispatcher = new FeedbackDispatcher(
+      database, testConfig(), runtime, { error: () => undefined }, async () => { ran = true; },
+    );
+    await dispatcher.pump();
+    expect(ran).toBe(false);
+    dispatcher.stop();
+    await runtime.shutdown();
+    database.close();
+  });
+
   it('notifies the review room when automatic attempts are exhausted', async () => {
     const database = testDatabase();
     const id = seedReview(database);
@@ -193,6 +218,31 @@ describe('FeedbackDispatcher', () => {
 
     dispatcher.stop();
     await runtime.shutdown();
+    database.close();
+  });
+
+  it('reopens the handled feedback after the developer answers in the review room', () => {
+    const database = testDatabase();
+    const id = seedReview(database);
+    database.connection.prepare(`
+      UPDATE review_queue SET last_feedback_handled_watermark='watermark-1',
+        feedback_attempt_count=3, feedback_attempt_watermark='watermark-1',
+        feedback_last_error='input required', feedback_needs_input=1 WHERE id=?
+    `).run(id);
+    const dispatcher = new FeedbackDispatcher(
+      database, testConfig(), new AgentRuntime(1), { error: () => undefined }, async () => undefined,
+    );
+
+    expect(dispatcher.resumeFeedbackAfterInput(id)).toBe(true);
+    expect(dispatcher.resumeFeedbackAfterInput(id)).toBe(false);
+    expect(database.connection.prepare(`
+      SELECT last_feedback_handled_watermark, feedback_attempt_count, feedback_attempt_watermark,
+        feedback_last_error, feedback_needs_input FROM review_queue WHERE id=?
+    `).get(id)).toEqual({
+      last_feedback_handled_watermark: '', feedback_attempt_count: 0,
+      feedback_attempt_watermark: null, feedback_last_error: null, feedback_needs_input: 0,
+    });
+    dispatcher.stop();
     database.close();
   });
 

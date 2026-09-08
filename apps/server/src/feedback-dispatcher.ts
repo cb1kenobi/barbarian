@@ -3,6 +3,7 @@ import type { BarbarianDatabase } from './database.js';
 import type { BarbarianConfig } from './types.js';
 import type { AgentRuntime } from './agent-runtime.js';
 import { authenticatedGithubLogin } from './github-identity.js';
+import { agentProviderSupportsAutomaticWorkspaceWrite } from './agent-provider.js';
 import { runFeedbackAgent, type FeedbackClaim } from './feedback-agent.js';
 
 interface FeedbackCandidateRow {
@@ -197,22 +198,41 @@ export class FeedbackDispatcher {
       WHERE feedback_claim_owner IS NOT NULL AND (is_draft=1 OR remote_state<>'OPEN')
     `).all() as Array<{ id: string; feedback_claim_owner: string }>;
     let cancelled = 0;
-    for (const row of rows) {
-      cancelled += this.runtime.cancel(`${row.id}:feedback`, new Error('Pull request is no longer eligible for automatic fixes'));
-      const now = new Date().toISOString();
-      this.database.connection.prepare(`
-        UPDATE review_queue SET feedback_claim_owner=NULL, feedback_claimed_at=NULL,
-          feedback_retry_after=NULL, feedback_last_error=NULL, feedback_needs_input=0, updated_at=?
-        WHERE id=? AND feedback_claim_owner=?
-      `).run(now, row.id, row.feedback_claim_owner);
-      this.database.connection.prepare(`
-        UPDATE agent_runs SET status='cancelled', finished_at=?,
-          error='Pull request is no longer eligible for automatic fixes', prompt=''
-        WHERE review_id=? AND task='address_feedback' AND status='running'
-      `).run(now, row.id);
-      this.publishReviewChanged(row.id);
+    const now = new Date().toISOString();
+    this.database.connection.exec('BEGIN IMMEDIATE');
+    try {
+      for (const row of rows) {
+        cancelled += this.runtime.cancel(`${row.id}:feedback`, new Error('Pull request is no longer eligible for automatic fixes'));
+        this.database.connection.prepare(`
+          UPDATE review_queue SET feedback_claim_owner=NULL, feedback_claimed_at=NULL,
+            feedback_retry_after=NULL, feedback_last_error=NULL, feedback_needs_input=0, updated_at=?
+          WHERE id=? AND feedback_claim_owner=?
+        `).run(now, row.id, row.feedback_claim_owner);
+        this.database.connection.prepare(`
+          UPDATE agent_runs SET status='cancelled', finished_at=?,
+            error='Pull request is no longer eligible for automatic fixes', prompt=''
+          WHERE review_id=? AND task='address_feedback' AND status='running'
+        `).run(now, row.id);
+      }
+      this.database.connection.exec('COMMIT');
+    } catch (error) {
+      this.database.connection.exec('ROLLBACK');
+      throw error;
     }
+    for (const row of rows) this.publishReviewChanged(row.id);
     return cancelled;
+  }
+
+  resumeFeedbackAfterInput(reviewId: string): boolean {
+    const changed = this.database.connection.prepare(`
+      UPDATE review_queue SET last_feedback_handled_watermark='', feedback_attempt_count=0,
+        feedback_attempt_watermark=NULL, feedback_retry_after=NULL, feedback_last_error=NULL,
+        feedback_needs_input=0, updated_at=?
+      WHERE id=? AND feedback_needs_input=1 AND feedback_claim_owner IS NULL
+    `).run(new Date().toISOString(), reviewId);
+    if (!changed.changes) return false;
+    this.publishReviewChanged(reviewId);
+    return true;
   }
 
   cancelAllFeedback(): number {
@@ -224,6 +244,8 @@ export class FeedbackDispatcher {
 
   private claimNext(config: BarbarianConfig): FeedbackClaim | null {
     if (!config.agents.autoAddressFeedback) return null;
+    const provider = config.agents.providers[config.agents.chat.provider];
+    if (!provider || !agentProviderSupportsAutomaticWorkspaceWrite(provider.command)) return null;
     const login = authenticatedGithubLogin(
       this.database,
       config.profile.githubLogin || config.review.requestedReviewer,
@@ -236,12 +258,13 @@ export class FeedbackDispatcher {
         SELECT * FROM (
           SELECT id, head_sha, last_feedback_handled_watermark, feedback_attempt_count,
             feedback_attempt_watermark, feedback_retry_after, updated_at,
-            max(discussion_watermark, COALESCE((
-              SELECT max(review_findings.updated_at || '|' || printf('%024d', review_findings.remote_id))
-              FROM review_findings WHERE review_findings.review_id=review_queue.id
-                AND review_findings.trusted_for_feedback=1
-                AND review_findings.resolved=0 AND review_findings.outdated=0
-            ), '')) AS feedback_watermark
+            max(discussion_watermark, CASE
+              WHEN head_sha<>COALESCE(last_feedback_pushed_sha, '') THEN COALESCE((
+                SELECT max(review_findings.updated_at || '|' || printf('%024d', review_findings.remote_id))
+                FROM review_findings WHERE review_findings.review_id=review_queue.id
+                  AND review_findings.trusted_for_feedback=1
+                  AND review_findings.resolved=0 AND review_findings.outdated=0
+              ), '') ELSE '' END) AS feedback_watermark
           FROM review_queue
           WHERE remote_state='OPEN' AND is_draft=0 AND feedback_claim_owner IS NULL
             AND lower(author)=?

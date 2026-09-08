@@ -862,6 +862,47 @@ describe('browser issue context', () => {
   });
 });
 
+describe('review room feedback answers', () => {
+  it('requeues an automatic fix after the developer answers a needs-input question', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-feedback-answer-test-'));
+    directories.push(directory);
+    const database = new BarbarianDatabase(path.join(directory, 'test.db'));
+    const now = new Date().toISOString();
+    const id = 'github:Acme/storage#15';
+    database.connection.prepare(`
+      INSERT INTO review_queue(
+        id, repository, number, title, url, author, head_sha, head_ref_name, base_ref_name,
+        discussion_watermark, last_feedback_handled_watermark, feedback_attempt_count,
+        feedback_attempt_watermark, feedback_last_error, feedback_needs_input,
+        first_seen_at, updated_at, last_seen_at
+      ) VALUES (?, 'Acme/storage', 15, 'Needs direction', 'https://example.test/15', 'cb1kenobi',
+        'head-1', 'feature', 'main', 'watermark-1', 'watermark-1', 3, 'watermark-1',
+        'input required', 1, ?, ?, ?)
+    `).run(id, now, now, now);
+    const app = await createApp(database, new ConfigStore(config));
+    try {
+      const response = await app.inject({
+        method: 'POST', url: `/api/reviews/${encodeURIComponent(id)}/chat`,
+        payload: { message: 'Keep the fallback behavior.', askAgent: false, author: 'Developer' },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(database.connection.prepare(`
+        SELECT last_feedback_handled_watermark, feedback_attempt_count, feedback_attempt_watermark,
+          feedback_last_error, feedback_needs_input FROM review_queue WHERE id=?
+      `).get(id)).toEqual({
+        last_feedback_handled_watermark: '', feedback_attempt_count: 0,
+        feedback_attempt_watermark: null, feedback_last_error: null, feedback_needs_input: 0,
+      });
+      expect(database.connection.prepare(`
+        SELECT role, author, content FROM chat_messages WHERE review_id=?
+      `).get(id)).toEqual({ role: 'user', author: 'Developer', content: 'Keep the fallback behavior.' });
+    } finally {
+      await app.close();
+      database.close();
+    }
+  });
+});
+
 describe('local branch context', () => {
   const branchPayload = (workspacePath: string) => {
     if (!existsSync(path.join(workspacePath, '.git'))) {

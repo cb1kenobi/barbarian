@@ -60,25 +60,37 @@ describe('feedback agent result', () => {
 
   it('pushes a committed fix and reports it in the review room', async () => {
     const { database, claim } = setup();
+    database.connection.prepare(`
+      INSERT INTO chat_messages(review_id, role, author, content, created_at)
+      VALUES (?, 'user', 'Developer', 'Preserve the fallback behavior.', ?)
+    `).run(claim.reviewId, new Date().toISOString());
     let pushed = false;
+    let prompt = '';
     await runFeedbackAgent(database, config, claim, undefined, {
       fetchBundle: async () => ({
         repository: 'Acme/repo', number: 15, metadata: { headRefOid: 'head-1' },
         diff: '', inlineComments: [{ body: 'Fix it' }], issueComments: [],
       }),
       prepareWorkspace: async () => ({ path: '/tmp/feedback', initialHeadSha: 'head-1' }),
-      execute: async () => 'BARBARIAN_FEEDBACK_RESULT: {"status":"fixed","summary":"Fixed the edge case."}',
+      execute: async (_database, _config, _reviewId, _task, value) => {
+        prompt = value;
+        return 'BARBARIAN_FEEDBACK_RESULT: {"status":"fixed","summary":"Fixed the edge case."}';
+      },
       pushWorkspace: async () => { pushed = true; return 'head-2'; },
     });
 
     expect(pushed).toBe(true);
+    expect(prompt).toContain('Preserve the fallback behavior.');
+    expect(prompt).toContain('Treat role=user entries as direct developer');
     expect(database.connection.prepare(`
-      SELECT last_feedback_handled_watermark, feedback_claim_owner, feedback_needs_input
+      SELECT last_feedback_handled_watermark, feedback_claim_owner, feedback_needs_input,
+        last_feedback_pushed_sha
       FROM review_queue WHERE id=?
     `).get(claim.reviewId)).toEqual({
-      last_feedback_handled_watermark: 'watermark-1', feedback_claim_owner: null, feedback_needs_input: 0,
+      last_feedback_handled_watermark: 'watermark-1', feedback_claim_owner: null,
+      feedback_needs_input: 0, last_feedback_pushed_sha: 'head-2',
     });
-    expect(database.connection.prepare('SELECT content FROM chat_messages WHERE review_id=?').get(claim.reviewId))
+    expect(database.connection.prepare('SELECT content FROM chat_messages WHERE review_id=? ORDER BY id DESC LIMIT 1').get(claim.reviewId))
       .toMatchObject({ content: expect.stringContaining('head-2') });
     database.close();
   });

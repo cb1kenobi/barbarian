@@ -934,11 +934,13 @@ export async function createApp(
       activeWritableBranches.add(agentWorkspace.branchId);
     }
     const writableBranchId = agentWorkspace?.branchId;
+    let feedbackResumed = false;
     try {
       const now = new Date().toISOString();
       database.connection.prepare(`
         INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'user', ?, ?, ?)
       `).run(id, body.author, body.message, now);
+      feedbackResumed = feedbackDispatcher.resumeFeedbackAfterInput(id);
       if (!body.askAgent) return { message: null };
       const runtimeKey = `agent-run:${randomUUID()}`;
       const response = await runtime.run(
@@ -972,6 +974,7 @@ export async function createApp(
       throw error;
     } finally {
       if (writableBranchId) activeWritableBranches.delete(writableBranchId);
+      if (feedbackResumed) void feedbackDispatcher.pump();
     }
   });
 

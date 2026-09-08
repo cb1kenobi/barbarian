@@ -7,6 +7,7 @@ import {
   reviewAttribution,
   reviewPublication,
   reviewPublicationPayload,
+  reviewFindingTrustedForFeedback,
   reviewableDiffLines,
   validateReviewCommentLocations,
   type DiscussionEntry,
@@ -60,6 +61,15 @@ describe('discussionWatermark', () => {
       entry('1', 'cb1kenobi', '2026-09-01T10:00:00Z', 'OWNER'),
       entry('2', 'random-reader', '2026-09-01T11:00:00Z'),
     ]), 'cb1kenobi')).toBe('');
+  });
+});
+
+describe('reviewFindingTrustedForFeedback', () => {
+  it('trusts bots and repository collaborators but not unrelated users', () => {
+    expect(reviewFindingTrustedForFeedback({ __typename: 'Bot' }, 'NONE')).toBe(true);
+    expect(reviewFindingTrustedForFeedback({ __typename: 'User' }, 'MEMBER')).toBe(true);
+    expect(reviewFindingTrustedForFeedback({ __typename: 'User' }, 'COLLABORATOR')).toBe(true);
+    expect(reviewFindingTrustedForFeedback({ __typename: 'User' }, 'NONE')).toBe(false);
   });
 });
 

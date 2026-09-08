@@ -122,6 +122,7 @@ describe('Barbarian config', () => {
         reviewRouting: initial.agents.reviewRouting,
         usageHeadroomPercent: initial.agents.usageHeadroomPercent,
         autoReview: initial.agents.autoReview,
+        autoAddressFeedback: true,
         maxConcurrent: initial.agents.maxConcurrent,
         maxAutomaticAttempts: initial.agents.maxAutomaticAttempts,
         retryBaseMinutes: initial.agents.retryBaseMinutes,
@@ -139,6 +140,7 @@ describe('Barbarian config', () => {
     expect(store.get().review.workspaceRoot).toBe(initial.review.workspaceRoot);
     expect(store.get().agents.codeReview[0]).toEqual({ id: 'codex', provider: 'codex', model: 'gpt-review', effort: 'high', priority: 0 });
     expect(store.get().agents.chat).toEqual({ provider: 'codex', model: 'gpt-chat', effort: 'medium' });
+    expect(store.get().agents.autoAddressFeedback).toBe(true);
     expect(store.get().agents.providers.codex).toEqual(initial.agents.providers.codex);
     expect(Object.isFrozen(store.get().repositories)).toBe(true);
     expect(store.warning).toBeNull();
@@ -183,6 +185,7 @@ describe('Barbarian config', () => {
         reviewRouting: initial.agents.reviewRouting,
         usageHeadroomPercent: initial.agents.usageHeadroomPercent,
         autoReview: initial.agents.autoReview,
+        autoAddressFeedback: true,
         maxConcurrent: initial.agents.maxConcurrent,
         maxAutomaticAttempts: initial.agents.maxAutomaticAttempts,
         retryBaseMinutes: initial.agents.retryBaseMinutes,
@@ -198,6 +201,7 @@ describe('Barbarian config', () => {
     expect(saved).toContain('model: gpt-review');
     expect(saved).toContain('chat:');
     expect(saved).toContain('model: gpt-chat');
+    expect(saved).toContain('autoAddressFeedback: true');
     expect(saved).not.toContain('default: codex');
     expect(readFileSync(`${filename}.bak`, 'utf8')).toContain('# keep this operator note');
     writeFileSync(filename, `${saved}\n# external edit\n`, { mode: 0o600 });

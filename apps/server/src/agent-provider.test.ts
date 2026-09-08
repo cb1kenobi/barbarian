@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   agentInvocationArgs, agentProviderCapabilities, agentProviderEnvironment,
-  agentProviderSupportsWorkspaceWrite,
+  agentProviderSupportsAutomaticWorkspaceWrite, agentProviderSupportsWorkspaceWrite,
 } from './agent-provider.js';
 
 describe('agent provider options', () => {
@@ -66,6 +66,12 @@ describe('agent provider options', () => {
     expect(agentProviderSupportsWorkspaceWrite('cursor-agent')).toBe(true);
     expect(agentProviderSupportsWorkspaceWrite('claude')).toBe(false);
     expect(agentProviderSupportsWorkspaceWrite('custom-reviewer')).toBe(false);
+  });
+
+  it('limits automatic writable agents to the sandboxed Codex provider', () => {
+    expect(agentProviderSupportsAutomaticWorkspaceWrite('/usr/local/bin/codex')).toBe(true);
+    expect(agentProviderSupportsAutomaticWorkspaceWrite('cursor-agent')).toBe(false);
+    expect(agentProviderSupportsAutomaticWorkspaceWrite('claude')).toBe(false);
   });
 
   it('resolves per-provider secrets and lets Claude OAuth override inherited API authentication', () => {

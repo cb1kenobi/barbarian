@@ -28,6 +28,10 @@ export function agentProviderSupportsWorkspaceWrite(command: string): boolean {
   return family === 'codex' || family === 'cursor';
 }
 
+export function agentProviderSupportsAutomaticWorkspaceWrite(command: string): boolean {
+  return agentProviderFamily(command) === 'codex';
+}
+
 const environmentReference = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
 
 const sensitiveEnvironmentName = /^(?:(?:ANTHROPIC|AWS|AZURE|CLAUDE|CODEX|CURSOR|GEMINI|GOOGLE|OPENAI)_|DATABASE_URL$)|(?:^|_)(?:API_KEY|AUTH_TOKEN|ACCESS_KEY(?:_ID)?|SECRET(?:_ACCESS_KEY)?|PASSWORD|TOKEN|CREDENTIALS?|COOKIE|DSN)$/i;

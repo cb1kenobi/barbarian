@@ -63,7 +63,7 @@ export interface DiscussionEntry {
   id: string;
   fullDatabaseId: string | null;
   updatedAt: string;
-  author: { login: string; __typename?: string } | null;
+  author: { login: string } | null;
   authorAssociation: string;
 }
 
@@ -409,6 +409,13 @@ async function queryReviewedPullRequests(login: string): Promise<Set<string>> {
 }
 
 const trustedAssociations = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+
+export function reviewFindingTrustedForFeedback(
+  author: { __typename?: string } | null,
+  authorAssociation: string,
+): boolean {
+  return author?.__typename === 'Bot' || trustedAssociations.has(authorAssociation);
+}
 
 export function discussionWatermark(node: GithubDiscussionNode | undefined, githubLogin: string): string {
   if (!node) return '';
@@ -832,7 +839,7 @@ export async function fetchPullRequestReviewContext(
       url: comment.url,
       path: comment.path,
       line: comment.line || comment.originalLine,
-      trustedForFeedback: comment.author?.__typename === 'Bot' || trustedAssociations.has(comment.authorAssociation),
+      trustedForFeedback: reviewFindingTrustedForFeedback(comment.author, comment.authorAssociation),
       resolved: thread.isResolved,
       outdated: thread.isOutdated,
       createdAt: comment.createdAt,

@@ -35,8 +35,15 @@ function getReview(database: BarbarianDatabase, id: string): ReviewWorkspaceRow 
   return row;
 }
 
-async function checked(command: string, args: string[], cwd?: string, timeoutMs = 15 * 60_000): Promise<string> {
-  const result = await runProcess(command, args, cwd === undefined ? { timeoutMs } : { cwd, timeoutMs });
+async function checked(
+  command: string,
+  args: string[],
+  cwd?: string,
+  timeoutMs = 15 * 60_000,
+  signal?: AbortSignal,
+): Promise<string> {
+  const options = { timeoutMs, ...(signal ? { signal } : {}), ...(cwd === undefined ? {} : { cwd }) };
+  const result = await runProcess(command, args, options);
   if (result.exitCode !== 0) throw new Error(result.stderr.trim() || `${command} exited ${result.exitCode}`);
   return result.stdout;
 }
@@ -120,16 +127,23 @@ export async function prepareFeedbackWorkspace(
   const workspace = path.join(root, 'feedback', `${owner}-${repo}-pr${review.number}`);
   assertWithin(root, workspace);
 
-  if (!existsSync(path.join(workspace, '.git'))) {
+  let cloneFresh = !existsSync(path.join(workspace, '.git'));
+  if (!cloneFresh) {
+    try {
+      const origin = (await checked('git', ['config', '--get', 'remote.origin.url'], workspace)).trim();
+      if (repositoryFromRemote(origin)?.toLowerCase() !== source.repository.toLowerCase()) {
+        throw new Error('origin mismatch');
+      }
+      await checked('git', ['reset', '--hard'], workspace);
+      await checked('git', ['clean', '-fd'], workspace);
+    } catch {
+      await rm(workspace, { recursive: true, force: true });
+      cloneFresh = true;
+    }
+  }
+  if (cloneFresh) {
     if (existsSync(workspace)) await rm(workspace, { recursive: true, force: true });
     await checked('gh', ['repo', 'clone', source.repository, workspace]);
-  } else {
-    const origin = (await checked('git', ['config', '--get', 'remote.origin.url'], workspace)).trim();
-    if (repositoryFromRemote(origin)?.toLowerCase() !== source.repository.toLowerCase()) {
-      throw new Error('The feedback workspace origin no longer matches the pull request repository');
-    }
-    await checked('git', ['reset', '--hard'], workspace);
-    await checked('git', ['clean', '-fd'], workspace);
   }
   await checked('git', [
     'fetch', 'origin', `+refs/heads/${source.headRefName}:refs/barbarian/feedback/${review.number}`,
@@ -173,7 +187,7 @@ export async function pushFeedbackWorkspace(
   signal?.throwIfAborted();
   await checked('git', ['config', '--unset-all', 'remote.origin.pushurl'], workspace);
   try {
-    await checked('git', ['push', 'origin', `${newHead}:refs/heads/${headRefName}`], workspace);
+    await checked('git', ['push', 'origin', `${newHead}:refs/heads/${headRefName}`], workspace, 15 * 60_000, signal);
   } finally {
     await checked('git', ['config', '--replace-all', 'remote.origin.pushurl', disabledFeedbackPushUrl], workspace);
   }

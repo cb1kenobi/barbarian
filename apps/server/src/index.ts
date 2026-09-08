@@ -107,8 +107,8 @@ async function monitorTick(): Promise<void> {
   }
 }
 
-dispatcher.recoverInterruptedRuns();
 feedbackDispatcher.recoverInterruptedRuns();
+dispatcher.recoverInterruptedRuns();
 await app.listen(address);
 app.log.info(`Barbarian is listening at http://${address.host}:${address.port}`);
 if (startupConfig.monitor.runOnStartup) void monitorTick();
