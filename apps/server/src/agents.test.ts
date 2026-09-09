@@ -9,6 +9,7 @@ import {
 } from './agents.js';
 import type { ReviewBundle, ReviewCommentDraft } from './github.js';
 import { AgentRuntime } from './agent-runtime.js';
+import { ignoreReview } from './review-ignore.js';
 
 const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
@@ -106,6 +107,38 @@ describe('newReviewComments', () => {
 });
 
 describe('runReviewAgent', () => {
+  it('does not launch a child agent when the review is ignored during agent selection', async () => {
+    const { database, config, claim } = setup("console.log('unused')");
+    const runtime = new AgentRuntime(2);
+    let releaseUsage!: () => void;
+    const usageReady = new Promise<void>((resolve) => { releaseUsage = resolve; });
+    let announceSelection!: () => void;
+    const selectionStarted = new Promise<void>((resolve) => { announceSelection = resolve; });
+    const running = runtime.run(
+      (signal) => runReviewAgent(database, config, claim, signal, {
+        ...dependencies,
+        schedule: (task, key) => runtime.run(task, key),
+        usageReader: async () => {
+          announceSelection();
+          await usageReady;
+          return { usedPercent: 0 };
+        },
+      }),
+      claim.reviewId,
+    );
+    const outcome = running.catch((error: unknown) => error);
+    await selectionStarted;
+
+    expect(ignoreReview(database, runtime, claim.reviewId)).toMatchObject({ found: true, cancelled: 1 });
+    releaseUsage();
+    expect(await outcome).toMatchObject({ message: 'Pull request ignored' });
+    expect(database.connection.prepare('SELECT COUNT(*) AS total FROM agent_runs').get())
+      .toEqual({ total: 0 });
+
+    await runtime.shutdown();
+    database.close();
+  });
+
   it('does not start an agent before the captured review bundle is ready', async () => {
     const script = "console.log('BARBARIAN_RESULT: {\\\"findings\\\":0,\\\"verdict\\\":\\\"ready\\\",\\\"summary\\\":\\\"Clear.\\\"}')";
     const { database, config, claim } = setup(script);

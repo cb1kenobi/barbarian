@@ -480,6 +480,11 @@ ${JSON.stringify(bundle)}`;
         if (!failures.length) throw selectionError;
         throw new Error(`${failures.join('; ')}; ${selectionError instanceof Error ? selectionError.message : String(selectionError)}`);
       }
+      if (signal?.aborted) throw signal.reason || new Error('Review stopped');
+      if (!database.connection.prepare('SELECT 1 FROM review_queue WHERE id=? AND claim_owner=?')
+        .get(claim.reviewId, claim.owner)) {
+        throw new Error('Review claim was cancelled before agent selection completed');
+      }
       attempted.add(selected.id);
       attemptedProviders.push(selected.provider);
       const runtimeKey = `${claim.reviewId}:code-review:${selected.id}`;
@@ -495,7 +500,8 @@ ${JSON.stringify(bundle)}`;
         id = runId;
         const execute = (agentSignal?: AbortSignal) => executeAgent(
           database, selectedConfig, claim.reviewId, task, prompt, selected.provider,
-          agentSignal || signal, claim, { runId, runtimeKey, agentSelection },
+          agentSignal && signal ? AbortSignal.any([agentSignal, signal]) : agentSignal || signal,
+          claim, { runId, runtimeKey, agentSelection },
         );
         const output = dependencies.schedule
           ? await dependencies.schedule((agentSignal) => execute(agentSignal), runtimeKey)
