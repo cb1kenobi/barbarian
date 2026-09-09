@@ -133,10 +133,11 @@ describe('applyDiscovery', () => {
       { number: 14 },
     ]);
 
+    const ignoredAt = '2026-08-31T12:00:30Z';
     db.connection.prepare(`
-      UPDATE review_queue SET review_paused=1, feedback_needs_input=1,
+      UPDATE review_queue SET review_paused=1, ignored_at=?, feedback_needs_input=1,
         feedback_last_error='question pending' WHERE number=10
-    `).run();
+    `).run(ignoredAt);
     await applyDiscovery(db, config, discovery);
     expect(db.connection.prepare('SELECT review_paused FROM review_queue WHERE number=10').get())
       .toEqual({ review_paused: 1 });
@@ -144,10 +145,11 @@ describe('applyDiscovery', () => {
     discovery.pullRequests[0] = { ...discovery.pullRequests[0]!, headSha: 'new-head', commitCount: 5 };
     await applyDiscovery(db, config, discovery);
     expect(db.connection.prepare(`
-      SELECT status, review_paused, approval_carryover, commit_count,
+      SELECT status, review_paused, ignored_at, approval_carryover, commit_count,
         feedback_needs_input, feedback_last_error FROM review_queue WHERE number=10
     `).get()).toEqual({
-      status: 'unreviewed', review_paused: 0, approval_carryover: 1, commit_count: 5,
+      status: 'unreviewed', review_paused: 0, ignored_at: ignoredAt,
+      approval_carryover: 1, commit_count: 5,
       feedback_needs_input: 0, feedback_last_error: null,
     });
     db.close();

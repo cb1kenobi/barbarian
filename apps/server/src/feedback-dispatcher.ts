@@ -195,7 +195,8 @@ export class FeedbackDispatcher {
   cancelIneligibleFeedback(): number {
     const rows = this.database.connection.prepare(`
       SELECT id, feedback_claim_owner FROM review_queue
-      WHERE feedback_claim_owner IS NOT NULL AND (is_draft=1 OR remote_state<>'OPEN')
+      WHERE feedback_claim_owner IS NOT NULL
+        AND (is_draft=1 OR remote_state<>'OPEN' OR ignored_at IS NOT NULL)
     `).all() as Array<{ id: string; feedback_claim_owner: string }>;
     let cancelled = 0;
     const now = new Date().toISOString();
@@ -289,7 +290,8 @@ export class FeedbackDispatcher {
                   AND review_findings.resolved=0 AND review_findings.outdated=0
               ), '') ELSE '' END) AS feedback_watermark
           FROM review_queue
-          WHERE remote_state='OPEN' AND is_draft=0 AND feedback_claim_owner IS NULL
+          WHERE remote_state='OPEN' AND is_draft=0 AND ignored_at IS NULL
+            AND feedback_claim_owner IS NULL
             AND feedback_needs_input=0 AND lower(author)=?
         ) WHERE feedback_watermark<>''
           AND feedback_watermark>COALESCE(last_feedback_handled_watermark, '')
@@ -312,7 +314,7 @@ export class FeedbackDispatcher {
             feedback_attempt_count=?, feedback_attempt_watermark=?,
             feedback_input_message_id=CASE WHEN ?=1 THEN feedback_input_message_id ELSE NULL END,
             feedback_retry_after=NULL, feedback_last_error=NULL, updated_at=?
-          WHERE id=? AND feedback_claim_owner IS NULL
+          WHERE id=? AND feedback_claim_owner IS NULL AND ignored_at IS NULL
         `).run(claimOwner, now, attemptCount, row.feedback_watermark, sameAttempt ? 1 : 0, now, row.id);
         if (!changed.changes) continue;
         this.database.connection.exec('COMMIT');
@@ -379,7 +381,8 @@ export class FeedbackDispatcher {
     if (this.stopped || this.retryTimer || !config.agents.autoAddressFeedback) return;
     const row = this.database.connection.prepare(`
       SELECT MIN(feedback_retry_after) AS retry_after FROM review_queue
-      WHERE remote_state='OPEN' AND feedback_claim_owner IS NULL AND feedback_retry_after IS NOT NULL
+      WHERE remote_state='OPEN' AND ignored_at IS NULL
+        AND feedback_claim_owner IS NULL AND feedback_retry_after IS NOT NULL
         AND feedback_attempt_count < ?
     `).get(config.agents.maxAutomaticAttempts) as { retry_after: string | null };
     if (!row.retry_after) return;

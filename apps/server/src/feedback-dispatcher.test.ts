@@ -67,6 +67,29 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 }
 
 describe('FeedbackDispatcher', () => {
+  it('does not claim or schedule retries for an ignored pull request', async () => {
+    const database = testDatabase();
+    const id = seedReview(database);
+    database.connection.prepare(`
+      UPDATE review_queue SET ignored_at=?, feedback_retry_after=? WHERE id=?
+    `).run(new Date().toISOString(), new Date(Date.now() - 60_000).toISOString(), id);
+    let claimed = false;
+    const runtime = new AgentRuntime(1);
+    const dispatcher = new FeedbackDispatcher(
+      database, testConfig(), runtime, { error: () => undefined }, async () => { claimed = true; },
+    );
+
+    await dispatcher.pump();
+    expect(claimed).toBe(false);
+    expect((dispatcher as unknown as { retryTimer?: NodeJS.Timeout }).retryTimer).toBeUndefined();
+    expect(database.connection.prepare('SELECT feedback_claim_owner FROM review_queue WHERE id=?').get(id))
+      .toEqual({ feedback_claim_owner: null });
+
+    dispatcher.stop();
+    await runtime.shutdown();
+    database.close();
+  });
+
   it('claims each new feedback watermark on an authored pull request exactly once', async () => {
     const database = testDatabase();
     const id = seedReview(database);

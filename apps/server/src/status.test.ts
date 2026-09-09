@@ -90,6 +90,19 @@ function insertReview(
 }
 
 describe('status draft', () => {
+  it('excludes ignored pull requests from review and authored-feedback status lines', () => {
+    const database = createDatabase();
+    insertReview(database, 10, 'another-author');
+    insertReview(database, 20, 'cb1kenobi', { status: 'issues_found' });
+    insertReview(database, 21, 'cb1kenobi', { reviewDecision: 'APPROVED' });
+    database.connection.prepare('UPDATE review_queue SET ignored_at=?')
+      .run('2026-09-02T14:00:00Z');
+
+    expect(buildStatusDraft(database, config, new Date('2026-09-02T15:00:00Z')).lines)
+      .toEqual(['* Code reviews - 0 PRs need my review']);
+    database.close();
+  });
+
   it('summarizes reviews and continues exactly one unfinished ticket from the previous workday', () => {
     const database = createDatabase();
     insertWork(database, 'Acme/primary', 1, 'Highest configured work', 500);

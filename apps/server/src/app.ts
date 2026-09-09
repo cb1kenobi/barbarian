@@ -31,6 +31,7 @@ import {
 import { discoverAgentModels, type AgentModelOption } from './agent-models.js';
 import { openAuthoredPullRequests } from './authored-pull-requests.js';
 import { authenticatedGithubLogin } from './github-identity.js';
+import { ignoreReview } from './review-ignore.js';
 import { reviewAgentAvailability, type ReviewAgentAvailability } from './review-router.js';
 import {
   resolveLocalBranchWorkspace, resolveReviewWorkspace, type ReviewWorkspace,
@@ -640,7 +641,7 @@ export async function createApp(
     `).all().map((row) => workItemView(row as Record<string, unknown>, activeBranches));
     const login = (config.profile.githubLogin || config.review.requestedReviewer).trim().toLowerCase();
     const openReviewRows = database.connection.prepare(`
-      SELECT * FROM review_queue WHERE remote_state='OPEN'
+      SELECT * FROM review_queue WHERE remote_state='OPEN' AND ignored_at IS NULL
       ORDER BY updated_at DESC
     `).all() as Array<Record<string, unknown>>;
     const reviews = openReviewRows.filter((record) =>
@@ -670,6 +671,7 @@ export async function createApp(
     const waiting = Number((database.connection.prepare(`
       SELECT COUNT(*) AS total FROM review_queue
       WHERE status IN ('issues_found','awaiting_feedback') AND remote_state='OPEN' AND is_draft=0
+        AND ignored_at IS NULL
     `).get() as { total: number }).total);
     const queuedIssues = workQueue.length;
     const reviewsNeedingApproval = reviews.filter((review) => !review.is_draft && review.display_status !== 'approved').length;
@@ -828,7 +830,8 @@ export async function createApp(
     const config = configStore.get();
     const cardMetadata = reviewCardMetadata(database);
     return database.connection.prepare(`
-      SELECT * FROM review_queue ORDER BY remote_state='OPEN' DESC, updated_at DESC
+      SELECT * FROM review_queue WHERE ignored_at IS NULL
+      ORDER BY remote_state='OPEN' DESC, updated_at DESC
     `).all().map((row) => {
       const record = row as Record<string, unknown>;
       return rowToReview(record, config, cardMetadata.get(String(record.id)));
@@ -882,10 +885,24 @@ export async function createApp(
     };
   });
 
+  app.post('/api/reviews/:id/ignore', async (request, reply) => {
+    if (!interactiveDashboardAllowed(request.headers.origin, request.headers.host, activeServer)) {
+      return reply.code(403).send({ error: 'Dashboard access required' });
+    }
+    const id = decodeURIComponent((request.params as { id: string }).id);
+    const result = ignoreReview(database, runtime, id);
+    if (!result.found) return reply.code(404).send({ error: 'Review not found' });
+    publishReviewUpdated(id);
+    publishDashboardUpdated(id);
+    return { ok: true, cancelled: result.cancelled };
+  });
+
   app.get('/api/reviews/:id', async (request, reply) => {
     const config = configStore.get();
     const id = decodeURIComponent((request.params as { id: string }).id);
-    const review = database.connection.prepare('SELECT * FROM review_queue WHERE id=?').get(id);
+    const review = database.connection.prepare(
+      'SELECT * FROM review_queue WHERE id=? AND ignored_at IS NULL',
+    ).get(id);
     if (!review) return reply.code(404).send({ error: 'Review not found' });
     const messages = database.connection.prepare(`
       SELECT * FROM chat_messages WHERE review_id=? ORDER BY id ASC
@@ -940,7 +957,9 @@ export async function createApp(
     const config = configStore.get();
     const id = decodeURIComponent((request.params as { id: string }).id);
     const body = chatBody.parse(request.body);
-    const review = database.connection.prepare('SELECT id FROM review_queue WHERE id=?').get(id);
+    const review = database.connection.prepare(
+      'SELECT id FROM review_queue WHERE id=? AND ignored_at IS NULL',
+    ).get(id);
     if (!review) return reply.code(404).send({ error: 'Review not found' });
     let agentWorkspace: ReviewWorkspace | null = null;
     const selectedProvider = body.provider || config.agents.chat.provider;
@@ -1016,6 +1035,8 @@ export async function createApp(
     if (!match) return reply.code(400).send({ error: 'Invalid GitHub pull request id' });
     const trackedId = await trackReview(database, config, match[1]!, Number(match[2]));
     if (trackedId !== id) return reply.code(409).send({ error: 'GitHub returned a different pull request' });
+    database.connection.prepare('UPDATE review_queue SET ignored_at=NULL, updated_at=? WHERE id=?')
+      .run(new Date().toISOString(), id);
     const tracked = database.connection.prepare('SELECT is_draft FROM review_queue WHERE id=?').get(id) as
       { is_draft: number } | undefined;
     if (tracked?.is_draft) {
@@ -1048,9 +1069,11 @@ export async function createApp(
     if (agentId && !config.agents.codeReview.some((agent) => agent.id === agentId)) {
       return reply.code(409).send({ error: 'Requested code review agent is not configured' });
     }
-    const review = database.connection.prepare('SELECT id, is_draft FROM review_queue WHERE id=?').get(id) as
-      { id: string; is_draft: number } | undefined;
+    const review = database.connection.prepare(
+      'SELECT id, is_draft, ignored_at FROM review_queue WHERE id=?',
+    ).get(id) as { id: string; is_draft: number; ignored_at: string | null } | undefined;
     if (!review) return reply.code(404).send({ error: 'Review not found' });
+    if (review.ignored_at) return reply.code(409).send({ error: 'Pull request is ignored' });
     if (review.is_draft) return reply.code(409).send({ error: 'Draft pull requests cannot be reviewed' });
     if (!dispatcher.requestManual(id, agentId)) return reply.code(404).send({ error: 'Review not found' });
     return reply.code(202).send({ accepted: true });
@@ -1110,11 +1133,15 @@ export async function createApp(
     const match = new URL(query.url).pathname.match(/^\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
     if (!match) return reply.code(400).send({ error: 'Not a GitHub pull request URL' });
     const id = `github:${match[1]}/${match[2]}#${match[3]}`;
-    let review = database.connection.prepare('SELECT * FROM review_queue WHERE id=?').get(id);
+    let review = database.connection.prepare(
+      'SELECT * FROM review_queue WHERE id=? AND ignored_at IS NULL',
+    ).get(id);
     if (!review) return { id, appearance: config.appearance, review: null, findings: [], assessment: null, messages: [] };
     if (query.refresh) {
       await refreshReview(database, id);
-      review = database.connection.prepare('SELECT * FROM review_queue WHERE id=?').get(id);
+      review = database.connection.prepare(
+        'SELECT * FROM review_queue WHERE id=? AND ignored_at IS NULL',
+      ).get(id);
       if (!review) return reply.code(404).send({ error: 'Review is no longer tracked' });
       publishReviewUpdated(id);
     }
@@ -1213,7 +1240,7 @@ export async function createApp(
     if (!match) return { reviews: [] };
     const repository = `${match[1]}/${match[2]}`;
     const rows = database.connection.prepare(`
-      SELECT * FROM review_queue WHERE repository=? AND remote_state='OPEN'
+      SELECT * FROM review_queue WHERE repository=? AND remote_state='OPEN' AND ignored_at IS NULL
         AND (? IS NULL OR head_ref_name=?) ORDER BY updated_at DESC
     `).all(repository, query.branch || null, query.branch || null);
     const cardMetadata = reviewCardMetadata(database);
@@ -1230,7 +1257,9 @@ export async function createApp(
       const branch = await upsertLocalBranch(database, localBranchBody.parse(request.body));
       let linkedReview: Record<string, unknown> | undefined;
       if (branch.review_id) {
-        const review = database.connection.prepare('SELECT * FROM review_queue WHERE id=?').get(branch.review_id);
+        const review = database.connection.prepare(
+          'SELECT * FROM review_queue WHERE id=? AND ignored_at IS NULL',
+        ).get(branch.review_id);
         if (review) linkedReview = review as Record<string, unknown>;
         const hasCurrentLocalReview = branch.last_reviewed_sha === branch.head_sha
           && branch.last_reviewed_worktree_state === branch.worktree_state;
@@ -1281,7 +1310,7 @@ export async function createApp(
       }
       return {
         appearance: config.appearance,
-        branch,
+        branch: linkedReview ? branch : { ...branch, review_id: null },
         review: linkedReview ? rowToReview(linkedReview, config, reviewCardMetadata(database).get(String(linkedReview.id))) : null,
         pullRequest: !linkedReview && branch.pull_request_number ? {
           repository: branch.pull_request_repository,
@@ -1330,7 +1359,8 @@ export async function createApp(
     }
     if (branch.review_id && !branch.is_dirty) {
       const linkedReview = database.connection.prepare(`
-        SELECT is_draft FROM review_queue WHERE id=? AND remote_state='OPEN'
+        SELECT is_draft FROM review_queue
+        WHERE id=? AND remote_state='OPEN' AND ignored_at IS NULL
       `).get(branch.review_id) as { is_draft: number } | undefined;
       if (!linkedReview?.is_draft && dispatcher.requestManual(branch.review_id, agentId)) {
         return reply.code(202).send({ accepted: true, target: 'pull_request' });
@@ -1380,6 +1410,9 @@ export async function createApp(
     const id = decodeURIComponent((request.params as { id: string }).id);
     const branch = database.connection.prepare('SELECT * FROM local_branches WHERE id=?').get(id) as unknown as LocalBranchRow | undefined;
     if (!branch) return reply.code(404).send({ error: 'Local branch is not tracked' });
+    const linkedReviewId = branch.review_id && database.connection.prepare(
+      'SELECT id FROM review_queue WHERE id=? AND ignored_at IS NULL',
+    ).get(branch.review_id) ? branch.review_id : null;
     const config = configStore.get();
     const body = chatBody.parse(request.body);
     const now = new Date().toISOString();
@@ -1387,7 +1420,7 @@ export async function createApp(
     let workspaceWrite = false;
     if (body.askAgent) {
       const selectedProvider = body.provider || agentSelectionForTask(
-        config, branch.review_id ? 'chat' : 'local_branch_chat',
+        config, linkedReviewId ? 'chat' : 'local_branch_chat',
       ).provider;
       const provider = config.agents.providers[selectedProvider];
       if (!provider) return reply.code(409).send({ error: 'The selected agent is not configured' });
@@ -1405,12 +1438,10 @@ export async function createApp(
     }
     if (body.askAgent && workspaceWrite) activeWritableBranches.add(id);
     try {
-      if (branch.review_id) {
-        const review = database.connection.prepare('SELECT id FROM review_queue WHERE id=?').get(branch.review_id);
-        if (!review) return reply.code(404).send({ error: 'The linked pull request is no longer tracked' });
+      if (linkedReviewId) {
         database.connection.prepare(`
           INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'user', ?, ?, ?)
-        `).run(branch.review_id, body.author, body.message, now);
+        `).run(linkedReviewId, body.author, body.message, now);
         if (!body.askAgent) return { message: null };
         const runtimeKey = `agent-run:${randomUUID()}`;
         const response = await runtime.run(
@@ -1421,7 +1452,7 @@ export async function createApp(
               || currentWorkspace.branchName !== agentWorkspace.branchName) {
               throw new WorkspaceChangedError('The local branch changed before the agent started');
             }
-            return askAgent(database, config, branch.review_id!, body.message, body.provider, signal, {
+            return askAgent(database, config, linkedReviewId, body.message, body.provider, signal, {
               branchId: id,
               cwd: agentWorkspace.path,
               workspaceWrite,
@@ -1433,7 +1464,7 @@ export async function createApp(
         );
         const inserted = database.connection.prepare(`
           INSERT INTO chat_messages(review_id, role, author, content, created_at) VALUES (?, 'assistant', ?, ?, ?)
-        `).run(branch.review_id, body.provider || agentSelectionForTask(config, 'chat').provider, response, new Date().toISOString());
+        `).run(linkedReviewId, body.provider || agentSelectionForTask(config, 'chat').provider, response, new Date().toISOString());
         return { message: { id: Number(inserted.lastInsertRowid), role: 'assistant', author: body.provider || agentSelectionForTask(config, 'chat').provider, content: response } };
       }
       database.connection.prepare(`

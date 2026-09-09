@@ -135,7 +135,7 @@ export class ReviewDispatcher {
         manual_requested_at=CASE WHEN claim_owner IS NULL THEN ? ELSE manual_requested_at END,
         manual_provider=CASE WHEN claim_owner IS NULL THEN ? ELSE manual_provider END,
         review_paused=0, status=CASE WHEN claim_owner IS NULL THEN 'unreviewed' ELSE status END, updated_at=?
-      WHERE id=? AND remote_state='OPEN' AND is_draft=0
+      WHERE id=? AND remote_state='OPEN' AND is_draft=0 AND ignored_at IS NULL
     `).run(now, agentId || null, now, reviewId);
     if (result.changes) void this.pump();
     return Boolean(result.changes);
@@ -281,7 +281,7 @@ export class ReviewDispatcher {
           manual_requested_at, manual_provider, review_paused, attempt_count,
           attempt_head_sha, attempt_watermark, retry_after
         FROM review_queue
-        WHERE remote_state='OPEN' AND is_draft=0 AND claim_owner IS NULL
+        WHERE remote_state='OPEN' AND is_draft=0 AND ignored_at IS NULL AND claim_owner IS NULL
           AND status NOT IN ('merged','closed')
           AND (manual_requested_at IS NOT NULL OR (?=1 AND ?<>'' AND review_paused=0 AND lower(author)<>?))
         ORDER BY manual_requested_at IS NULL, updated_at ASC
@@ -307,7 +307,8 @@ export class ReviewDispatcher {
           UPDATE review_queue SET claim_owner=?, claimed_at=?, status='agent_working',
             manual_requested_at=NULL, manual_provider=NULL, attempt_count=?,
             attempt_head_sha=head_sha, attempt_watermark=discussion_watermark,
-            retry_after=NULL, updated_at=? WHERE id=? AND claim_owner IS NULL
+            retry_after=NULL, updated_at=?
+          WHERE id=? AND claim_owner IS NULL AND ignored_at IS NULL
         `).run(claimOwner, now, attemptCount, now, row.id);
         if (!changed.changes) continue;
         this.database.connection.exec('COMMIT');
@@ -334,7 +335,7 @@ export class ReviewDispatcher {
     if (this.stopped || this.retryTimer || !config.agents.autoReview) return;
     const row = this.database.connection.prepare(`
       SELECT MIN(retry_after) AS retry_after FROM review_queue
-      WHERE remote_state='OPEN' AND claim_owner IS NULL AND retry_after IS NOT NULL
+      WHERE remote_state='OPEN' AND ignored_at IS NULL AND claim_owner IS NULL AND retry_after IS NOT NULL
         AND attempt_count < ?
     `).get(config.agents.maxAutomaticAttempts) as { retry_after: string | null };
     if (!row.retry_after) return;

@@ -115,7 +115,7 @@ export function buildStatusDraft(database: BarbarianDatabase, config: BarbarianC
   ).toLowerCase();
   const needsReview = Number((database.connection.prepare(`
     SELECT COUNT(*) AS total FROM review_queue
-    WHERE remote_state='OPEN' AND is_draft=0 AND lower(author)<>?
+    WHERE remote_state='OPEN' AND is_draft=0 AND ignored_at IS NULL AND lower(author)<>?
       AND status<>'approved'
       AND NOT (COALESCE(viewer_review_state, '')='APPROVED' AND viewer_review_sha=head_sha)
   `).get(login) as { total: number }).total);

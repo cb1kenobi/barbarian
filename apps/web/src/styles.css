@@ -294,6 +294,8 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
 .drawer-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .drawer-actions button, .drawer-actions a { padding: 9px 12px; border: 1px solid var(--line-strong); background: transparent; color: var(--muted-strong); font-size: .75rem; font-weight: 700; text-decoration: none; cursor: pointer; }
 .drawer-actions button:hover:not(:disabled), .drawer-actions a:hover { border-color: var(--accent-border); background: var(--accent-soft); color: var(--acid); }
+.drawer-actions .danger-button { border-color: color-mix(in srgb, #ff776d 45%, transparent); color: #ff9473; }
+.drawer-actions .danger-button:hover:not(:disabled) { border-color: #ff776d; background: color-mix(in srgb, #ff776d 12%, transparent); color: #ffb0a8; }
 .status-modal footer button { padding: 9px 12px; border: 1px solid var(--accent-border); background: var(--acid); color: var(--accent-ink); font-size: .75rem; font-weight: 700; text-decoration: none; cursor: pointer; }
 .status-modal footer .muted-button { border-color: var(--line-strong); background: transparent; color: var(--muted-strong); }
 .drawer-actions button:disabled { opacity: .5; cursor: wait; }

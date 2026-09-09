@@ -328,7 +328,8 @@ export function synchronize(database: BarbarianDatabase, config: BarbarianConfig
       }
       await applyDiscovery(database, config, discovery);
       const trackedReviews = database.connection.prepare(`
-        SELECT id FROM review_queue WHERE remote_state='OPEN' ORDER BY updated_at DESC
+        SELECT id FROM review_queue
+        WHERE remote_state='OPEN' AND ignored_at IS NULL ORDER BY updated_at DESC
       `).all() as Array<{ id: string }>;
       for (const review of trackedReviews) {
         try { await refreshReviewContext(database, review.id); }

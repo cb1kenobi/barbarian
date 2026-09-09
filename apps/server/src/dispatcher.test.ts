@@ -73,6 +73,29 @@ describe('reviewTrigger', () => {
 });
 
 describe('ReviewDispatcher', () => {
+  it('does not request, claim, or schedule retries for an ignored pull request', async () => {
+    const db = database();
+    const id = seedReview(db, 5);
+    db.connection.prepare(`
+      UPDATE review_queue SET ignored_at=?, retry_after=? WHERE id=?
+    `).run(new Date().toISOString(), new Date(Date.now() - 60_000).toISOString(), id);
+    let claimed = false;
+    const dispatcher = new ReviewDispatcher(
+      db, config(1), new AgentRuntime(1), { error: () => undefined },
+      async () => { claimed = true; },
+    );
+
+    expect(dispatcher.requestManual(id)).toBe(false);
+    await dispatcher.pump();
+    expect(claimed).toBe(false);
+    expect((dispatcher as unknown as { retryTimer?: NodeJS.Timeout }).retryTimer).toBeUndefined();
+    expect(db.connection.prepare('SELECT claim_owner, manual_requested_at FROM review_queue WHERE id=?').get(id))
+      .toEqual({ claim_owner: null, manual_requested_at: null });
+
+    dispatcher.stop();
+    db.close();
+  });
+
   it('does not queue or claim draft pull requests', async () => {
     const db = database();
     const id = seedReview(db, 6);

@@ -304,6 +304,124 @@ describe('agent runs', () => {
 });
 
 describe('dashboard reviews', () => {
+  it('ignores a pull request everywhere, cancels its agents, and restores it when explicitly tracked', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-ignore-review-test-'));
+    directories.push(directory);
+    const database = new BarbarianDatabase(path.join(directory, 'test.db'));
+    const id = 'github:Acme/storage#42';
+    const now = new Date().toISOString();
+    database.connection.prepare(`
+      INSERT INTO review_queue(
+        id, repository, number, title, url, author, head_sha, head_ref_name, base_ref_name,
+        status, claim_owner, claimed_at, manual_requested_at, retry_after,
+        feedback_claim_owner, feedback_claimed_at, feedback_retry_after,
+        first_seen_at, updated_at, last_seen_at
+      ) VALUES (?, 'Acme/storage', 42, 'Ignore this review', 'https://github.com/Acme/storage/pull/42',
+        'author', 'head', 'feature', 'main', 'agent_working', 'review-owner', ?, ?, ?,
+        'feedback-owner', ?, ?, ?, ?, ?)
+    `).run(id, now, now, now, now, now, now, now, now);
+    const runtime = new AgentRuntime(2);
+    const reviewRun = runtime.run((signal) => new Promise<void>((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }), id);
+    const feedbackRun = runtime.run((signal) => new Promise<void>((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }), `${id}:feedback`);
+    const reviewOutcome = reviewRun.catch((error: unknown) => error);
+    const feedbackOutcome = feedbackRun.catch((error: unknown) => error);
+    database.connection.prepare(`
+      INSERT INTO agent_runs(review_id, provider, task, status, started_at, runtime_key, prompt)
+      VALUES (?, 'codex', 'code_review:manual', 'running', ?, ?, 'review prompt')
+    `).run(id, now, id);
+    database.connection.prepare(`
+      INSERT INTO agent_runs(review_id, provider, task, status, started_at, runtime_key, prompt)
+      VALUES (?, 'codex', 'address_feedback', 'running', ?, ?, 'feedback prompt')
+    `).run(id, now, `${id}:feedback`);
+    const appConfig = { ...config, agents: { ...config.agents, codeReview: [] } };
+    const app = await createApp(database, new ConfigStore(appConfig), undefined, {
+      runtime,
+      trackReview: async () => id,
+    });
+    const dashboardHeaders = { host: '127.0.0.1:4142', origin: 'http://127.0.0.1:4142' };
+    try {
+      const before = await app.inject({ method: 'GET', url: '/api/dashboard' });
+      expect((before.json() as { reviews: Array<{ id: string }> }).reviews.map((review) => review.id))
+        .toContain(id);
+
+      const rejectedExtension = await app.inject({
+        method: 'POST', url: `/api/reviews/${encodeURIComponent(id)}/ignore`,
+        headers: { origin: 'chrome-extension://barbarian' }, payload: {},
+      });
+      expect(rejectedExtension.statusCode).toBe(403);
+
+      const ignored = await app.inject({
+        method: 'POST', url: `/api/reviews/${encodeURIComponent(id)}/ignore`,
+        headers: dashboardHeaders, payload: {},
+      });
+      expect(ignored.statusCode).toBe(200);
+      expect(ignored.json()).toEqual({ ok: true, cancelled: 2 });
+      expect(await reviewOutcome).toMatchObject({ message: 'Pull request ignored' });
+      expect(await feedbackOutcome).toMatchObject({ message: 'Pull request ignored' });
+      expect(database.connection.prepare(`
+        SELECT ignored_at, status, claim_owner, manual_requested_at, retry_after,
+          feedback_claim_owner, feedback_retry_after FROM review_queue WHERE id=?
+      `).get(id)).toMatchObject({
+        ignored_at: expect.any(String), status: 'unreviewed', claim_owner: null,
+        manual_requested_at: null, retry_after: null, feedback_claim_owner: null,
+        feedback_retry_after: null,
+      });
+      expect(database.connection.prepare(`
+        SELECT status, error, prompt FROM agent_runs WHERE review_id=? ORDER BY id
+      `).all(id)).toEqual([
+        { status: 'cancelled', error: 'Pull request ignored', prompt: '' },
+        { status: 'cancelled', error: 'Pull request ignored', prompt: '' },
+      ]);
+
+      const after = await app.inject({ method: 'GET', url: '/api/dashboard' });
+      expect((after.json() as { reviews: Array<{ id: string }> }).reviews.map((review) => review.id))
+        .not.toContain(id);
+      const list = await app.inject({ method: 'GET', url: '/api/reviews' });
+      expect((list.json() as Array<{ id: string }>).map((review) => review.id)).not.toContain(id);
+      const detail = await app.inject({ method: 'GET', url: `/api/reviews/${encodeURIComponent(id)}` });
+      expect(detail.statusCode).toBe(404);
+      const browser = await app.inject({
+        method: 'GET',
+        url: `/api/browser/context?url=${encodeURIComponent('https://github.com/Acme/storage/pull/42')}`,
+      });
+      expect(browser.json()).toMatchObject({ id, review: null });
+      const local = await app.inject({
+        method: 'GET',
+        url: `/api/local/context?remote=${encodeURIComponent('git@github.com:Acme/storage.git')}`,
+      });
+      expect(local.json()).toEqual({ reviews: [] });
+
+      const ignoredAgain = await app.inject({
+        method: 'POST', url: `/api/reviews/${encodeURIComponent(id)}/ignore`,
+        headers: dashboardHeaders, payload: {},
+      });
+      expect(ignoredAgain.statusCode).toBe(200);
+      expect(ignoredAgain.json()).toEqual({ ok: true, cancelled: 0 });
+
+      const tracked = await app.inject({
+        method: 'POST', url: `/api/reviews/${encodeURIComponent(id)}/track`,
+        headers: { origin: 'chrome-extension://barbarian' }, payload: {},
+      });
+      expect(tracked.statusCode).toBe(202);
+      expect(tracked.json()).toMatchObject({
+        accepted: true, id, reviewStarted: false, reason: 'no_agents',
+      });
+      expect(database.connection.prepare(`
+        SELECT ignored_at, manual_requested_at FROM review_queue WHERE id=?
+      `).get(id)).toEqual({ ignored_at: null, manual_requested_at: null });
+      const restored = await app.inject({ method: 'GET', url: '/api/dashboard' });
+      expect((restored.json() as { reviews: Array<{ id: string }> }).reviews.map((review) => review.id))
+        .toContain(id);
+    } finally {
+      await app.close();
+      database.close();
+    }
+  });
+
   it('returns every open issue and review with explicit attention counts', async () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-app-test-'));
     directories.push(directory);
@@ -1064,6 +1182,16 @@ describe('local branch context', () => {
         .toEqual({ total: 0 });
       expect(database.connection.prepare('SELECT review_id, content FROM chat_messages').get())
         .toEqual({ review_id: 'github:Acme/storage#2', content: 'Carry this into the PR room.' });
+      database.connection.prepare(`
+        UPDATE review_queue SET ignored_at=? WHERE id='github:Acme/storage#2'
+      `).run(new Date().toISOString());
+      const ignored = await app.inject({
+        method: 'POST', url: '/api/local/branches/context', payload: branchPayload(directory),
+      });
+      expect(ignored.json()).toMatchObject({ branch: { review_id: null }, review: null });
+      database.connection.prepare(`
+        UPDATE review_queue SET ignored_at=NULL WHERE id='github:Acme/storage#2'
+      `).run();
       database.connection.prepare(`
         UPDATE review_queue SET is_draft=1 WHERE id='github:Acme/storage#2'
       `).run();

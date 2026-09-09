@@ -108,8 +108,8 @@ export async function upsertLocalBranch(
     : null;
   const linked = database.connection.prepare(`
     SELECT id FROM review_queue
-    WHERE (id=? AND head_sha=?)
-      OR (repository=? AND head_ref_name=? AND head_sha=? AND remote_state='OPEN')
+    WHERE ignored_at IS NULL AND ((id=? AND head_sha=?)
+      OR (repository=? AND head_ref_name=? AND head_sha=? AND remote_state='OPEN'))
     ORDER BY (id=?) DESC, updated_at DESC LIMIT 1
   `).get(
     pullRequestId, input.headSha, repository, input.branch, input.headSha, pullRequestId,
