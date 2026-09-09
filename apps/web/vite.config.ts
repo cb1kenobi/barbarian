@@ -18,6 +18,8 @@ function apiPort(): number {
   }
 }
 
+const apiTarget = `http://127.0.0.1:${apiPort()}`;
+
 export default defineConfig({
   root: new URL('.', import.meta.url).pathname,
   plugins: [react()],
@@ -25,7 +27,12 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 4141,
     strictPort: true,
-    proxy: { '/api': `http://127.0.0.1:${apiPort()}` },
+    proxy: {
+      '/api': {
+        target: apiTarget,
+        changeOrigin: false,
+      },
+    },
   },
   build: {
     outDir: '../../dist/web',
