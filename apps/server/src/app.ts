@@ -277,16 +277,17 @@ function markAuthoredFeedbackSeen(
   database: BarbarianDatabase,
   config: BarbarianConfig,
   row: Record<string, unknown>,
-): void {
+): boolean {
   const login = authenticatedGithubLogin(
     database,
     config.profile.githubLogin || config.review.requestedReviewer,
   ).toLowerCase();
-  if (!login || String(row.author).toLowerCase() !== login) return;
-  database.connection.prepare(`
+  if (!login || String(row.author).toLowerCase() !== login) return false;
+  const result = database.connection.prepare(`
     UPDATE review_queue SET author_seen_watermark=discussion_watermark
     WHERE id=? AND discussion_watermark>COALESCE(author_seen_watermark, '')
   `).run(String(row.id));
+  return result.changes > 0;
 }
 
 function agentRunView(config: BarbarianConfig, row: Record<string, unknown>) {
@@ -653,6 +654,7 @@ export async function createApp(
         ...review,
         approved: record.approved,
         has_new_feedback: record.has_new_feedback,
+        has_review_activity: record.has_review_activity,
         needs_input: record.needs_input,
       };
     });
@@ -900,11 +902,27 @@ export async function createApp(
       && localAgentApiAllowed(request.headers.origin, request.headers.host, activeServer)) {
       agentWorkspace = await resolveReviewWorkspace(database, id);
     }
+    const feedbackSeen = markAuthoredFeedbackSeen(database, config, record);
+    const login = (config.profile.githubLogin || config.review.requestedReviewer).trim().toLowerCase();
+    const authoredReview = openAuthoredPullRequests(database, login)
+      .find((candidate) => String(candidate.id) === id);
+    const context = reviewContextPayload(database, config, record);
     const payload = {
-      ...reviewContextPayload(database, config, record), messages, runs,
+      ...context,
+      review: {
+        ...context.review,
+        is_authored: Boolean(authoredReview),
+        ...(authoredReview ? {
+          approved: authoredReview.approved,
+          has_new_feedback: authoredReview.has_new_feedback,
+          has_review_activity: authoredReview.has_review_activity,
+          needs_input: authoredReview.needs_input,
+        } : {}),
+      },
+      messages, runs,
       timeline: reviewTimeline(database, config, id), agentWorkspace,
     };
-    markAuthoredFeedbackSeen(database, config, record);
+    if (feedbackSeen) publishDashboardUpdated(id);
     return payload;
   });
 

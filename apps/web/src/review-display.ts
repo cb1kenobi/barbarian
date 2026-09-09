@@ -3,6 +3,13 @@ export interface ReviewStatusSource {
   display_status?: unknown;
 }
 
+export interface AuthoredReviewStatusSource {
+  approved?: boolean;
+  has_new_feedback?: boolean;
+  has_review_activity?: boolean;
+  needs_input?: boolean;
+}
+
 const labels: Record<string, string> = {
   draft: 'Draft',
   unreviewed: 'Needs review',
@@ -15,6 +22,10 @@ const labels: Record<string, string> = {
   approved: 'Approved',
   merged: 'Merged',
   closed: 'Closed',
+  needs_input: 'Needs input',
+  new_feedback: 'New feedback',
+  awaiting_approval: 'Awaiting approval',
+  awaiting_review: 'Awaiting review',
 };
 
 export const reviewStatusGuide = [
@@ -37,6 +48,13 @@ export function reviewDisplayStatus(review: ReviewStatusSource): string {
   return 'unreviewed';
 }
 
+export function authoredReviewDisplayStatus(review: AuthoredReviewStatusSource): string {
+  if (review.needs_input) return 'needs_input';
+  if (review.has_new_feedback) return 'new_feedback';
+  if (review.approved) return 'approved';
+  return review.has_review_activity ? 'awaiting_approval' : 'awaiting_review';
+}
+
 export function countReviewsNeedingApproval(reviews: ReviewStatusSource[]): number {
   return reviews.filter((review) => !['approved', 'draft'].includes(reviewDisplayStatus(review))).length;
 }
@@ -48,7 +66,8 @@ export function statusLabel(status: unknown): string {
 
 export function statusTone(status: unknown): string {
   if (status === 'agent_working') return 'working';
-  if (status === 'issues_found' || status === 'awaiting_feedback' || status === 'agent_failed') return 'feedback';
+  if (status === 'issues_found' || status === 'awaiting_feedback' || status === 'agent_failed'
+    || status === 'needs_input' || status === 'new_feedback') return 'feedback';
   if (status === 'partially_reviewed') return 'partial';
   if (status === 'ready_to_merge' || status === 'approved') return 'ready';
   return 'quiet';

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  authoredReviewDisplayStatus,
   countReviewsNeedingApproval,
   reviewDisplayStatus,
   reviewStatusGuide,
@@ -8,6 +9,15 @@ import {
 } from './review-display';
 
 describe('review display status', () => {
+  it('distinguishes authored PRs awaiting their first review from those awaiting approval', () => {
+    expect(authoredReviewDisplayStatus({})).toBe('awaiting_review');
+    expect(authoredReviewDisplayStatus({ has_review_activity: true })).toBe('awaiting_approval');
+    expect(authoredReviewDisplayStatus({ approved: true, has_review_activity: true })).toBe('approved');
+    expect(authoredReviewDisplayStatus({ approved: true, has_new_feedback: true })).toBe('new_feedback');
+    expect(authoredReviewDisplayStatus({ has_new_feedback: true, needs_input: true })).toBe('needs_input');
+    expect(statusLabel('awaiting_approval')).toBe('Awaiting approval');
+  });
+
   it('uses the computed display status when the server provides it', () => {
     expect(reviewDisplayStatus({ status: 'unreviewed', display_status: 'partially_reviewed' }))
       .toBe('partially_reviewed');

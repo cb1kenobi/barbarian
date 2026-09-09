@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { createPortal } from 'react-dom';
 import { formatLastSync, formatNextSync, formatSyncTimestamp, type SyncRun } from './sync-time';
 import { sortReviews, type ReviewSort } from './review-sort';
-import { countReviewsNeedingApproval, reviewDisplayStatus, reviewStatusGuide, statusLabel, statusTone } from './review-display';
+import { authoredReviewDisplayStatus, countReviewsNeedingApproval, reviewDisplayStatus, reviewStatusGuide, statusLabel, statusTone } from './review-display';
 import { formatElapsed } from './elapsed-time';
 import { applyAppearance, SettingsModal, type AppearanceConfig } from './settings';
 import { copyStatusUpdate, editStatusText } from './status-editor';
@@ -34,6 +34,10 @@ interface Review {
   remote_created_at: string; remote_updated_at: string; last_agent_review_at: string | null;
   new_commit_count: number; review_round_count: number;
   is_draft: boolean;
+  is_authored?: boolean;
+  approved?: boolean;
+  has_new_feedback?: boolean;
+  has_review_activity?: boolean;
   needs_input: boolean;
   issue_counts: { high: number; medium: number; low: number };
   linked_issues?: number[];
@@ -43,6 +47,7 @@ interface Review {
 interface FeedbackReview extends Review {
   approved: boolean;
   has_new_feedback: boolean;
+  has_review_activity: boolean;
 }
 
 interface FixedIssueReference {
@@ -490,13 +495,9 @@ export function App() {
 
 function Empty({ message }: { message: string }) { return <div className="empty"><span>∅</span><p>{message}</p></div>; }
 
-function FeedbackBadges({ review }: { review: FeedbackReview }) {
+function FeedbackBadges({ review }: { review: Pick<Review, 'approved' | 'has_new_feedback' | 'has_review_activity' | 'needs_input'> }) {
   return <span className="feedback-badges">
-    {review.needs_input
-      ? <span className="tag feedback">Needs input</span>
-      : review.has_new_feedback && <span className="tag feedback">New feedback</span>}
-    {review.approved && <ReviewStatusBadge status="approved" />}
-    {!review.has_new_feedback && !review.approved && <span className="tag quiet">Awaiting review</span>}
+    <ReviewStatusBadge status={authoredReviewDisplayStatus(review)} />
   </span>;
 }
 
@@ -860,7 +861,7 @@ function ReviewDrawer({ id, timezone, now, onClose, onChanged, onAgentFailed }: 
   };
 
   return <div className="drawer-backdrop" onMouseDown={onClose}><aside className="drawer" onMouseDown={(event) => event.stopPropagation()}><button className="drawer-close" onClick={onClose}>×</button>
-    {!review ? <p>Loading review…</p> : <><div className="drawer-details"><div className="drawer-review-heading"><span className="section-label">{review.repository} · #{review.number} · BY {review.author.startsWith('@') ? review.author : `@${review.author}`}</span><div className="drawer-status"><ReviewStatusBadge status={reviewDisplayStatus(review)} onAgentFailed={onAgentFailed} />{review.pending_reason && <span>Queued: {review.pending_reason.replaceAll('_', ' ')}</span>}</div></div><h2>{review.title}</h2><div className="drawer-description"><p className="plain-summary"><InlineCode text={review.simple_summary} /></p><FixedIssues review={review} /></div>
+    {!review ? <p>Loading review…</p> : <><div className="drawer-details"><div className="drawer-review-heading"><span className="section-label">{review.repository} · #{review.number} · BY {review.author.startsWith('@') ? review.author : `@${review.author}`}</span><div className="drawer-status">{review.is_authored ? <FeedbackBadges review={review} /> : <ReviewStatusBadge status={reviewDisplayStatus(review)} onAgentFailed={onAgentFailed} />}{!review.is_authored && review.pending_reason && <span>Queued: {review.pending_reason.replaceAll('_', ' ')}</span>}</div></div><h2>{review.title}</h2><div className="drawer-description"><p className="plain-summary"><InlineCode text={review.simple_summary} /></p><FixedIssues review={review} /></div>
       <div className="drawer-review-metadata"><ReviewMetadata review={review} timezone={timezone} now={now} /></div>
       <div className="drawer-actions"><div className="review-combo"><button disabled={!!busy || review.is_draft || !automaticReviewAvailable} onClick={() => void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: '{}' }))}>{review.is_draft ? 'Draft — no review' : busy === 'review' ? 'Starting…' : '▶ Agent review'}</button><ReviewAgentPicker reviewAgents={reviewAgents} busy={!!busy} isDraft={review.is_draft} onSelect={(agentId) => void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: JSON.stringify(agentId ? { agentId } : {}) }))} /></div><button disabled={!!busy} onClick={() => void action('workspace', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'POST', body: '{}' }))}>{busy === 'workspace' ? 'Cloning & building…' : review.workspace_path ? 'Rebuild workspace' : 'Prepare locally'}</button>{review.workspace_path && <button disabled={!!busy} onClick={() => void action('cleanup', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'DELETE' }))}>Clean up</button>}<a href={review.url} target="_blank">Open GitHub ↗</a></div>
       {review.workspace_path && <code className="workspace-path">{review.workspace_path}</code>}{error && <p className="inline-error">{error}</p>}</div>

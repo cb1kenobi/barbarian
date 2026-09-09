@@ -521,10 +521,11 @@ describe('dashboard reviews', () => {
     addReview(4, 'cb1kenobi', 'unreviewed', 'APPROVED', '', null, true);
     addReview(5, 'cb1kenobi', 'unreviewed', null, '', null);
     addReview(6, 'cb1kenobi', 'unreviewed', 'APPROVED', '2026-01-02T06:00:00Z', '2026-01-01T06:00:00Z');
-    addReview(7, 'cb1kenobi', 'unreviewed', null, '2026-01-02T07:00:00Z', null);
+    addReview(7, 'cb1kenobi', 'ready_to_merge', null, '2026-01-02T07:00:00Z', null);
     addReview(9, 'cb1kenobi', 'ready_to_merge', 'CHANGES_REQUESTED', '2026-01-02T09:00:00Z', null);
     database.connection.prepare(`
-      UPDATE review_queue SET author_seen_watermark=discussion_watermark WHERE number=9
+      UPDATE review_queue SET author_seen_watermark=discussion_watermark,
+        last_feedback_handled_watermark=discussion_watermark WHERE number=9
     `).run();
 
     const app = await createApp(database, new ConfigStore(config));
@@ -533,7 +534,9 @@ describe('dashboard reviews', () => {
       expect(response.statusCode).toBe(200);
       const payload = response.json() as {
         reviews: Array<{ number: number }>;
-        feedback: Array<{ number: number; approved: boolean; has_new_feedback: boolean }>;
+        feedback: Array<{
+          number: number; approved: boolean; has_new_feedback: boolean; has_review_activity: boolean;
+        }>;
         metrics: { reviewsNeedingApproval: number };
       };
       expect(payload.reviews).toEqual([
@@ -541,10 +544,14 @@ describe('dashboard reviews', () => {
         expect.objectContaining({ number: 1, is_draft: false, display_status: 'unreviewed' }),
       ]);
       expect(payload.feedback).toEqual([
-        expect.objectContaining({ number: 9, approved: false, has_new_feedback: false }),
+        expect.objectContaining({
+          number: 9, approved: false, has_new_feedback: false, has_review_activity: true,
+        }),
         expect.objectContaining({ number: 7, approved: false, has_new_feedback: true }),
         expect.objectContaining({ number: 6, approved: true, has_new_feedback: true }),
-        expect.objectContaining({ number: 5, approved: false, has_new_feedback: false }),
+        expect.objectContaining({
+          number: 5, approved: false, has_new_feedback: false, has_review_activity: false,
+        }),
         expect.objectContaining({ number: 3, approved: false, has_new_feedback: true }),
         expect.objectContaining({ number: 2, approved: true, has_new_feedback: false }),
       ]);
@@ -559,6 +566,10 @@ describe('dashboard reviews', () => {
         .toContainEqual(expect.objectContaining({ number: 7 }));
       const opened = await app.inject({ method: 'GET', url: '/api/reviews/github%3AAcme%2Fstorage%237' });
       expect(opened.statusCode).toBe(200);
+      expect(opened.json().review).toMatchObject({
+        number: 7, display_status: 'ready_to_merge', is_authored: true,
+        approved: false, has_new_feedback: false, has_review_activity: true,
+      });
       const afterOpen = await app.inject({ method: 'GET', url: '/api/dashboard' });
       expect((afterOpen.json() as { feedback: Array<{ number: number }> }).feedback)
         .toContainEqual(expect.objectContaining({ number: 7, has_new_feedback: false }));
