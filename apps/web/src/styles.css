@@ -370,7 +370,8 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
 .message > span { display: block; margin: 0 0 4px 7px; color: #6c7066; font: .625rem ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; }
 .message > p, .message > .markdown { margin: 0; padding: 10px 12px; border: 1px solid var(--line); background: var(--panel-hover); color: var(--muted-strong); font-size: .8125rem; line-height: 1.55; }
 .message.user > p, .message.user > .markdown { border-color: var(--accent-border); background: var(--accent-soft); }
-.typing { color: var(--acid) !important; }
+.chat-pending-state { display: flex; align-items: center; gap: 8px; color: var(--acid) !important; }
+.chat-pending-spinner { width: 12px; height: 12px; flex: none; border: 2px solid var(--line-strong); border-top-color: var(--acid); border-radius: 50%; animation: model-discovery-spin .8s linear infinite; }
 .markdown > :first-child { margin-top: 0; }
 .markdown > :last-child { margin-bottom: 0; }
 .markdown p { margin: 0 0 10px; }
@@ -523,7 +524,7 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
 .settings-error { margin: 0; color: #ff776d; font-size: .75rem; }
 
 @media (prefers-reduced-motion: reduce) {
-  .model-discovery-loading > span { border-color: var(--acid); animation: none; }
+  .model-discovery-loading > span, .chat-pending-spinner { border-color: var(--acid); animation: none; }
 }
 
 :root[data-theme='light'] .tag.quiet { color: #52594f; border-color: #b7bcb2; background: #eef0ea; }

@@ -13,6 +13,7 @@ import { sortWorkItems, type WorkSort } from './work-sort';
 import { isQueueSearchShortcut, matchesQueueSearch } from './queue-search';
 import { useCloseOnEscape } from './escape-layers';
 import { greetingForTime } from './greeting';
+import { isChatAtBottom, restoredChatScrollTop } from '../../chrome-extension/src/chat-scroll.js';
 import {
   backFromAgentRun, closeAgentDrawer, openAgentHistory, openAgentRun, type AgentDrawerState,
 } from './agent-drawer.js';
@@ -237,6 +238,33 @@ function useScrollableViewport() {
     };
   }, [viewport]);
   return [setViewport, scrollable] as const;
+}
+
+function useChatViewport(conversationId: string, lastMessageId: number | undefined, pending: boolean) {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const pinnedRef = useRef(true);
+  const previousConversationIdRef = useRef(conversationId);
+  const setViewport = useCallback((viewport: HTMLDivElement | null) => {
+    viewportRef.current = viewport;
+    if (!viewport) return;
+    pinnedRef.current = true;
+    viewport.scrollTop = restoredChatScrollTop(undefined, viewport);
+  }, []);
+  const onScroll = useCallback(() => {
+    const viewport = viewportRef.current;
+    if (viewport) pinnedRef.current = isChatAtBottom(viewport);
+  }, []);
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    if (previousConversationIdRef.current !== conversationId) {
+      previousConversationIdRef.current = conversationId;
+      pinnedRef.current = true;
+    }
+    if (!pinnedRef.current) return;
+    viewport.scrollTop = restoredChatScrollTop(undefined, viewport);
+  }, [conversationId, lastMessageId, pending]);
+  return [setViewport, onScroll] as const;
 }
 
 export function App() {
@@ -840,6 +868,8 @@ function ReviewDrawer({ id, timezone, now, onClose, onChanged, onAgentFailed }: 
   const [agentWorkspace, setAgentWorkspace] = useState<ReviewAgentWorkspace | null>(null);
   const [workspaceWrite, setWorkspaceWrite] = useState(false);
   const [reviewAgents, setReviewAgents] = useState<ReviewAgentOptions | null>(null);
+  const chatPending = busy === 'chat';
+  const [chatViewportRef, onChatScroll] = useChatViewport(id, messages.at(-1)?.id, chatPending);
   const automaticReviewAvailable = Boolean(reviewAgents?.agents.some((agent) => agent.available));
   useCloseOnEscape(onClose);
   const load = useCallback(async () => { const detail = await api<{ review: Review; messages: ChatMessage[]; timeline?: ReviewTimelineEvent[]; agentWorkspace?: ReviewAgentWorkspace | null }>(`/api/reviews/${encodeURIComponent(id)}`); setReview(detail.review); setMessages(detail.messages); setTimeline(detail.timeline || []); setAgentWorkspace(detail.agentWorkspace || null); }, [id]);
@@ -882,7 +912,7 @@ function ReviewDrawer({ id, timezone, now, onClose, onChanged, onAgentFailed }: 
         <button type="button" role="tab" aria-selected={tab === 'review-room'} className={tab === 'review-room' ? 'active' : ''} onClick={() => setTab('review-room')}>Review Room</button>
         <button type="button" role="tab" aria-selected={tab === 'timeline'} className={tab === 'timeline' ? 'active' : ''} onClick={() => setTab('timeline')}>Timeline</button>
       </div>
-      {tab === 'review-room' ? <section className="review-room" role="tabpanel"><div className="chat-log">{!messages.length && <p className="chat-empty">Ask what changed, why it matters, what could break, or how to test it.</p>}{messages.map((entry) => <div className={`message ${entry.role}`} key={entry.id}><span>{entry.author}</span><div className="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(entry.content) }} /></div>)}{busy === 'chat' && <div className="message assistant"><span>agent</span><p className="typing">Thinking…</p></div>}</div>
+      {tab === 'review-room' ? <section className="review-room" role="tabpanel"><div className="chat-log" ref={chatViewportRef} onScroll={onChatScroll}>{!messages.length && <p className="chat-empty">Ask what changed, why it matters, what could break, or how to test it.</p>}{messages.map((entry) => <div className={`message ${entry.role}`} key={entry.id}><span>{entry.author}</span><div className="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(entry.content) }} /></div>)}{chatPending && <div className="message assistant chat-pending" role="status" aria-live="polite"><span>agent</span><p className="chat-pending-state"><span className="chat-pending-spinner" aria-hidden="true" /><span>Agent is working…</span></p></div>}</div>
       <form className="chat-form" onSubmit={(event) => void send(event)}>{agentWorkspace && <label className="chat-workspace"><input type="checkbox" checked={workspaceWrite} onChange={(event) => setWorkspaceWrite(event.target.checked)} /><span>Work in local branch <strong>{agentWorkspace.branchName}</strong><small>{agentWorkspace.path}</small></span></label>}<textarea value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={submitOnEnter} placeholder={review.needs_input ? "Answer Barbarian’s question to resume the feedback fix…" : "Ask about this pull request…"} /></form></section>
       : <section className="review-timeline" role="tabpanel">{timeline.length ? <ol>{timeline.map((event) => <li key={event.id}>
         <time title={formatSyncTimestamp(event.created_at, timezone)}>{formatTimelineTime(event.created_at, timezone)}</time>

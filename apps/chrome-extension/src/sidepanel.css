@@ -159,6 +159,9 @@ p { margin: 0; }
 .message.user { margin-left: 24px; border-color: var(--user-border); background: var(--user-panel); }
 .message.assistant { margin-right: 24px; }
 .message-author { display: block; margin-bottom: 4px; color: var(--muted); font-size: .6875rem; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+.chat-pending-state { display: flex; align-items: center; gap: 8px; color: var(--working-ink); }
+.chat-pending-spinner { width: 12px; height: 12px; flex: none; border: 2px solid var(--line); border-top-color: var(--working-ink); border-radius: 50%; animation: chat-pending-spin .8s linear infinite; }
+@keyframes chat-pending-spin { to { transform: rotate(360deg); } }
 .selection { display: none; margin: 0 0 8px; padding: 8px; border-left: 2px solid var(--accent); background: var(--selection-panel); color: var(--muted); font-size: .75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .selection.visible { display: block; }
 textarea { display: block; width: 100%; min-height: 92px; padding: 11px; border: 1px solid var(--line); outline: none; background: var(--input); color: var(--ink); font-size: .9375rem; line-height: 1.5; resize: vertical; }
@@ -203,6 +206,10 @@ button:disabled { cursor: wait; opacity: .55; }
 .review-actions { margin-top: -2px; }
 .action-status { min-height: 18px; margin-top: 7px; color: var(--muted); font-size: .75rem; }
 .workspace-path { display: block; margin-top: 9px; padding: 8px; overflow-wrap: anywhere; border: 1px solid var(--line-soft); background: var(--panel-deep); color: var(--muted); font-size: .6875rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-pending-spinner { border-color: var(--working-ink); animation: none; }
+}
 
 @media (max-width: 350px) {
   header { grid-template-columns: 34px 1fr; padding-inline: 12px; }
