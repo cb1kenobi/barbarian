@@ -240,7 +240,7 @@ function useScrollableViewport() {
   return [setViewport, scrollable] as const;
 }
 
-function useChatViewport(conversationId: string, lastMessageId: number | undefined, pending: boolean) {
+function useChatViewport(conversationId: string, lastMessageId: number | undefined, lastMessageContent: string | undefined, pending: boolean) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
   const conversationIdRef = useRef(conversationId);
@@ -271,7 +271,7 @@ function useChatViewport(conversationId: string, lastMessageId: number | undefin
     if (!viewport) return;
     if (!pinnedRef.current) return;
     viewport.scrollTop = restoredChatScrollTop(undefined, viewport);
-  }, [conversationId, lastMessageId, pending]);
+  }, [conversationId, lastMessageId, lastMessageContent, pending]);
   return [setViewport, onScroll] as const;
 }
 
@@ -877,7 +877,9 @@ function ReviewDrawer({ id, timezone, now, onClose, onChanged, onAgentFailed }: 
   const [workspaceWrite, setWorkspaceWrite] = useState(false);
   const [reviewAgents, setReviewAgents] = useState<ReviewAgentOptions | null>(null);
   const chatPending = busy === 'chat';
-  const [chatViewportRef, onChatScroll] = useChatViewport(id, messages.at(-1)?.id, chatPending);
+  const [chatViewportRef, onChatScroll] = useChatViewport(
+    id, messages.at(-1)?.id, messages.at(-1)?.content, chatPending,
+  );
   const automaticReviewAvailable = Boolean(reviewAgents?.agents.some((agent) => agent.available));
   useCloseOnEscape(onClose);
   const load = useCallback(async () => { const detail = await api<{ review: Review; messages: ChatMessage[]; timeline?: ReviewTimelineEvent[]; agentWorkspace?: ReviewAgentWorkspace | null }>(`/api/reviews/${encodeURIComponent(id)}`); setReview(detail.review); setMessages(detail.messages); setTimeline(detail.timeline || []); setAgentWorkspace(detail.agentWorkspace || null); }, [id]);

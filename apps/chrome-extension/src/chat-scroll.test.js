@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { captureChatScroll, isChatAtBottom, restoredChatScrollTop } from './chat-scroll.js';
 
@@ -29,5 +30,12 @@ describe('review room scroll position', () => {
     const snapshot = captureChatScroll({ scrollTop: 240, clientHeight: 200, scrollHeight: 800 });
     const anchor = { beforeTop: 60, afterTop: 140 };
     expect(restoredChatScrollTop(snapshot, { scrollTop: 0, clientHeight: 200, scrollHeight: 640 }, anchor)).toBe(80);
+  });
+
+  it('keeps the VS Code webview copy aligned with the tested scroll rules', () => {
+    const source = readFileSync(new URL('../../vscode-extension/src/extension.ts', import.meta.url), 'utf8')
+      .replaceAll(/\s/g, '');
+    expect(source).toContain('transcript.scrollHeight-transcript.clientHeight-transcript.scrollTop<=4');
+    expect(source).toContain('transcript.scrollTop+message.getBoundingClientRect().top-transcript.getBoundingClientRect().top-anchor.top');
   });
 });

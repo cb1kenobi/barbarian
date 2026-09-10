@@ -135,6 +135,7 @@ function conversationScrollSnapshot() {
     anchors: Array.from(conversation.querySelectorAll('[data-message-id]')).map((message) => ({
       id: message.dataset.messageId,
       top: message.getBoundingClientRect().top - conversationTop,
+      bottom: message.getBoundingClientRect().bottom - conversationTop,
     })),
   };
 }
@@ -145,7 +146,10 @@ function restoreConversationScroll(snapshot) {
   let anchorPosition;
   if (snapshot && !snapshot.pinned) {
     const messages = Array.from(conversation.querySelectorAll('[data-message-id]'));
-    const anchor = snapshot.anchors?.find((candidate) => messages.some((message) => message.dataset.messageId === candidate.id));
+    const survivingAnchors = snapshot.anchors?.filter((candidate) =>
+      messages.some((message) => message.dataset.messageId === candidate.id),
+    );
+    const anchor = survivingAnchors?.find((candidate) => candidate.bottom > 0) || survivingAnchors?.[0];
     const message = anchor && messages.find((candidate) => candidate.dataset.messageId === anchor.id);
     if (message) {
       anchorPosition = {
