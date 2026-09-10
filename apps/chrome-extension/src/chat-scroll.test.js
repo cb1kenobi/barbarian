@@ -27,6 +27,7 @@ describe('review room scroll position', () => {
 
   it('keeps a surviving message anchored when older rows leave the window', () => {
     const snapshot = captureChatScroll({ scrollTop: 240, clientHeight: 200, scrollHeight: 800 });
-    expect(restoredChatScrollTop(snapshot, { clientHeight: 200, scrollHeight: 640 }, -160)).toBe(80);
+    const anchor = { beforeTop: 60, afterTop: 140 };
+    expect(restoredChatScrollTop(snapshot, { scrollTop: 0, clientHeight: 200, scrollHeight: 640 }, anchor)).toBe(80);
   });
 });

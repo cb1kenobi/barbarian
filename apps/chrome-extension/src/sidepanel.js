@@ -142,14 +142,19 @@ function conversationScrollSnapshot() {
 function restoreConversationScroll(snapshot) {
   const conversation = document.querySelector('.conversation');
   if (!conversation) return;
-  let anchorDelta = 0;
+  let anchorPosition;
   if (snapshot && !snapshot.pinned) {
     const messages = Array.from(conversation.querySelectorAll('[data-message-id]'));
     const anchor = snapshot.anchors?.find((candidate) => messages.some((message) => message.dataset.messageId === candidate.id));
     const message = anchor && messages.find((candidate) => candidate.dataset.messageId === anchor.id);
-    if (message) anchorDelta = message.getBoundingClientRect().top - conversation.getBoundingClientRect().top - anchor.top;
+    if (message) {
+      anchorPosition = {
+        beforeTop: anchor.top,
+        afterTop: message.getBoundingClientRect().top - conversation.getBoundingClientRect().top,
+      };
+    }
   }
-  conversation.scrollTop = restoredChatScrollTop(snapshot, conversation, anchorDelta);
+  conversation.scrollTop = restoredChatScrollTop(snapshot, conversation, anchorPosition);
 }
 
 function appendConversationMarkup(markup) {
