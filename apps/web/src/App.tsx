@@ -13,7 +13,7 @@ import { sortWorkItems, type WorkSort } from './work-sort';
 import { isQueueSearchShortcut, matchesQueueSearch } from './queue-search';
 import { useCloseOnEscape } from './escape-layers';
 import { greetingForTime } from './greeting';
-import { isChatAtBottom, restoredChatScrollTop } from '../../chrome-extension/src/chat-scroll.js';
+import { captureChatScroll, isChatAtBottom, restoredChatScrollTop } from '../../chrome-extension/src/chat-scroll.js';
 import {
   backFromAgentRun, closeAgentDrawer, openAgentHistory, openAgentRun, type AgentDrawerState,
 } from './agent-drawer.js';
@@ -243,12 +243,24 @@ function useScrollableViewport() {
 function useChatViewport(conversationId: string, lastMessageId: number | undefined, pending: boolean) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
-  const previousConversationIdRef = useRef(conversationId);
-  const setViewport = useCallback((viewport: HTMLDivElement | null) => {
-    viewportRef.current = viewport;
-    if (!viewport) return;
+  const conversationIdRef = useRef(conversationId);
+  const unmountedSnapshotRef = useRef<ReturnType<typeof captureChatScroll> | undefined>(undefined);
+  if (conversationIdRef.current !== conversationId) {
+    conversationIdRef.current = conversationId;
+    unmountedSnapshotRef.current = undefined;
     pinnedRef.current = true;
-    viewport.scrollTop = restoredChatScrollTop(undefined, viewport);
+  }
+  const setViewport = useCallback((viewport: HTMLDivElement | null) => {
+    if (!viewport) {
+      if (viewportRef.current) unmountedSnapshotRef.current = captureChatScroll(viewportRef.current);
+      viewportRef.current = null;
+      return;
+    }
+    viewportRef.current = viewport;
+    const snapshot = unmountedSnapshotRef.current;
+    unmountedSnapshotRef.current = undefined;
+    pinnedRef.current = snapshot?.pinned ?? true;
+    viewport.scrollTop = restoredChatScrollTop(snapshot, viewport);
   }, []);
   const onScroll = useCallback(() => {
     const viewport = viewportRef.current;
@@ -257,10 +269,6 @@ function useChatViewport(conversationId: string, lastMessageId: number | undefin
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
-    if (previousConversationIdRef.current !== conversationId) {
-      previousConversationIdRef.current = conversationId;
-      pinnedRef.current = true;
-    }
     if (!pinnedRef.current) return;
     viewport.scrollTop = restoredChatScrollTop(undefined, viewport);
   }, [conversationId, lastMessageId, pending]);

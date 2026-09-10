@@ -24,4 +24,9 @@ describe('review room scroll position', () => {
     const snapshot = captureChatScroll({ scrollTop: 400, clientHeight: 200, scrollHeight: 600 });
     expect(restoredChatScrollTop(snapshot, { clientHeight: 200, scrollHeight: 900 })).toBe(900);
   });
+
+  it('keeps a surviving message anchored when older rows leave the window', () => {
+    const snapshot = captureChatScroll({ scrollTop: 240, clientHeight: 200, scrollHeight: 800 });
+    expect(restoredChatScrollTop(snapshot, { clientHeight: 200, scrollHeight: 640 }, -160)).toBe(80);
+  });
 });

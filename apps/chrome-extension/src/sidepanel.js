@@ -10,7 +10,7 @@ import {
 } from './finding-visibility.js';
 import { serverUrlStorageKey } from './connection.js';
 import { captureChatScroll, restoredChatScrollTop } from './chat-scroll.js';
-import { renderChatPendingMessage } from './chat-pending.js';
+import { reconcileChatReply, renderChatPendingMessage } from './chat-pending.js';
 
 let currentTab;
 let currentPageKey = '';
@@ -110,7 +110,8 @@ function renderFindings(findings) {
 }
 
 function renderMessage(message) {
-  return `<div class="message ${message.role === 'user' ? 'user' : 'assistant'}"><span class="message-author">${escapeHtml(message.author)}</span><div class="markdown">${renderMarkdown(message.content)}</div></div>`;
+  const messageId = message.id === undefined ? '' : ` data-message-id="${escapeHtml(message.id)}"`;
+  return `<div class="message ${message.role === 'user' ? 'user' : 'assistant'}"${messageId}><span class="message-author">${escapeHtml(message.author)}</span><div class="markdown">${renderMarkdown(message.content)}</div></div>`;
 }
 
 function renderMessages(messages = [], pending = false) {
@@ -127,12 +128,28 @@ function wireGitHubLinks(root = document) {
 
 function conversationScrollSnapshot() {
   const conversation = document.querySelector('.conversation');
-  return conversation ? captureChatScroll(conversation) : undefined;
+  if (!conversation) return undefined;
+  const conversationTop = conversation.getBoundingClientRect().top;
+  return {
+    ...captureChatScroll(conversation),
+    anchors: Array.from(conversation.querySelectorAll('[data-message-id]')).map((message) => ({
+      id: message.dataset.messageId,
+      top: message.getBoundingClientRect().top - conversationTop,
+    })),
+  };
 }
 
 function restoreConversationScroll(snapshot) {
   const conversation = document.querySelector('.conversation');
-  if (conversation) conversation.scrollTop = restoredChatScrollTop(snapshot, conversation);
+  if (!conversation) return;
+  let anchorDelta = 0;
+  if (snapshot && !snapshot.pinned) {
+    const messages = Array.from(conversation.querySelectorAll('[data-message-id]'));
+    const anchor = snapshot.anchors?.find((candidate) => messages.some((message) => message.dataset.messageId === candidate.id));
+    const message = anchor && messages.find((candidate) => candidate.dataset.messageId === anchor.id);
+    if (message) anchorDelta = message.getBoundingClientRect().top - conversation.getBoundingClientRect().top - anchor.top;
+  }
+  conversation.scrollTop = restoredChatScrollTop(snapshot, conversation, anchorDelta);
 }
 
 function appendConversationMarkup(markup) {
@@ -158,7 +175,13 @@ function finishPendingConversation(message) {
   if (!conversation) return;
   const snapshot = captureChatScroll(conversation);
   conversation.querySelector('.chat-pending')?.remove();
-  if (message && !currentContext?.messages?.some((entry) => entry.id === message.id)) {
+  const reconciled = reconcileChatReply(currentContext?.messages, message);
+  if (currentContext && reconciled.existingIndex >= 0) {
+    currentContext.messages = reconciled.messages;
+    const existing = Array.from(conversation.querySelectorAll('[data-message-id]'))
+      .find((entry) => entry.dataset.messageId === String(message.id));
+    if (existing) existing.outerHTML = renderMessage(message);
+  } else if (reconciled.shouldAppend) {
     let transcript = conversation.querySelector('.transcript');
     if (!transcript) {
       transcript = document.createElement('div');

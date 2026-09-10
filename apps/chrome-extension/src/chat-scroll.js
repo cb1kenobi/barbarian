@@ -11,7 +11,7 @@ export function captureChatScroll(metrics) {
   };
 }
 
-export function restoredChatScrollTop(snapshot, { clientHeight, scrollHeight }) {
+export function restoredChatScrollTop(snapshot, { clientHeight, scrollHeight }, anchorDelta = 0) {
   if (!snapshot || snapshot.pinned) return scrollHeight;
-  return Math.min(snapshot.scrollTop, Math.max(0, scrollHeight - clientHeight));
+  return Math.min(Math.max(0, snapshot.scrollTop + anchorDelta), Math.max(0, scrollHeight - clientHeight));
 }
