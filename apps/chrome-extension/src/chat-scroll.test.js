@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { captureChatScroll, isChatAtBottom, restoredChatScrollTop } from './chat-scroll.js';
+import {
+  captureChatScroll, isChatAtBottom, restoredChatScrollTop, shouldKeepChatPinned,
+} from './chat-scroll.js';
 
 describe('review room scroll position', () => {
   it('pins an initial, short, exact-bottom, or fractionally-bottomed conversation', () => {
@@ -26,6 +28,13 @@ describe('review room scroll position', () => {
     expect(restoredChatScrollTop(snapshot, { clientHeight: 200, scrollHeight: 900 })).toBe(900);
   });
 
+  it('re-pins after layout only when the reader has not moved', () => {
+    const pinned = captureChatScroll({ scrollTop: 400, clientHeight: 200, scrollHeight: 600 });
+    expect(shouldKeepChatPinned(pinned, 400, 400)).toBe(true);
+    expect(shouldKeepChatPinned(pinned, 400, 320)).toBe(false);
+    expect(shouldKeepChatPinned({ ...pinned, pinned: false }, 120, 120)).toBe(false);
+  });
+
   it('keeps a surviving message anchored when older rows leave the window', () => {
     const snapshot = captureChatScroll({ scrollTop: 240, clientHeight: 200, scrollHeight: 800 });
     const anchor = { beforeTop: 60, afterTop: 140 };
@@ -37,5 +46,6 @@ describe('review room scroll position', () => {
       .replaceAll(/\s/g, '');
     expect(source).toContain('transcript.scrollHeight-transcript.clientHeight-transcript.scrollTop<=4');
     expect(source).toContain('transcript.scrollTop+message.getBoundingClientRect().top-transcript.getBoundingClientRect().top-anchor.top');
+    expect(source).toContain('requestAnimationFrame(()=>{if(transcript.isConnected&&snapshot?.pinned!==false&&transcript.scrollTop===restoredScrollTop)transcript.scrollTop=transcript.scrollHeight})');
   });
 });

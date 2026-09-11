@@ -16,3 +16,7 @@ export function restoredChatScrollTop(snapshot, { scrollTop = 0, clientHeight, s
   const anchoredScrollTop = anchor ? scrollTop + anchor.afterTop - anchor.beforeTop : snapshot.scrollTop;
   return Math.min(Math.max(0, anchoredScrollTop), Math.max(0, scrollHeight - clientHeight));
 }
+
+export function shouldKeepChatPinned(snapshot, restoredScrollTop, currentScrollTop) {
+  return (!snapshot || snapshot.pinned) && currentScrollTop === restoredScrollTop;
+}

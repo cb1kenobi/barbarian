@@ -9,8 +9,9 @@ import {
   rememberSuppressResolved, restoreSuppressResolved, suppressResolvedStorageKey, visibleFindings,
 } from './finding-visibility.js';
 import { serverUrlStorageKey } from './connection.js';
-import { captureChatScroll, restoredChatScrollTop } from './chat-scroll.js';
+import { captureChatScroll, restoredChatScrollTop, shouldKeepChatPinned } from './chat-scroll.js';
 import { reconcileChatReply, renderChatPendingMessage } from './chat-pending.js';
+import { renderTimeline } from './timeline.js';
 
 let currentTab;
 let currentPageKey = '';
@@ -20,6 +21,8 @@ let busy = false;
 let chatPending = false;
 let lastSelection;
 let suppressResolvedFindings = false;
+let activeReviewTab = 'review-room';
+let reviewRoomDraft = '';
 
 const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, (character) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;',
@@ -159,6 +162,13 @@ function restoreConversationScroll(snapshot) {
     }
   }
   conversation.scrollTop = restoredChatScrollTop(snapshot, conversation, anchorPosition);
+  const restoredScrollTop = conversation.scrollTop;
+  requestAnimationFrame(() => {
+    if (conversation.isConnected
+      && shouldKeepChatPinned(snapshot, restoredScrollTop, conversation.scrollTop)) {
+      conversation.scrollTop = conversation.scrollHeight;
+    }
+  });
 }
 
 function appendConversationMarkup(markup) {
@@ -251,7 +261,7 @@ function renderContext(context) {
     document.querySelector('.track-review')?.addEventListener('click', () => void trackCurrentReview());
     return;
   }
-  const { review, assessment, findings = [], messages = [] } = context;
+  const { review, assessment, findings = [], messages = [], timeline = [] } = context;
   const summary = pullRequestSummary(review);
   const reviewRounds = reviewRoundCount(review);
   const counts = assessment?.counts || { open: review.findings_count || 0, resolved: 0, outdated: 0, total: review.findings_count || 0 };
@@ -262,8 +272,16 @@ function renderContext(context) {
     <section class="review-actions"><h2>Review actions</h2><div class="actions"><button class="agent-review${reviewRunning ? ' running' : ''}" data-running="${reviewRunning}" ${draft ? 'disabled' : ''}><span class="button-icon" aria-hidden="true">${reviewRunning ? '■' : '▶'}</span><span>${draft ? 'Draft — no review' : reviewRunning ? 'Stop agent review' : 'Agent review'}</span></button><button class="secondary test-locally">Test locally</button></div><p class="action-status"></p>${review.workspace_path ? `<code class="workspace-path">${escapeHtml(review.workspace_path)}</code>` : ''}</section>
     <section><h2>Summary</h2><div class="summary markdown">${renderMarkdown(summary)}</div>${renderFixedIssues(review)}<p class="review-rounds" aria-label="${reviewRounds} agent review ${reviewRounds === 1 ? 'round' : 'rounds'}">AI Review Rounds: <strong>${reviewRounds}</strong></p></section>
     <section class="findings-panel"><div class="findings-heading"><h2>Findings</h2><label class="finding-filter"><input type="checkbox" ${suppressResolvedFindings ? 'checked' : ''}> Hide resolved</label></div><div class="assessment"><p class="assessment-message">${escapeHtml(assessment?.message || 'Waiting for an AI review.')}</p>${assessment?.stale ? '<p class="stale">⚠ This assessment is older than the latest commit.</p>' : ''}<div class="counts"><div class="count"><strong>${Number(counts.open) || 0}</strong><span>Open</span></div><div class="count"><strong>${Number(counts.resolved) || 0}</strong><span>Resolved</span></div><div class="count"><strong>${Number(counts.outdated) || 0}</strong><span>Outdated</span></div><div class="count"><strong>${Number(counts.total) || 0}</strong><span>Total</span></div></div></div><div class="findings-content">${renderFindings(findings)}</div></section>
-    <section class="review-room"><h2>Review Room</h2><div class="conversation">${renderMessages(messages, chatPending)}</div><p class="selection"></p><textarea placeholder="Ask what changed, why it works, what could break, or how to test it…"></textarea><div class="actions"><button class="secondary ask-selection" disabled>Ask about selection</button></div><p class="error"></p></section>`;
+    <div class="review-tabs" role="tablist" aria-label="Pull request details"><button type="button" role="tab" aria-selected="${activeReviewTab === 'review-room'}" class="${activeReviewTab === 'review-room' ? 'active' : ''}" data-review-tab="review-room">Review Room</button><button type="button" role="tab" aria-selected="${activeReviewTab === 'timeline'}" class="${activeReviewTab === 'timeline' ? 'active' : ''}" data-review-tab="timeline">Timeline</button></div>
+    ${activeReviewTab === 'review-room'
+      ? `<section class="review-room" role="tabpanel"><div class="conversation">${renderMessages(messages, chatPending)}</div><p class="selection"></p><textarea placeholder="Ask what changed, why it works, what could break, or how to test it…">${escapeHtml(reviewRoomDraft)}</textarea><div class="actions"><button class="secondary ask-selection" disabled>Ask about selection</button></div><p class="error"></p></section>`
+      : `<section class="review-timeline" role="tabpanel">${renderTimeline(timeline)}</section>`}`;
+  document.querySelectorAll('[data-review-tab]').forEach((button) => button.addEventListener('click', () => {
+    activeReviewTab = button.dataset.reviewTab;
+    renderContext(currentContext);
+  }));
   document.querySelector('.ask-selection')?.addEventListener('click', () => void sendQuestion('selection'));
+  document.querySelector('textarea')?.addEventListener('input', (event) => { reviewRoomDraft = event.currentTarget.value; });
   document.querySelector('textarea')?.addEventListener('keydown', (event) => {
     if (!shouldSubmitQuestion(event.key, event.shiftKey, event.isComposing)) return;
     event.preventDefault();
@@ -413,6 +431,7 @@ async function sendQuestion(kind) {
     ...(lastSelection.url ? { url: lastSelection.url } : {}),
   } : undefined;
   if (input) input.value = '';
+  if (!currentContext.issue) reviewRoomDraft = '';
   appendConversationMessage({ role: 'user', author: 'GitHub extension', content: message });
   busy = true;
   chatPending = true;
@@ -435,6 +454,7 @@ async function sendQuestion(kind) {
   } catch (caught) {
     chatPending = false;
     finishPendingConversation();
+    if (!currentContext.issue) reviewRoomDraft = question;
     const currentError = document.querySelector('.error');
     if (currentError) currentError.textContent = caught.message;
   }
@@ -464,6 +484,8 @@ async function refresh({ quiet = false, remote = false } = {}) {
     currentPageKind = page.kind;
     currentContext = undefined;
     lastSelection = undefined;
+    activeReviewTab = 'review-room';
+    reviewRoomDraft = '';
   }
   document.querySelector('.pr-key').textContent = page.key;
   try {

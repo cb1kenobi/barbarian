@@ -319,9 +319,20 @@ function agentRunView(config: BarbarianConfig, row: Record<string, unknown>) {
 }
 
 interface ReviewTimelineAgent {
+  id: number;
   provider: string;
   model: string;
   effort: string;
+  status: string;
+  finished_at: string | null;
+  output: string;
+  error: string | null;
+}
+
+interface ReviewTimelineOutcome {
+  verdict: 'ready' | 'issues';
+  findings: number;
+  summary: string;
 }
 
 interface ReviewTimelineEvent {
@@ -330,6 +341,7 @@ interface ReviewTimelineEvent {
   label: string;
   created_at: string;
   agents: ReviewTimelineAgent[];
+  outcome: ReviewTimelineOutcome | null;
 }
 
 function reviewRoundLabel(index: number, trigger: string): string {
@@ -351,7 +363,8 @@ function reviewTimeline(database: BarbarianDatabase, config: BarbarianConfig, re
     ORDER BY created_at ASC, id ASC
   `).all(reviewId) as Array<{ id: number; kind: string; payload_json: string; created_at: string }>;
   const runs = database.connection.prepare(`
-    SELECT id, owner, provider, task, started_at, model, effort
+    SELECT id, owner, provider, task, status, started_at, finished_at, model, effort,
+      substr(output, -20000) AS output, error
     FROM agent_runs WHERE review_id=? AND task LIKE 'code_review:%'
     ORDER BY started_at ASC, id ASC
   `).all(reviewId) as Array<Record<string, unknown>>;
@@ -365,13 +378,17 @@ function reviewTimeline(database: BarbarianDatabase, config: BarbarianConfig, re
     }
     const provider = String(run.provider);
     group.agents.push({
+      id: Number(run.id),
       provider,
       model: String(run.model || '') || configuredAgentModel(config, provider, String(run.task)),
       effort: String(run.effort || '') || configuredAgentEffort(config, provider, String(run.task)),
+      status: String(run.status),
+      finished_at: run.finished_at ? String(run.finished_at) : null,
+      output: String(run.output || ''),
+      error: run.error ? String(run.error) : null,
     });
   }
   const rounds = [...groupedRuns.values()].sort((left, right) => left.startedAt.localeCompare(right.startedAt));
-  const startedCount = activities.filter(({ kind }) => kind === 'review_started').length;
   let startedIndex = 0;
   let completedIndex = 0;
   const events: ReviewTimelineEvent[] = [];
@@ -379,6 +396,7 @@ function reviewTimeline(database: BarbarianDatabase, config: BarbarianConfig, re
     const payload = parseJson<Record<string, unknown>>(activity.payload_json || '{}');
     let label = '';
     let agents: ReviewTimelineAgent[] = [];
+    let outcome: ReviewTimelineOutcome | null = null;
     switch (activity.kind) {
       case 'review_discovered': label = 'Barbarian discovered this PR'; break;
       case 'review_ready': label = 'PR marked ready for review'; break;
@@ -389,8 +407,22 @@ function reviewTimeline(database: BarbarianDatabase, config: BarbarianConfig, re
         startedIndex += 1;
         break;
       case 'agent_review_completed':
-        if (completedIndex < startedCount) { completedIndex += 1; continue; }
+        {
+          const findings = payload.findings;
+          outcome = Number.isInteger(findings) && Number(findings) >= 0
+            ? {
+              verdict: Number(findings) === 0 ? 'ready' : 'issues',
+              findings: Number(findings),
+              summary: typeof payload.summary === 'string' ? payload.summary : '',
+            }
+            : null;
+        }
         label = completedIndex === 0 ? 'Initial AI review completed' : 'AI re-review completed';
+        if (outcome) {
+          label += outcome.verdict === 'ready'
+            ? ' — ready'
+            : ` — ${outcome.findings} ${outcome.findings === 1 ? 'finding' : 'findings'}`;
+        }
         agents = rounds[completedIndex]?.agents || [];
         completedIndex += 1;
         break;
@@ -409,6 +441,7 @@ function reviewTimeline(database: BarbarianDatabase, config: BarbarianConfig, re
         ? rounds[startedIndex - 1]!.startedAt
         : activity.created_at,
       agents,
+      outcome,
     });
   }
   return events.sort((left, right) => left.created_at.localeCompare(right.created_at));
@@ -1141,7 +1174,9 @@ export async function createApp(
     let review = database.connection.prepare(
       'SELECT * FROM review_queue WHERE id=? AND ignored_at IS NULL',
     ).get(id);
-    if (!review) return { id, appearance: config.appearance, review: null, findings: [], assessment: null, messages: [] };
+    if (!review) return {
+      id, appearance: config.appearance, review: null, findings: [], assessment: null, messages: [], timeline: [],
+    };
     if (query.refresh) {
       await refreshReview(database, id);
       review = database.connection.prepare(
@@ -1162,6 +1197,7 @@ export async function createApp(
       appearance: config.appearance,
       ...reviewContextPayload(database, config, record),
       messages,
+      timeline: reviewTimeline(database, config, id),
     };
   });
 
@@ -1280,6 +1316,7 @@ export async function createApp(
             branch,
             ...reviewContextPayload(database, config, linkedReview!),
             messages,
+            timeline: reviewTimeline(database, config, branch.review_id),
           };
         }
       }
@@ -1327,6 +1364,7 @@ export async function createApp(
         } : null,
         findings,
         messages,
+        timeline: linkedReview ? reviewTimeline(database, config, String(linkedReview.id)) : [],
         assessment: {
           message,
           stale,

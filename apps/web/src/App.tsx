@@ -61,7 +61,11 @@ interface ChatMessage { id: number; role: string; author: string; content: strin
 
 interface ReviewTimelineEvent {
   id: string; kind: string; label: string; created_at: string;
-  agents: Array<{ provider: string; model: string; effort: string }>;
+  agents: Array<{
+    id: number; provider: string; model: string; effort: string; status: string;
+    finished_at: string | null; output: string; error: string | null;
+  }>;
+  outcome: null | { verdict: 'ready' | 'issues'; findings: number; summary: string };
 }
 
 interface ReviewAgentOption {
@@ -926,7 +930,7 @@ function ReviewDrawer({ id, timezone, now, onClose, onChanged, onAgentFailed }: 
       <form className="chat-form" onSubmit={(event) => void send(event)}>{agentWorkspace && <label className="chat-workspace"><input type="checkbox" checked={workspaceWrite} onChange={(event) => setWorkspaceWrite(event.target.checked)} /><span>Work in local branch <strong>{agentWorkspace.branchName}</strong><small>{agentWorkspace.path}</small></span></label>}<textarea value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={submitOnEnter} placeholder={review.needs_input ? "Answer Barbarian’s question to resume the feedback fix…" : "Ask about this pull request…"} /></form></section>
       : <section className="review-timeline" role="tabpanel">{timeline.length ? <ol>{timeline.map((event) => <li key={event.id}>
         <time title={formatSyncTimestamp(event.created_at, timezone)}>{formatTimelineTime(event.created_at, timezone)}</time>
-        {event.agents.length ? <span className="timeline-agent" tabIndex={0} title={event.agents.map((agent) => `${agent.provider}: ${agent.model}, ${agent.effort === 'CLI default' ? 'default effort' : `${agent.effort} effort`}`).join('\n')}>{event.label}<span className="timeline-agent-tooltip" role="tooltip">{event.agents.map((agent) => <span key={`${event.id}:${agent.provider}`}><strong>{agent.provider}</strong><span>{agent.model}</span><span>{agent.effort === 'CLI default' ? 'Default effort' : `${agent.effort} effort`}</span></span>)}</span></span> : <span>{event.label}</span>}
+        {event.agents.length || event.outcome ? <span className="timeline-agent" tabIndex={0}>{event.label}<span className="timeline-agent-tooltip" role="tooltip">{event.outcome && <span className={`timeline-outcome ${event.outcome.verdict}`}><strong>{event.outcome.verdict === 'ready' ? 'Ready' : `${event.outcome.findings} ${event.outcome.findings === 1 ? 'finding' : 'findings'}`}</strong>{event.outcome.summary && <span>{event.outcome.summary}</span>}</span>}{event.agents.map((agent) => <span className="timeline-run" key={`${event.id}:${agent.id}`}><span className="timeline-run-heading"><strong>{agent.provider}</strong><span>{agent.status}</span></span><span>{agent.model} · {agent.effort === 'CLI default' ? 'default effort' : `${agent.effort} effort`}</span>{agent.error && <span className="timeline-run-error">{agent.error}</span>}<pre>{agent.output || (agent.status === 'running' ? 'Agent is still running…' : 'No output was retained for this run.')}</pre></span>)}</span></span> : <span>{event.label}</span>}
       </li>)}</ol> : <p className="timeline-empty">No timeline events have been recorded for this PR yet.</p>}</section>}
     </>}
   </aside></div>;

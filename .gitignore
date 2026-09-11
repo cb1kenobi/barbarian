@@ -13,3 +13,4 @@ data/
 apps/*/node_modules/
 apps/*/dist/
 *.vsix
+.claude
