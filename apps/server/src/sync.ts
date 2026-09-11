@@ -312,7 +312,15 @@ export async function applyDiscovery(
 
 let activeSync: Promise<DiscoveryResult> | null = null;
 
-export function synchronize(database: BarbarianDatabase, config: BarbarianConfig): Promise<DiscoveryResult> {
+export interface SynchronizeOptions {
+  onDiscoveryApplied?: () => void;
+}
+
+export function synchronize(
+  database: BarbarianDatabase,
+  config: BarbarianConfig,
+  options: SynchronizeOptions = {},
+): Promise<DiscoveryResult> {
   if (activeSync) return activeSync;
   activeSync = (async () => {
     const startedAt = new Date().toISOString();
@@ -327,6 +335,7 @@ export function synchronize(database: BarbarianDatabase, config: BarbarianConfig
         catch (error) { discovery.warnings.push(`linear: ${error instanceof Error ? error.message : String(error)}`); }
       }
       await applyDiscovery(database, config, discovery);
+      options.onDiscoveryApplied?.();
       const trackedReviews = database.connection.prepare(`
         SELECT id FROM review_queue
         WHERE remote_state='OPEN' AND ignored_at IS NULL ORDER BY updated_at DESC

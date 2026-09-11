@@ -123,6 +123,8 @@ p { margin: 0; }
 .fixed-issues { margin-top: 8px; color: var(--muted); font-size: .75rem; line-height: 1.45; }
 .fixed-issues strong { color: var(--ink-soft); }
 .fixed-issues a { color: var(--accent); font-weight: 700; text-underline-offset: 2px; }
+.review-rounds { margin-top: 8px; color: var(--muted); font-size: .75rem; }
+.review-rounds strong { color: var(--ink-soft); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .issue-context { display: grid; gap: 1px; margin: 0; border: 1px solid var(--line); background: var(--line); }
 .issue-context > div { display: grid; grid-template-columns: minmax(82px, .42fr) 1fr; gap: 10px; padding: 8px 10px; background: var(--panel); font-size: .8125rem; }
 .issue-context dt { color: var(--muted); }

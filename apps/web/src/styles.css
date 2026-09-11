@@ -27,6 +27,10 @@
   --overlay: #05060448;
   --shadow: #000b;
   --ember: #ff6b3d;
+  --status-active: #79d46a;
+  --status-active-glow: #79d46a80;
+  --status-inactive: #ff665c;
+  --status-inactive-glow: #ff665c80;
   --scrollbar-track: #111111;
   --scrollbar-thumb: #3f3f3f;
   --scrollbar-thumb-hover: #5a5a5a;
@@ -76,6 +80,10 @@
   --accent-panel-border: #b9ca91;
   --overlay: #25291f1a;
   --shadow: #303a2860;
+  --status-active: #397d2d;
+  --status-active-glow: #397d2d4d;
+  --status-inactive: #b52f2a;
+  --status-inactive-glow: #b52f2a4d;
   --scrollbar-track: #eeeeee;
   --scrollbar-thumb: #ababab;
   --scrollbar-thumb-hover: #888888;
@@ -128,8 +136,8 @@ nav b { min-width: 20px; padding: 2px 6px; border-radius: 9px; background: var(-
 .active-agent-empty { display: block; padding: 6px 8px; color: var(--muted-soft); font-size: .6875rem; }
 .rail-bottom { margin-top: 16px; padding: 16px 10px 0; border-top: 1px solid var(--line); }
 .sync-dot { display: flex; align-items: center; gap: 8px; font-size: .8125rem; color: var(--muted-strong); }
-.sync-dot span { width: 6px; height: 6px; border-radius: 50%; background: var(--acid); box-shadow: 0 0 10px var(--accent-glow); }
-.sync-dot span.bad { background: var(--ember); box-shadow: 0 0 10px #ff6b3d80; }
+.sync-dot span { width: 6px; height: 6px; border-radius: 50%; background: var(--status-active); box-shadow: 0 0 10px var(--status-active-glow); }
+.sync-dot span.bad { background: var(--status-inactive); box-shadow: 0 0 10px var(--status-inactive-glow); }
 .sync-schedule { display: grid; gap: 3px; margin: 7px 0 13px 14px; color: var(--muted-soft); font: .6875rem/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .sync-schedule span { white-space: nowrap; }
 .sync-schedule span[title] { cursor: help; }

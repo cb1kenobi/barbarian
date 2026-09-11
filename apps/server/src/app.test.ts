@@ -483,7 +483,9 @@ describe('dashboard reviews', () => {
       INSERT INTO activity_events(kind,subject_id,summary,payload_json,created_at)
       VALUES
         ('review_discovered','github:Acme/storage#1','Discovered','{}','2026-01-02T03:30:00Z'),
-        ('review_started','github:Acme/storage#1','Started','{"trigger":"new_pr"}','2026-01-02T04:00:00Z')
+        ('review_started','github:Acme/storage#1','Started','{"trigger":"new_pr"}','2026-01-02T04:00:00Z'),
+        ('agent_review_completed','github:Acme/storage#1','Completed',
+          '{"publishedReview":true,"publishedFindings":2}','2026-01-02T04:05:00Z')
     `).run();
     database.connection.prepare(`
       INSERT INTO agent_runs(review_id,provider,task,status,started_at)

@@ -161,6 +161,25 @@ function getReview(database: BarbarianDatabase, id: string): ReviewRow {
   return row;
 }
 
+export function reviewCompletionNote(
+  completedAt: string,
+  timezone: string,
+  provider: string,
+  model: string,
+  effort: string,
+): string {
+  const time = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  }).format(new Date(completedAt));
+  return `AI review completed ${time}.\n\nProvider: ${provider}\nModel: ${model || 'CLI default'}\nEffort: ${effort || 'CLI default'}`;
+}
+
 export async function askAgent(
   database: BarbarianDatabase,
   config: BarbarianConfig,
@@ -383,6 +402,7 @@ function finishClaim(
   database: BarbarianDatabase,
   claim: ReviewClaim,
   result: { findings: number; summary: string },
+  note: { content: string; createdAt: string },
 ): void {
   const approvalCarryover = Boolean((database.connection.prepare(
     'SELECT approval_carryover FROM review_queue WHERE id=?',
@@ -391,7 +411,7 @@ function finishClaim(
   const now = new Date().toISOString();
   database.connection.exec('BEGIN IMMEDIATE');
   try {
-    database.connection.prepare(`
+    const updated = database.connection.prepare(`
       UPDATE review_queue SET
         status=CASE WHEN head_sha<>? OR discussion_watermark>? THEN 'unreviewed' ELSE ? END,
         findings_count=?, last_reviewed_sha=?, last_reviewed_commit_count=commit_count,
@@ -405,6 +425,12 @@ function finishClaim(
       claim.headSha, claim.discussionWatermark, result.summary, result.summary,
       now, claim.reviewId, claim.owner,
     );
+    if (updated.changes) {
+      database.connection.prepare(`
+        INSERT INTO chat_messages(review_id, role, author, content, created_at)
+        VALUES (?, 'assistant', 'Barbarian', ?, ?)
+      `).run(claim.reviewId, note.content, note.createdAt);
+    }
     database.connection.exec('COMMIT');
   } catch (error) {
     database.connection.exec('ROLLBACK');
@@ -466,7 +492,7 @@ BARBARIAN_RESULT: {"findings":<count>,"verdict":"ready|issues","summary":"<plain
 
 REVIEW_BUNDLE_JSON:
 ${JSON.stringify(bundle)}`;
-    let successful: { provider: string; agentId: string; result: ParsedReviewResult } | null = null;
+    let successful: { provider: string; agentId: string; runId: number; result: ParsedReviewResult } | null = null;
     const failures: string[] = [];
     while (!successful) {
       let selected;
@@ -508,7 +534,7 @@ ${JSON.stringify(bundle)}`;
           : await execute();
         const parsed = parseReviewResult(output);
         validateReviewCommentLocations(bundle.diff, parsed.comments);
-        successful = { provider: selected.provider, agentId: selected.id, result: parsed };
+        successful = { provider: selected.provider, agentId: selected.id, runId, result: parsed };
       } catch (agentError) {
         const cancelled = agentError instanceof Error && agentError.name === 'AbortError';
         if (id !== undefined) {
@@ -534,13 +560,28 @@ ${JSON.stringify(bundle)}`;
     const stillClaimed = database.connection.prepare('SELECT 1 FROM review_queue WHERE id=? AND claim_owner=?')
       .get(claim.reviewId, claim.owner);
     if (!stillClaimed) throw new Error('Review claim was cancelled before results were published');
-    if (commentsToPublish.length > 0) {
-      await postReview(
-        review.repository, review.number, claim.headSha, result.summary, commentsToPublish,
-        config.profile.reviewName,
-      );
-    }
-    finishClaim(database, claim, result);
+    await postReview(
+      review.repository, review.number, claim.headSha, result.summary, commentsToPublish,
+      config.profile.reviewName,
+    );
+    const completedRun = database.connection.prepare(`
+      SELECT provider, model, effort, finished_at FROM agent_runs WHERE id=?
+    `).get(successful.runId) as {
+      provider: string; model: string; effort: string; finished_at: string | null;
+    } | undefined;
+    const completedAt = completedRun?.finished_at || new Date().toISOString();
+    const model = completedRun?.model || 'CLI default';
+    const effort = completedRun?.effort || 'CLI default';
+    finishClaim(database, claim, result, {
+      content: reviewCompletionNote(
+        completedAt,
+        config.profile.timezone,
+        completedRun?.provider || successful.provider,
+        model,
+        effort,
+      ),
+      createdAt: completedAt,
+    });
     recordActivity(
       database,
       'agent_review_completed',
@@ -550,7 +591,10 @@ ${JSON.stringify(bundle)}`;
         ...result,
         providers: [successful.provider],
         agentId: successful.agentId,
+        model,
+        effort,
         attemptedProviders,
+        publishedReview: true,
         publishedFindings: commentsToPublish.length,
         suppressedDuplicates: successful.result.comments.length - commentsToPublish.length,
         trigger: claim.trigger,

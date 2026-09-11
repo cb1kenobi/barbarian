@@ -95,7 +95,12 @@ async function monitorTick(): Promise<void> {
   const config = configStore.get();
   monitorRuntime.nextSyncAt = null;
   try {
-    await synchronize(database, config);
+    await synchronize(database, config, {
+      onDiscoveryApplied() {
+        dispatcher.cancelDraftReviews();
+        void dispatcher.pump();
+      },
+    });
     dispatcher.cancelDraftReviews();
     feedbackDispatcher.cancelIneligibleFeedback();
     if (config.review.autoCleanup) await cleanupCompletedWorkspaces(database, config);

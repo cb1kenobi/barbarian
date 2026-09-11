@@ -802,7 +802,12 @@ export async function createApp(
     services.onManualSyncStarted?.();
     try {
       const config = configStore.get();
-      const result = await synchronize(database, config);
+      const result = await synchronize(database, config, {
+        onDiscoveryApplied() {
+          dispatcher.cancelDraftReviews();
+          void dispatcher.pump();
+        },
+      });
       dispatcher.cancelDraftReviews();
       feedbackDispatcher.cancelIneligibleFeedback();
       await Promise.all([dispatcher.pump(), feedbackDispatcher.pump()]);

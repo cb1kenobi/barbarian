@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { BarbarianDatabase } from './database.js';
 import type { BarbarianConfig } from './types.js';
 import {
-  askAgent, executeAgent, newReviewComments, parseReviewResult, runReviewAgent, type ReviewClaim,
+  askAgent, executeAgent, newReviewComments, parseReviewResult, reviewCompletionNote,
+  runReviewAgent, type ReviewClaim,
 } from './agents.js';
 import type { ReviewBundle, ReviewCommentDraft } from './github.js';
 import { AgentRuntime } from './agent-runtime.js';
@@ -75,6 +76,21 @@ describe('parseReviewResult', () => {
     expect(() => parseReviewResult('Looks good')).toThrow('did not emit');
     expect(parseReviewResult('BARBARIAN_RESULT: {"findings":0,"verdict":"ready","summary":"Clear."}'))
       .toEqual({ findings: 0, verdict: 'ready', summary: 'Clear.', comments: [] });
+  });
+});
+
+describe('reviewCompletionNote', () => {
+  it('includes the local completion time and complete agent configuration', () => {
+    expect(reviewCompletionNote(
+      '2026-09-10T19:12:04Z',
+      'America/Chicago',
+      'codex',
+      'gpt-5.6-sol',
+      'high',
+    )).toBe(
+      'AI review completed Sep 10, 2026, 2:12 PM CDT.\n\n'
+      + 'Provider: codex\nModel: gpt-5.6-sol\nEffort: high',
+    );
   });
 });
 
@@ -255,7 +271,7 @@ describe('runReviewAgent', () => {
     database.close();
   });
 
-  it('keeps an issue status when the reported finding was already published', async () => {
+  it('keeps an issue status and publishes round proof when the finding was already published', async () => {
     const finding = {
       path: 'file.ts', line: 1, side: 'RIGHT' as const,
       body: '**High: broken invariant**\n\nFailure mode and fix.',
@@ -270,21 +286,44 @@ describe('runReviewAgent', () => {
       fetchBundle: async () => ({ ...bundle, inlineComments: [finding] }),
       postReview: async () => { posted = true; },
     });
-    expect(posted).toBe(false);
+    expect(posted).toBe(true);
     expect(database.connection.prepare('SELECT status, findings_count FROM review_queue WHERE id=?')
       .get(claim.reviewId)).toEqual({ status: 'issues_found', findings_count: 1 });
     database.close();
   });
 
-  it('does not publish anything to GitHub for a clean review', async () => {
+  it('publishes a visible GitHub review for a clean result', async () => {
     const script = "console.log('BARBARIAN_RESULT: {\\\"findings\\\":0,\\\"verdict\\\":\\\"ready\\\",\\\"summary\\\":\\\"Clear.\\\"}')";
     const { database, config, claim } = setup(script);
-    let posted = false;
+    config.agents.codeReview[0]!.model = 'test-model';
+    config.agents.codeReview[0]!.effort = 'high';
+    let publication: { summary: string; comments: ReviewCommentDraft[] } | undefined;
     await runReviewAgent(database, config, claim, undefined, {
       ...dependencies,
-      postReview: async () => { posted = true; },
+      postReview: async (_repository, _number, _headSha, summary, comments) => {
+        publication = { summary, comments };
+      },
     });
-    expect(posted).toBe(false);
+    expect(publication).toEqual({ summary: 'Clear.', comments: [] });
+    const completion = database.connection.prepare(`
+      SELECT payload_json FROM activity_events
+      WHERE subject_id=? AND kind='agent_review_completed' ORDER BY id DESC LIMIT 1
+    `).get(claim.reviewId) as { payload_json: string };
+    expect(JSON.parse(completion.payload_json)).toMatchObject({
+      publishedReview: true, publishedFindings: 0,
+      model: 'test-model', effort: 'high',
+    });
+    const roomNote = database.connection.prepare(`
+      SELECT role, author, content, created_at FROM chat_messages
+      WHERE review_id=? ORDER BY id DESC LIMIT 1
+    `).get(claim.reviewId) as { role: string; author: string; content: string; created_at: string };
+    expect(roomNote).toMatchObject({
+      role: 'assistant',
+      author: 'Barbarian',
+      content: expect.stringContaining('Provider: fake\nModel: test-model\nEffort: high'),
+    });
+    expect(roomNote.content).toContain('AI review completed');
+    expect(roomNote.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(database.connection.prepare(`
       SELECT status, last_reviewed_sha, last_reviewed_watermark, claim_owner FROM review_queue WHERE id=?
     `).get(claim.reviewId)).toEqual({
@@ -340,7 +379,7 @@ describe('runReviewAgent', () => {
       comments: [{ path: 'file.ts', line: 1, side: 'RIGHT', body: '**High: broken invariant**\n\nFailure mode and fix.' }],
     });
     const { database, config, claim } = setup(`console.log(${JSON.stringify(`BARBARIAN_RESULT: ${result}`)})`);
-    let posted = false;
+    let postedComments: ReviewCommentDraft[] | undefined;
     await runReviewAgent(database, config, claim, undefined, {
       ...dependencies,
       fetchBundle: async () => ({
@@ -350,9 +389,9 @@ describe('runReviewAgent', () => {
           body: '**High: broken invariant**\n\nPreviously reported.\n\n—\n_Generated by Barber AI_',
         }],
       }),
-      postReview: async () => { posted = true; },
+      postReview: async (_repository, _number, _headSha, _summary, comments) => { postedComments = comments; },
     });
-    expect(posted).toBe(false);
+    expect(postedComments).toEqual([]);
     database.close();
   });
 

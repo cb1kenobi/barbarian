@@ -50,7 +50,10 @@ export function reviewCardMetadata(database: BarbarianDatabase): Map<string, Rev
 
   const rounds = database.connection.prepare(`
     SELECT subject_id AS review_id, COUNT(*) AS total FROM activity_events
-    WHERE subject_id IS NOT NULL AND kind='review_started'
+    WHERE subject_id IS NOT NULL AND kind='agent_review_completed' AND (
+      COALESCE(json_extract(payload_json, '$.publishedReview'), 0) = 1
+      OR COALESCE(json_extract(payload_json, '$.publishedFindings'), 0) > 0
+    )
     GROUP BY subject_id
   `).all() as Array<{ review_id: string; total: number }>;
   for (const round of rounds) ensure(round.review_id).review_round_count = Number(round.total);

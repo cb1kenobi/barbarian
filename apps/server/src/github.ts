@@ -302,28 +302,37 @@ export function reviewAttribution(headSha: string, reviewName = ''): string {
   return `${name ? `${name} reviewed` : 'Reviewed'} ${headSha.slice(0, 8)}`;
 }
 
-export function reviewPublicationPayload(headSha: string, comments: ReviewCommentDraft[], reviewName = '') {
-  if (comments.length === 0) throw new Error('Refusing to publish an empty pull request review');
+export function reviewPublicationPayload(
+  headSha: string,
+  summary: string,
+  comments: ReviewCommentDraft[],
+  reviewName = '',
+) {
+  if (!summary.trim()) throw new Error('Refusing to publish a pull request review without a summary');
   const signature = `—\n${reviewAttribution(headSha, reviewName)}`;
   const signedComments = comments.map((comment) => ({
     ...comment,
     body: `${withoutReviewAttribution(comment.body)}\n\n${signature}`,
   }));
-  return { commit_id: headSha, event: 'COMMENT' as const, comments: signedComments };
+  return {
+    commit_id: headSha,
+    event: 'COMMENT' as const,
+    body: `${withoutReviewAttribution(summary)}\n\n${signature}`,
+    comments: signedComments,
+  };
 }
 
 export function reviewPublication(
   repository: string,
   number: number,
   headSha: string,
-  _summary: string,
+  summary: string,
   comments: ReviewCommentDraft[],
   reviewName = '',
 ): { endpoint: string; payload: Record<string, unknown> } {
-  if (comments.length === 0) throw new Error('Refusing to publish a clean review comment');
   return {
     endpoint: `repos/${repository}/pulls/${number}/reviews`,
-    payload: reviewPublicationPayload(headSha, comments, reviewName),
+    payload: reviewPublicationPayload(headSha, summary, comments, reviewName),
   };
 }
 
