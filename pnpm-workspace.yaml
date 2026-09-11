@@ -1,2 +1,7 @@
 packages:
   - apps/*
+allowBuilds:
+  '@vscode/vsce-sign': false
+  electron-winstaller: false
+  esbuild: false
+  keytar: false
