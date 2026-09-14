@@ -36,8 +36,8 @@ function selectionSnapshot() {
     .filter((value) => value != null && value !== '')
     .map(Number)
     .filter(Number.isFinite);
-  const line = lineNumbers.length ? String(Math.min(...lineNumbers)) : anchorLine || null;
-  const endLine = lineNumbers.length ? String(Math.max(...lineNumbers)) : focusLine || line;
+  const line = lineNumbers.length ? Math.min(...lineNumbers) : null;
+  const endLine = lineNumbers.length ? Math.max(...lineNumbers) : line;
   const lineCount = lineNumbers.length ? Math.max(...lineNumbers) - Math.min(...lineNumbers) + 1
     : text.replaceAll('\r\n', '\n').split('\n').length;
   return { text: text.slice(0, 12_000), path: path || null, line, endLine, lineCount, url: location.href };

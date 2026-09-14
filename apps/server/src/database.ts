@@ -30,12 +30,15 @@ export class BarbarianDatabase {
         simple_summary TEXT NOT NULL DEFAULT '',
         url TEXT NOT NULL,
         assignees TEXT NOT NULL DEFAULT '[]',
+        creator TEXT,
+        remote_created_at TEXT,
         priority INTEGER NOT NULL DEFAULT 0,
         priority_reasons TEXT NOT NULL DEFAULT '[]',
         status TEXT NOT NULL DEFAULT 'queued',
         milestone TEXT,
         duplicate_of TEXT,
         in_progress_pr TEXT,
+        in_progress_pr_draft INTEGER NOT NULL DEFAULT 0,
         fixed_by TEXT,
         remote_state TEXT NOT NULL DEFAULT 'OPEN',
         payload_json TEXT NOT NULL DEFAULT '{}',
@@ -277,6 +280,15 @@ export class BarbarianDatabase {
     }
     const workItemColumns = new Set((this.connection.prepare('PRAGMA table_info(work_items)').all() as Array<{ name: string }>).map((column) => column.name));
     if (!workItemColumns.has('assignees')) this.connection.exec("ALTER TABLE work_items ADD COLUMN assignees TEXT NOT NULL DEFAULT '[]'");
+    const workItemAdditions: Array<[string, string]> = [
+      ['creator', 'TEXT'],
+      ['remote_created_at', 'TEXT'],
+      ['in_progress_pr_draft', 'INTEGER NOT NULL DEFAULT 0'],
+    ];
+    for (const [name, definition] of workItemAdditions) {
+      if (!workItemColumns.has(name)) this.connection.exec(`ALTER TABLE work_items ADD COLUMN ${name} ${definition}`);
+    }
+    this.connection.exec('UPDATE work_items SET remote_created_at=first_seen_at WHERE remote_created_at IS NULL');
     const reviewColumns = new Set((this.connection.prepare('PRAGMA table_info(review_queue)').all() as Array<{ name: string }>).map((column) => column.name));
     const reviewAdditions: Array<[string, string]> = [
       ['discussion_watermark', "TEXT NOT NULL DEFAULT ''"],

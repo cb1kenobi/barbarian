@@ -4,7 +4,7 @@ import {
 import { pullRequestSummary, reviewRoundCount } from './review-content.js';
 import { renderMarkdown } from './markdown.js';
 import { shouldSubmitQuestion } from './chat-input.js';
-import { selectionLabel } from './selection-context.js';
+import { selectionLabel, selectionPayload } from './selection-context.js';
 import {
   rememberSuppressResolved, restoreSuppressResolved, suppressResolvedStorageKey, visibleFindings,
 } from './finding-visibility.js';
@@ -423,13 +423,7 @@ async function sendQuestion(kind) {
   if ((kind === 'pr' || kind === 'issue') && !question) { error.textContent = 'Write a question first.'; input?.focus(); return; }
   if (kind === 'selection' && !lastSelection) { error.textContent = 'Select lines on the GitHub page first.'; return; }
   const message = question || 'Explain this selected code and how it relates to the pull request.';
-  const selection = kind === 'selection' ? {
-    text: String(lastSelection.text).slice(0, 16_000),
-    ...(lastSelection.path ? { path: lastSelection.path } : {}),
-    ...(lastSelection.line ? { line: lastSelection.line } : {}),
-    ...(lastSelection.endLine ? { endLine: lastSelection.endLine } : {}),
-    ...(lastSelection.url ? { url: lastSelection.url } : {}),
-  } : undefined;
+  const selection = kind === 'selection' ? selectionPayload(lastSelection) : undefined;
   if (input) input.value = '';
   if (!currentContext.issue) reviewRoomDraft = '';
   appendConversationMessage({ role: 'user', author: 'GitHub extension', content: message });

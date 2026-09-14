@@ -88,12 +88,15 @@ export interface DiscoveredIssue {
   title: string;
   body: string;
   url: string;
+  creator?: string | null;
+  createdAt?: string;
   updatedAt: string;
   labels: string[];
   assignees: string[];
   milestone: string | null;
   duplicateOf: string | null;
   inProgressPr: string | null;
+  inProgressPrDraft?: boolean;
   fixedBy: string | null;
   priority: number;
   priorityReasons: string[];

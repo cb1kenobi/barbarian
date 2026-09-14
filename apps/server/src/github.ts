@@ -12,13 +12,15 @@ export interface GithubIssueNode {
   title: string;
   body: string;
   url: string;
+  createdAt: string;
   updatedAt: string;
   state?: string;
+  author: { login: string } | null;
   assignees: { nodes: Array<{ login: string }> };
   labels: { nodes: Array<{ name: string }> };
   milestone: { title: string } | null;
   closedByPullRequestsReferences: {
-    nodes: Array<{ number: number; url: string; state: string; merged: boolean }>;
+    nodes: Array<{ number: number; url: string; state: string; merged: boolean; isDraft: boolean }>;
   };
 }
 
@@ -97,11 +99,12 @@ query($owner:String!, $repo:String!, $cursor:String) {
     issues(first:100, after:$cursor, states:OPEN, orderBy:{field:UPDATED_AT,direction:DESC}) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        number title body url updatedAt
+        number title body url createdAt updatedAt
+        author { login }
         assignees(first:10) { nodes { login } }
         labels(first:30) { nodes { name } }
         milestone { title }
-        closedByPullRequestsReferences(first:20) { nodes { number url state merged } }
+        closedByPullRequestsReferences(first:20) { nodes { number url state merged isDraft } }
       }
     }
   }
@@ -112,11 +115,12 @@ query($owner:String!, $repo:String!, $number:Int!) {
   viewer { login }
   repository(owner:$owner, name:$repo) {
     issue(number:$number) {
-      number title body url updatedAt state
+      number title body url createdAt updatedAt state
+      author { login }
       assignees(first:10) { nodes { login } }
       labels(first:30) { nodes { name } }
       milestone { title }
-      closedByPullRequestsReferences(first:20) { nodes { number url state merged } }
+      closedByPullRequestsReferences(first:20) { nodes { number url state merged isDraft } }
     }
   }
 }`;
@@ -491,20 +495,22 @@ function issueReference(body: string): string | null {
   return match?.[1] ? `#${match[1]}` : null;
 }
 
-function convertIssue(repository: RepositoryConfig, node: GithubIssueNode): DiscoveredIssue {
+export function convertIssue(repository: RepositoryConfig, node: GithubIssueNode): DiscoveredIssue {
   const linked = node.closedByPullRequestsReferences.nodes;
   const openPr = linked.find((pr) => pr.state === 'OPEN');
   const mergedPr = linked.find((pr) => pr.merged);
   const priority = priorityFor(node, repository);
   return {
     provider: 'github', repository: repository.name, number: node.number,
-    title: node.title, body: node.body || '', url: node.url, updatedAt: node.updatedAt,
+    title: node.title, body: node.body || '', url: node.url,
+    creator: node.author?.login ?? null, createdAt: node.createdAt, updatedAt: node.updatedAt,
     assignees: node.assignees.nodes.map((assignee) => assignee.login),
     labels: node.labels.nodes.map((label) => label.name), milestone: node.milestone?.title ?? null,
     duplicateOf: node.labels.nodes.some((label) => label.name.toLowerCase() === 'duplicate')
       ? issueReference(node.body || '') || 'marked duplicate'
       : issueReference(node.body || ''),
     inProgressPr: openPr?.url ?? null,
+    inProgressPrDraft: openPr?.isDraft ?? false,
     fixedBy: mergedPr?.url ?? null,
     priority: priority.score,
     priorityReasons: priority.reasons,

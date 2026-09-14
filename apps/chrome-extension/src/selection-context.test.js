@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { selectedLineCount, selectionLabel, selectionPromptContext } from './selection-context.js';
+import {
+  selectedLineCount, selectionLabel, selectionPayload, selectionPromptContext,
+} from './selection-context.js';
 
 describe('GitHub selection context', () => {
   it('uses GitHub line metadata when available', () => {
@@ -12,5 +14,15 @@ describe('GitHub selection context', () => {
 
   it('falls back to the selected text line count', () => {
     expect(selectionLabel({ text: 'one\ntwo', url: 'https://example.test' })).toBe('2 lines selected');
+  });
+
+  it('normalizes GitHub line attributes for the server payload', () => {
+    expect(selectionPayload({
+      text: 'selected code', line: '10', endLine: '12', path: 'src/app.js', url: 'https://example.test',
+    })).toEqual({
+      text: 'selected code', line: 10, endLine: 12, path: 'src/app.js', url: 'https://example.test',
+    });
+    expect(selectionPayload({ text: 'selected code', line: 'RIGHT-10', endLine: '0' }))
+      .toEqual({ text: 'selected code' });
   });
 });

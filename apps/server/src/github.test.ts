@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   assignedToViewerOrUnassigned,
+  convertIssue,
   discussionWatermark,
   isAiReviewComment,
   priorityFor,
@@ -21,7 +22,9 @@ function issue(overrides: Partial<GithubIssueNode> = {}): GithubIssueNode {
     title: 'Routine issue',
     body: '',
     url: 'https://example.test/1',
+    createdAt: '2026-08-01T00:00:00Z',
     updatedAt: '2026-09-01T00:00:00Z',
+    author: { login: 'issue-author' },
     assignees: { nodes: [] },
     labels: { nodes: [] },
     milestone: null,
@@ -74,6 +77,23 @@ describe('reviewFindingTrustedForFeedback', () => {
 });
 
 describe('issue discovery signals', () => {
+  it('keeps the issue creator, creation time, and linked pull request draft state', () => {
+    const discovered = convertIssue({
+      name: 'Acme/core', priority: 10, watchIssues: true, watchPullRequests: true,
+      reviewSkill: 'cb1-code-review', labels: {},
+    }, issue({
+      closedByPullRequestsReferences: {
+        nodes: [{ number: 42, url: 'https://github.com/Acme/core/pull/42', state: 'OPEN', merged: false, isDraft: true }],
+      },
+    }));
+    expect(discovered).toMatchObject({
+      creator: 'issue-author',
+      createdAt: '2026-08-01T00:00:00Z',
+      inProgressPr: 'https://github.com/Acme/core/pull/42',
+      inProgressPrDraft: true,
+    });
+  });
+
   it('includes issues assigned to the viewer or nobody, but not issues assigned only to someone else', () => {
     expect(assignedToViewerOrUnassigned(issue(), 'cb1kenobi')).toBe(true);
     expect(assignedToViewerOrUnassigned(issue({ assignees: { nodes: [{ login: 'cb1kenobi' }] } }), 'cb1kenobi')).toBe(true);

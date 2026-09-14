@@ -75,6 +75,8 @@ describe('applyDiscovery', () => {
     await applyDiscovery(db, config, { ...result, discoveredAt: '2026-08-31T12:02:00Z' });
     expect(db.connection.prepare('SELECT status, remote_state FROM work_items WHERE number=1').get())
       .toEqual({ status: 'queued', remote_state: 'OPEN' });
+    expect(db.connection.prepare('SELECT remote_created_at FROM work_items WHERE number=1').get())
+      .toEqual({ remote_created_at: '2026-08-31T12:00:00Z' });
     db.close();
   });
 

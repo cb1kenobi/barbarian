@@ -9,6 +9,23 @@ export function selectionLabel(selection) {
   return `${count} ${count === 1 ? 'line' : 'lines'} selected`;
 }
 
+function selectedLineNumber(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : undefined;
+}
+
+export function selectionPayload(selection) {
+  const line = selectedLineNumber(selection?.line);
+  const endLine = selectedLineNumber(selection?.endLine);
+  return {
+    text: String(selection?.text || '').slice(0, 16_000),
+    ...(selection?.path ? { path: selection.path } : {}),
+    ...(line ? { line } : {}),
+    ...(endLine ? { endLine } : {}),
+    ...(selection?.url ? { url: selection.url } : {}),
+  };
+}
+
 export function selectionPromptContext(selection) {
   const count = selectedLineCount(selection);
   const range = selection.path

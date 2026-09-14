@@ -27,7 +27,9 @@ export function upsertIssue(
   remoteState = 'OPEN',
 ): void {
   const id = issueId(issue);
-  const existing = database.connection.prepare('SELECT remote_state FROM work_items WHERE id = ?').get(id) as { remote_state: string } | undefined;
+  const existing = database.connection.prepare(
+    'SELECT remote_state, remote_created_at FROM work_items WHERE id = ?',
+  ).get(id) as { remote_state: string; remote_created_at: string | null } | undefined;
   const status = remoteState === 'OPEN'
     ? issue.fixedBy ? 'already_fixed' : issue.duplicateOf ? 'duplicate'
       : issue.inProgressPr || hasInProgressLabel(issue.labels) ? 'in_progress' : 'queued'
@@ -35,15 +37,18 @@ export function upsertIssue(
   database.connection.prepare(`
     INSERT INTO work_items(
       id, provider, repository, number, kind, title, body, simple_summary, url, assignees,
-      priority, priority_reasons, status, milestone, duplicate_of, in_progress_pr,
+      creator, remote_created_at, priority, priority_reasons, status, milestone, duplicate_of, in_progress_pr,
+      in_progress_pr_draft,
       fixed_by, remote_state, payload_json, first_seen_at, updated_at, last_seen_at
-    ) VALUES (?, ?, ?, ?, 'issue', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, 'issue', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       title=excluded.title, body=excluded.body, simple_summary=excluded.simple_summary,
-      url=excluded.url, assignees=excluded.assignees,
+      url=excluded.url, assignees=excluded.assignees, creator=excluded.creator,
+      remote_created_at=excluded.remote_created_at,
       priority=excluded.priority, priority_reasons=excluded.priority_reasons,
       milestone=excluded.milestone, duplicate_of=excluded.duplicate_of,
-      in_progress_pr=excluded.in_progress_pr, fixed_by=excluded.fixed_by,
+      in_progress_pr=excluded.in_progress_pr, in_progress_pr_draft=excluded.in_progress_pr_draft,
+      fixed_by=excluded.fixed_by,
       status=CASE
         WHEN excluded.remote_state<>'OPEN' OR work_items.remote_state<>'OPEN' THEN excluded.status
         ELSE work_items.status END,
@@ -51,8 +56,10 @@ export function upsertIssue(
       updated_at=excluded.updated_at, last_seen_at=excluded.last_seen_at
   `).run(
     id, issue.provider, issue.repository, issue.number, issue.title, issue.body,
-    simplify(issue.title, issue.body), issue.url, JSON.stringify(issue.assignees), issue.priority, JSON.stringify(issue.priorityReasons),
-    status, issue.milestone, issue.duplicateOf, issue.inProgressPr, issue.fixedBy, remoteState, JSON.stringify(issue),
+    simplify(issue.title, issue.body), issue.url, JSON.stringify(issue.assignees), issue.creator ?? null,
+    issue.createdAt ?? existing?.remote_created_at ?? seenAt,
+    issue.priority, JSON.stringify(issue.priorityReasons), status, issue.milestone,
+    issue.duplicateOf, issue.inProgressPr, issue.inProgressPrDraft ? 1 : 0, issue.fixedBy, remoteState, JSON.stringify(issue),
     seenAt, issue.updatedAt, seenAt,
   );
   if (remoteState === 'OPEN' && existing?.remote_state !== 'OPEN') {

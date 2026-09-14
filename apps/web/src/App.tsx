@@ -13,6 +13,7 @@ import { sortWorkItems, type WorkSort } from './work-sort';
 import { isQueueSearchShortcut, matchesQueueSearch } from './queue-search';
 import { useCloseOnEscape } from './escape-layers';
 import { greetingForTime } from './greeting';
+import { issueProgress } from './issue-display';
 import { captureChatScroll, isChatAtBottom, restoredChatScrollTop } from '../../chrome-extension/src/chat-scroll.js';
 import {
   backFromAgentRun, closeAgentDrawer, openAgentHistory, openAgentRun, type AgentDrawerState,
@@ -23,7 +24,8 @@ interface WorkItem {
   priority: number; priority_reasons: string[]; status: string; milestone: string | null;
   duplicate_of: string | null; in_progress_pr: string | null; fixed_by: string | null; url: string;
   assignees: string[]; in_progress: boolean; in_progress_source: string | null;
-  in_progress_branch: string | null; updated_at: string;
+  in_progress_branch: string | null; in_progress_pr_draft: boolean;
+  creator: string | null; remote_created_at: string; updated_at: string;
 }
 
 interface Review {
@@ -187,17 +189,6 @@ function issueAssignee(item: WorkItem, githubLogin: string | undefined): { label
   return { label: mine ? 'Assigned to you' : item.assignees.join(', '), mine };
 }
 
-function issueProgress(item: WorkItem): string | null {
-  if (item.in_progress_source === 'pull_request') {
-    const number = item.in_progress_pr?.match(/\/pull\/(\d+)/)?.[1];
-    return number ? `In progress · PR #${number}` : 'In progress · linked PR';
-  }
-  if (item.in_progress_source === 'local_branch') return `In progress · local ${item.in_progress_branch}`;
-  if (item.in_progress_source === 'label') return 'In progress · GitHub label';
-  if (item.fixed_by) return 'Linked PR merged';
-  if (item.duplicate_of) return `Duplicate: ${item.duplicate_of}`;
-  return null;
-}
 function lastWorkdayTotal(stats: Record<string, number>): number {
   return (stats.pr_created || 0) + (stats.review_completed || 0) + (stats.issue_created || 0) + (stats.issue_resolved || 0);
 }
@@ -512,7 +503,8 @@ export function App() {
             {visibleWork.map((item, index) => {
               const assignee = issueAssignee(item, dashboard?.profile.githubLogin);
               const progress = issueProgress(item);
-              const details = [progress, item.milestone, `Priority ${item.priority}${item.priority_reasons.length ? `: ${item.priority_reasons.join(' · ')}` : ''}`].filter(Boolean).join(' · ');
+              const ageAndCreator = `Opened ${formatElapsed(item.remote_created_at, now)} ago by ${item.creator ? `@${item.creator}` : 'unknown'}`;
+              const details = [ageAndCreator, progress, item.milestone, `Priority ${item.priority}${item.priority_reasons.length ? `: ${item.priority_reasons.join(' · ')}` : ''}`].filter(Boolean).join(' · ');
               return <a className="work-row" href={item.url} target="_blank" key={item.id}>
                 <span className={`rank ${index === 0 ? 'hot' : index === 1 ? 'warm' : ''}`}>{String(index + 1).padStart(2, '0')}</span>
                 <span className="row-body"><span className="issue-key"><span className="repo">{repositoryName(item.repository)}</span><span className="issue-number">#{item.number}</span></span><span className="work-title"><strong>{item.title}</strong><span className={`assignee-label ${assignee.mine ? 'mine' : ''}`}>{assignee.label}</span></span><small>{details}</small></span><span className="chevron">›</span>

@@ -453,7 +453,9 @@ describe('dashboard reviews', () => {
       );
     }
     database.connection.prepare(`
-      UPDATE work_items SET assignees='["cb1kenobi"]', in_progress_pr='https://github.com/Acme/storage/pull/99'
+      UPDATE work_items SET assignees='["cb1kenobi"]', creator='octocat',
+        remote_created_at='2025-12-15T10:30:00Z',
+        in_progress_pr='https://github.com/Acme/storage/pull/99', in_progress_pr_draft=1
       WHERE number=1
     `).run();
     const branchSeenAt = new Date().toISOString();
@@ -537,6 +539,7 @@ describe('dashboard reviews', () => {
       expect(payload.workQueue).toHaveLength(15);
       expect(payload.workQueue.find((item) => item.number === 1)).toMatchObject({
         assignees: ['cb1kenobi'], in_progress: true, in_progress_source: 'pull_request',
+        creator: 'octocat', remote_created_at: '2025-12-15T10:30:00Z', in_progress_pr_draft: true,
       });
       expect(payload.workQueue.find((item) => item.number === 2)).toMatchObject({
         assignees: [], in_progress: true, in_progress_source: 'local_branch',

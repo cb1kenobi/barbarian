@@ -7,6 +7,8 @@ const itemSchema = z.object({
   title: z.string(),
   description: z.string().default(''),
   url: z.string().url(),
+  creator: z.string().nullable().default(null),
+  createdAt: z.string().optional(),
   updatedAt: z.string(),
   priority: z.number().default(0),
   labels: z.array(z.string()).default([]),
@@ -15,6 +17,7 @@ const itemSchema = z.object({
   project: z.string().default('Linear'),
   duplicateOf: z.string().nullable().default(null),
   inProgressUrl: z.string().nullable().default(null),
+  inProgressPrDraft: z.boolean().default(false),
   fixedBy: z.string().nullable().default(null),
 });
 
@@ -30,8 +33,11 @@ export async function discoverLinear(config: BarbarianConfig): Promise<Discovere
     if (!Number.isInteger(number)) throw new Error(`Linear identifier must end in a number: ${item.identifier}`);
     return {
       provider: 'linear', repository: item.project, number, title: item.title, body: item.description,
-      url: item.url, updatedAt: item.updatedAt, labels: item.labels, assignees: item.assignees, milestone: item.milestone,
-      duplicateOf: item.duplicateOf, inProgressPr: item.inProgressUrl, fixedBy: item.fixedBy,
+      url: item.url, creator: item.creator, ...(item.createdAt ? { createdAt: item.createdAt } : {}),
+      updatedAt: item.updatedAt,
+      labels: item.labels, assignees: item.assignees, milestone: item.milestone,
+      duplicateOf: item.duplicateOf, inProgressPr: item.inProgressUrl,
+      inProgressPrDraft: item.inProgressPrDraft, fixedBy: item.fixedBy,
       priority: item.priority, priorityReasons: ['Linear priority'],
     };
   });
