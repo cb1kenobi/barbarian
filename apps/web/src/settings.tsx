@@ -13,7 +13,9 @@ export interface RepositoryConfig {
   priority: number;
   watchIssues: boolean;
   watchPullRequests: boolean;
+  path: string;
   reviewSkill: string;
+  feedbackSkill: string;
   labels: Record<string, number>;
 }
 export interface SettingsConfig {
@@ -123,7 +125,9 @@ function fromDraft(draft: SettingsDraft): SettingsConfig {
     repositories: draft.repositories.map(({ id: _id, labelsText, ...repository }) => ({
       ...repository,
       name: repository.name.trim(),
+      path: repository.path.trim(),
       reviewSkill: repository.reviewSkill.trim(),
+      feedbackSkill: repository.feedbackSkill.trim(),
       labels: parseLabels(labelsText),
     })),
   } as SettingsConfig;
@@ -267,7 +271,7 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
     ...current,
     repositories: [...current.repositories, {
       id: nextId(), name: '', priority: 0, watchIssues: true, watchPullRequests: true,
-      reviewSkill: 'cb1-code-review', labelsText: '',
+      path: '', reviewSkill: 'cb1-code-review', feedbackSkill: '', labelsText: '',
     }],
   }));
   const updateReviewAgent = (index: number, selection: CodeReviewAgentSettings) => setDraft((current) => current && ({
@@ -398,9 +402,11 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
               <div className="settings-grid repo-fields">
                 <div className="repo-main-fields">
                   <label><span>GitHub Repository (owner/name)</span><input required placeholder="owner/name" value={repository.name} onChange={(event) => updateRepository(index, { name: event.target.value })} /></label>
+                  <label><span>Local repository path</span><input placeholder="/absolute/path/to/repository" value={repository.path} onChange={(event) => updateRepository(index, { path: event.target.value })} /></label>
                   <div className="repo-secondary-fields">
                     <label className="repo-priority"><span>Priority</span><input type="number" value={repository.priority} onChange={(event) => updateRepository(index, { priority: Number(event.target.value) })} /></label>
                     <label><span>Review skill</span><input required value={repository.reviewSkill} onChange={(event) => updateRepository(index, { reviewSkill: event.target.value })} /></label>
+                    <label><span>Feedback skill</span><input placeholder="harper-engineering-guidelines" value={repository.feedbackSkill} onChange={(event) => updateRepository(index, { feedbackSkill: event.target.value })} /></label>
                     <div className="repo-watch-fields">
                       <label className="check-field"><input type="checkbox" checked={repository.watchIssues} onChange={(event) => updateRepository(index, { watchIssues: event.target.checked })} /><span>Watch issues</span></label>
                       <label className="check-field"><input type="checkbox" checked={repository.watchPullRequests} onChange={(event) => updateRepository(index, { watchPullRequests: event.target.checked })} /><span>Watch pull requests</span></label>

@@ -70,32 +70,63 @@ describe('feedback agent result', () => {
 
   it('parses the final machine-readable result', () => {
     expect(parseFeedbackAgentResult('notes\nBARBARIAN_FEEDBACK_RESULT: {"status":"fixed","summary":"Done"}'))
-      .toEqual({ status: 'fixed', summary: 'Done' });
+      .toEqual({ status: 'fixed', summary: 'Done', addressedCommentIds: [] });
     expect(() => parseFeedbackAgentResult('done')).toThrow('did not emit');
   });
 
   it('pushes a committed fix and reports it in the review room', async () => {
     const { database, claim } = setup();
+    const configured = {
+      ...config,
+      repositories: [{
+        name: 'Acme/repo', path: '/tmp/acme-repo', priority: 0,
+        watchIssues: true, watchPullRequests: true,
+        reviewSkill: 'cb1-code-review', feedbackSkill: 'harper-engineering-guidelines', labels: {},
+      }],
+    } satisfies BarbarianConfig;
     const input = database.connection.prepare(`
       INSERT INTO chat_messages(review_id, role, author, content, created_at)
       VALUES (?, 'user', 'Developer', 'Preserve the fallback behavior.', ?)
     `).run(claim.reviewId, new Date().toISOString());
     database.connection.prepare('UPDATE review_queue SET feedback_input_message_id=? WHERE id=?')
       .run(Number(input.lastInsertRowid), claim.reviewId);
+    database.connection.prepare(`
+      INSERT INTO review_findings(
+        id, review_id, remote_id, author, body, summary, url, path, line,
+        trusted_for_feedback, resolved, outdated, created_at, updated_at
+      ) VALUES (?, ?, 101, 'gemini-code-assist', 'Fix it', 'Fix it', 'https://example.test/comment/101',
+        'file.ts', 1, 1, 0, 0, ?, ?)
+    `).run(`${claim.reviewId}:101`, claim.reviewId, new Date().toISOString(), new Date().toISOString());
     let pushed = false;
     let prompt = '';
-    await runFeedbackAgent(database, config, claim, undefined, {
+    let acknowledged: unknown = null;
+    await runFeedbackAgent(database, configured, claim, undefined, {
       fetchBundle: async () => ({
         repository: 'Acme/repo', number: 15, metadata: { headRefOid: 'head-1' },
-        diff: '', inlineComments: [{ body: 'Fix it' }], issueComments: [],
+        diff: '', inlineComments: [
+          { id: 101, body: 'Fix it', in_reply_to_id: null, user: { login: 'gemini-code-assist', type: 'Bot' }, author_association: 'NONE' },
+          { id: 102, body: 'Please preserve this case', user: { login: 'maintainer', type: 'User' }, author_association: 'MEMBER' },
+          { id: 103, body: 'Untrusted', user: { login: 'visitor', type: 'User' }, author_association: 'NONE' },
+          { id: 104, body: 'Existing reply', in_reply_to_id: 101, user: { login: 'review-bot', type: 'Bot' }, author_association: 'NONE' },
+        ], issueComments: [],
       }),
-      prepareWorkspace: async () => ({ path: '/tmp/feedback', initialHeadSha: 'head-1' }),
+      prepareWorkspace: async () => ({ path: '/tmp/feedback', initialHeadSha: 'head-1', pushGuard: 'sandbox' }),
       execute: async (_database, _config, _reviewId, _task, value) => {
         prompt = value;
-        return 'BARBARIAN_FEEDBACK_RESULT: {"status":"fixed","summary":"Fixed the edge case."}';
+        return 'BARBARIAN_FEEDBACK_RESULT: {"status":"fixed","summary":"Fixed the edge case.","addressedCommentIds":[101,102,103,104]}';
       },
       commitWorkspace: async () => 'head-2',
-      pushWorkspace: async () => { pushed = true; return 'head-2'; },
+      pushWorkspace: async (_workspace, _repository, _branch, _head, _signal, pushGuard) => {
+        expect(pushGuard).toBe('sandbox');
+        pushed = true;
+        return 'head-2';
+      },
+      acknowledge: async (repository, number, feedback, body) => {
+        expect(database.connection.prepare(`
+          SELECT feedback_claim_owner, last_feedback_pushed_sha FROM review_queue WHERE id=?
+        `).get(claim.reviewId)).toEqual({ feedback_claim_owner: null, last_feedback_pushed_sha: 'head-2' });
+        acknowledged = { repository, number, feedback, body };
+      },
     });
 
     expect(pushed).toBe(true);
@@ -103,6 +134,12 @@ describe('feedback agent result', () => {
     expect(prompt).toContain('TRUSTED_DEVELOPER_ANSWER_JSON');
     expect(prompt).toContain('submitted from Barbarian\'s interactive dashboard');
     expect(prompt).toContain('Do not commit or modify Git metadata');
+    expect(prompt).toContain('use the harper-engineering-guidelines skill');
+    expect(acknowledged).toEqual({
+      repository: 'Acme/repo', number: 15,
+      feedback: [{ id: 101, resolve: true }, { id: 102, resolve: false }],
+      body: 'Addressed in `head-2`.',
+    });
     expect(database.connection.prepare(`
       SELECT last_feedback_handled_watermark, feedback_claim_owner, feedback_needs_input,
         last_feedback_pushed_sha, head_sha, feedback_input_message_id
@@ -124,7 +161,7 @@ describe('feedback agent result', () => {
         repository: 'Acme/repo', number: 15, metadata: { headRefOid: 'head-1' },
         diff: '', inlineComments: [], issueComments: [],
       }),
-      prepareWorkspace: async () => ({ path: '/tmp/feedback', initialHeadSha: 'head-1' }),
+      prepareWorkspace: async () => ({ path: '/tmp/feedback', initialHeadSha: 'head-1', pushGuard: 'sandbox' }),
       execute: async () => 'BARBARIAN_FEEDBACK_RESULT: {"status":"needs_input","summary":"Two valid behaviors exist.","question":"Which behavior should be preserved?"}',
       inspectWorkspace: async () => ({ clean: true, headSha: 'head-1' }),
     });
@@ -143,7 +180,7 @@ describe('feedback agent result', () => {
         repository: 'Acme/repo', number: 15, metadata: { headRefOid: 'head-1' },
         diff: '', inlineComments: [], issueComments: [],
       }),
-      prepareWorkspace: async () => ({ path: '/tmp/feedback', initialHeadSha: 'head-1' }),
+      prepareWorkspace: async () => ({ path: '/tmp/feedback', initialHeadSha: 'head-1', pushGuard: 'sandbox' }),
       execute: async () => 'BARBARIAN_FEEDBACK_RESULT: {"status":"no_change","summary":"The comment was praise."}',
       inspectWorkspace: async () => ({ clean: true, headSha: 'head-1' }),
     });
@@ -161,7 +198,7 @@ describe('feedback agent result', () => {
         repository: 'Acme/repo', number: 15, metadata: { headRefOid: 'head-1' },
         diff: '', inlineComments: [], issueComments: [],
       }),
-      prepareWorkspace: async () => ({ path: '/tmp/feedback', initialHeadSha: 'head-1' }),
+      prepareWorkspace: async () => ({ path: '/tmp/feedback', initialHeadSha: 'head-1', pushGuard: 'sandbox' }),
       execute: async () => { throw new Error('provider unavailable'); },
     })).rejects.toThrow('provider unavailable');
     expect(database.connection.prepare(`

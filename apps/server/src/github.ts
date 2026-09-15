@@ -187,6 +187,122 @@ export interface ReviewBundle {
   issueComments: unknown[];
 }
 
+export interface AddressedInlineFeedback {
+  id: number;
+  resolve: boolean;
+}
+
+interface RestReviewComment {
+  id: number;
+  body: string;
+  in_reply_to_id?: number | null;
+  author_association: string;
+  user: { login: string; type?: string } | null;
+}
+
+export function trustedAddressedInlineFeedback(
+  bundle: ReviewBundle,
+  addressedCommentIds: number[],
+): AddressedInlineFeedback[] {
+  const requested = new Set(addressedCommentIds);
+  const seen = new Set<number>();
+  const addressed: AddressedInlineFeedback[] = [];
+  for (const value of bundle.inlineComments) {
+    if (!value || typeof value !== 'object') continue;
+    const comment = value as Partial<RestReviewComment>;
+    if (!Number.isInteger(comment.id) || !requested.has(comment.id!) || seen.has(comment.id!)) continue;
+    if (comment.in_reply_to_id !== undefined && comment.in_reply_to_id !== null) continue;
+    const author = comment.user && typeof comment.user.login === 'string' ? comment.user : null;
+    const association = typeof comment.author_association === 'string' ? comment.author_association : '';
+    if (!reviewFindingTrustedForFeedback(
+      author ? author.type ? { __typename: author.type } : {} : null,
+      association,
+    )) continue;
+    const id = comment.id!;
+    const body = typeof comment.body === 'string' ? comment.body : '';
+    addressed.push({ id, resolve: isAiReviewComment(author?.login || '', body) });
+    seen.add(id);
+  }
+  return addressed;
+}
+
+const feedbackThreadQuery = `
+query($owner:String!,$repo:String!,$number:Int!,$cursor:String) {
+  repository(owner:$owner,name:$repo) {
+    pullRequest(number:$number) {
+      reviewThreads(first:100,after:$cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { id isResolved comments(first:1) { nodes { databaseId } } }
+      }
+    }
+  }
+}`;
+
+async function feedbackThreadIds(
+  repository: string,
+  number: number,
+  commentIds: Set<number>,
+): Promise<Map<number, { id: string; resolved: boolean }>> {
+  const [owner, repo] = splitRepository(repository);
+  const matches = new Map<number, { id: string; resolved: boolean }>();
+  let cursor: string | null = null;
+  do {
+    const args = [
+      'api', 'graphql', '-f', `query=${feedbackThreadQuery}`,
+      '-F', `owner=${owner}`, '-F', `repo=${repo}`, '-F', `number=${number}`,
+    ];
+    if (cursor) args.push('-F', `cursor=${cursor}`);
+    const result = JSON.parse(await gh(args)) as {
+      data: { repository: { pullRequest: { reviewThreads: {
+        nodes: Array<{ id: string; isResolved: boolean; comments: { nodes: Array<{ databaseId: number }> } }>;
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      } } | null } | null };
+    };
+    const page = result.data.repository?.pullRequest?.reviewThreads;
+    if (!page) throw new Error(`${repository}#${number} was not found while acknowledging feedback`);
+    for (const thread of page.nodes) {
+      const commentId = thread.comments.nodes[0]?.databaseId;
+      if (commentId !== undefined && commentIds.has(commentId)) {
+        matches.set(commentId, { id: thread.id, resolved: thread.isResolved });
+      }
+    }
+    cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+  } while (cursor && matches.size < commentIds.size);
+  return matches;
+}
+
+export async function acknowledgePullRequestFeedback(
+  repository: string,
+  number: number,
+  feedback: AddressedInlineFeedback[],
+  body: string,
+): Promise<void> {
+  for (const comment of feedback) {
+    const result = await runProcess('gh', [
+      'api', '--method', 'POST',
+      `repos/${repository}/pulls/${number}/comments/${comment.id}/replies`,
+      '-f', `body=${body}`,
+    ], { timeoutMs: 60_000 });
+    if (result.exitCode !== 0) throw new Error(result.stderr.trim() || `Could not reply to review comment ${comment.id}`);
+  }
+  const resolvable = new Set(feedback.filter((comment) => comment.resolve).map((comment) => comment.id));
+  if (!resolvable.size) return;
+  const threads = await feedbackThreadIds(repository, number, resolvable);
+  for (const commentId of resolvable) {
+    const thread = threads.get(commentId);
+    if (!thread || thread.resolved) continue;
+    const raw = await gh([
+      'api', 'graphql',
+      '-f', 'query=mutation($thread:ID!){resolveReviewThread(input:{threadId:$thread}){thread{isResolved}}}',
+      '-F', `thread=${thread.id}`,
+    ]);
+    const result = JSON.parse(raw) as { data?: { resolveReviewThread?: { thread?: { isResolved?: boolean } } } };
+    if (!result.data?.resolveReviewThread?.thread?.isResolved) {
+      throw new Error(`Could not resolve review thread for comment ${commentId}`);
+    }
+  }
+}
+
 export interface ReviewCommentDraft {
   path: string;
   line: number;

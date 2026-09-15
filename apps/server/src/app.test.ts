@@ -22,7 +22,7 @@ const config: BarbarianConfig = {
   profile: { name: 'Chris', reviewName: '', timezone: 'America/Chicago', githubLogin: 'cb1kenobi' },
   appearance: { theme: 'dark', fontSize: 'small', weapon: 'double-axe' },
   monitor: { intervalMinutes: 20, runOnStartup: true },
-  repositories: [{ name: 'Acme/storage', priority: 10, watchIssues: true, watchPullRequests: true, reviewSkill: 'cb1-code-review', labels: {} }],
+  repositories: [{ name: 'Acme/storage', priority: 10, watchIssues: true, watchPullRequests: true, path: '', reviewSkill: 'cb1-code-review', feedbackSkill: '', labels: {} }],
   review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
   linear: { enabled: false, command: [] },
   agents: {
@@ -1585,7 +1585,7 @@ describe('settings API', () => {
         },
         repositories: [...current.repositories, {
           name: 'Acme/ui', priority: 5, watchIssues: false, watchPullRequests: true,
-          reviewSkill: 'cb1-code-review', labels: { accessibility: 25 },
+          path: '/tmp/acme-ui', reviewSkill: 'cb1-code-review', feedbackSkill: 'harper-engineering-guidelines', labels: { accessibility: 25 },
         }],
       };
       const protectedFields = await app.inject({

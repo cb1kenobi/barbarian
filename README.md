@@ -148,19 +148,23 @@ profile:
 
 repositories:
   - name: your-org/important-backend
+    path: /absolute/path/to/important-backend
     priority: 100
     watchIssues: true
     watchPullRequests: true
     reviewSkill: cb1-code-review
+    feedbackSkill: harper-engineering-guidelines
     labels:
       data-loss: 150
       security: 80
 
   - name: your-org/frontend
+    path: /absolute/path/to/frontend
     priority: 40
     watchIssues: true
     watchPullRequests: true
     reviewSkill: cb1-code-review
+    feedbackSkill: ""
     labels:
       regression: 60
 
@@ -172,6 +176,8 @@ review:
 `reviewName` is optional attribution for AI review comments. Set it to a name such as `CB1` to publish “CB1 reviewed `<sha>`”; leave it blank to publish “Reviewed `<sha>`” without naming the reviewer.
 
 Priority is additive: configured repository weight + configured label weights + milestone weight + standard severity-label weight + a repository-neutral data-integrity signal. Repository names never affect the score. The dashboard shows the reasons so the ordering is explainable.
+
+`path` is an optional absolute path to an existing local clone. Automatic feedback fixes for same-repository branches use an isolated worktree under `<path>/.claude/worktrees`; missing paths and fork branches retain the private-clone fallback. `feedbackSkill` names the repository-specific implementation skill the writable agent must follow. Leave it blank when no implementation skill applies.
 
 The team fallback only applies when no individual reviewer is requested. This avoids pulling every team PR into a personal queue while preserving the “team-only assignment” workflow.
 
@@ -253,7 +259,7 @@ The dispatchers atomically claim each PR, limit review, feedback-fix, and chat a
 
 GitHub authentication stays in the Barbarian server. The server captures the PR metadata, exact diff, and existing discussion, then sends that untrusted JSON bundle to the read-only reviewer without `GH_TOKEN` or `GITHUB_TOKEN`. Barbarian accepts only a strict machine-readable result, verifies that every proposed inline comment points to a line in the captured diff, and publishes the review itself. The agent never needs GitHub credentials.
 
-The review-agent prompt is intentionally review-only: it forbids branch edits, commits, pushes, and PR creation. When `agents.autoAddressFeedback` is enabled, trusted collaborator or recognized AI-review feedback on your own open PRs starts a separate writable agent in a private Barbarian clone. That agent attempts the smallest fix, validates and commits it, and Barbarian pushes the commit only if the PR branch has not moved. If the agent needs a decision or exhausts its retries, it writes the question or failure to the shared review room and marks the authored-PR card **Needs input**. Issue discovery still never launches an implementation agent.
+The review-agent prompt is intentionally review-only: it forbids branch edits, commits, pushes, and PR creation. When `agents.autoAddressFeedback` is enabled, trusted collaborator or recognized AI-review feedback on your own open PRs starts a separate writable agent. A repository with a configured `path` uses an isolated worktree from that clone for same-repository branches; forks and repositories without a path use a private Barbarian clone. The agent follows `feedbackSkill` when configured, attempts the smallest fix, and validates it. Barbarian commits and pushes only if the PR branch has not moved, then replies to the inline feedback the agent reports as addressed. Recognized AI-review threads are also resolved. If the agent needs a decision or exhausts its retries, it writes the question or failure to the shared review room and marks the authored-PR card **Needs input**. Issue discovery still never launches an implementation agent.
 
 ## Linear adapter
 
@@ -386,8 +392,8 @@ Sources are applied in that order, so Barbarian’s generic `cb1-code-review` wi
 ## Data and safety
 
 - Back up `~/Library/Application Support/Barbarian` if you want to retain configuration, secrets, and workflow history. A copied legacy `config` and `data` directory remains a useful migration backup.
-- Prepared checkouts live under `~/Library/Caches/Barbarian/.barbarian/workspaces` by default.
-- Cleanup validates every path is below that configured root and removes worktrees through git.
+- Cached review checkouts and fallback feedback clones live under `~/Library/Caches/Barbarian/.barbarian/workspaces` by default. Repository-backed feedback worktrees live under each configured clone's `.claude/worktrees` directory.
+- Cleanup validates cached paths against the configured root and repository-backed paths against their recorded repository identity before removing worktrees through Git.
 - VS Code review-room agents run in the open Git checkout so they can carry out an explicit editing request. Barbarian verifies that the checkout's `origin` matches the repository reported by the extension before starting the agent.
 - Active agent prompts are retained only while the agent is running and are available only to the dashboard's own origin; completed, failed, interrupted, and cancelled runs clear the prompt.
 - Browser API access accepts the dashboard's exact origin, Chrome extensions, and VS Code webviews. The server binds to loopback by default.

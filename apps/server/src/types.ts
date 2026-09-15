@@ -14,7 +14,9 @@ export interface RepositoryConfig {
   priority: number;
   watchIssues: boolean;
   watchPullRequests: boolean;
+  path: string;
   reviewSkill: string;
+  feedbackSkill: string;
   labels: Record<string, number>;
 }
 

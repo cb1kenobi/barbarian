@@ -24,7 +24,15 @@ const repositorySchema = z.object({
   priority: z.number().int().default(0),
   watchIssues: z.boolean().default(true),
   watchPullRequests: z.boolean().default(true),
+  path: z.string().trim().max(4_096).refine(
+    (value) => !value || path.isAbsolute(value),
+    'Repository path must be absolute',
+  ).default(''),
   reviewSkill: z.string().regex(/^[a-z0-9][a-z0-9-]*$/).default('cb1-code-review'),
+  feedbackSkill: z.union([
+    z.literal(''),
+    z.string().regex(/^[a-z0-9][a-z0-9-]*$/),
+  ]).default(''),
   labels: z.record(z.string(), z.number().int()).default({}),
 }).strict();
 

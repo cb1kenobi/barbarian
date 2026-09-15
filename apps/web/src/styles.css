@@ -478,7 +478,7 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
 .check-field > span { display: inline !important; margin: 0 !important; }
 .check-field input, .weekday-row input, .choice-card input { accent-color: var(--acid); }
 .repo-main-fields { display: grid; gap: 14px; min-width: 0; }
-.repo-secondary-fields { display: grid; grid-template-columns: 82px minmax(180px, 1fr) max-content; gap: 14px; align-items: start; }
+.repo-secondary-fields { display: grid; grid-template-columns: 82px minmax(150px, 1fr) minmax(180px, 1fr) max-content; gap: 14px; align-items: start; }
 .repo-watch-fields { display: grid; gap: 6px; padding-top: 17px; }
 .repo-watch-fields .check-field { min-height: 0; padding-top: 0; }
 .repo-label-weights { display: flex; flex-direction: column; }
