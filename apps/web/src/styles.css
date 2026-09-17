@@ -202,6 +202,7 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
 .review-count { display: inline-flex; min-width: 22px; height: 22px; align-items: center; justify-content: center; margin: 0 2px; padding: 0 10px; border: 1px solid var(--accent-border); border-radius: 999px; background: var(--accent-soft); color: var(--acid); font: 700 .6875rem/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .review-count.approved-count { border-color: #4f7839; background: #132013; color: #a8f289; }
 :root[data-theme='light'] .review-count.approved-count { border-color: #82a16f; background: #eaf5e4; color: #356426; }
+.review-count.draft-count { border-color: var(--line-strong); background: var(--panel-alt); color: var(--muted-strong); }
 .status-info { position: relative; display: inline-grid; width: 18px; height: 18px; place-items: center; color: var(--muted-soft); outline: 0; cursor: help; }
 .status-info > svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; }
 .status-info:hover, .status-info:focus-visible { color: var(--muted-strong); }
@@ -234,9 +235,9 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
 
 .reviews { margin-top: 24px; }
 .review-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-.review-viewport { max-height: min(660px, 72vh); align-content: start; padding-right: 8px; }
+.review-viewport { align-content: start; }
 .feedback-panel { margin-top: 24px; }
-.feedback-viewport { max-height: min(440px, 52vh); align-content: start; padding-right: 8px; }
+.feedback-viewport { align-content: start; }
 .review-card { position: relative; display: flex; min-width: 0; flex-direction: column; padding: 17px 17px 15px; border: 1px solid var(--line); background: var(--panel); color: inherit; text-align: left; cursor: pointer; }
 .review-card:hover { border-color: var(--line-strong); transform: translateY(-1px); }
 .review-card-open { position: absolute; z-index: 1; inset: 0; width: 100%; border: 0; background: transparent; cursor: pointer; }

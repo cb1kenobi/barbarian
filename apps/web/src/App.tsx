@@ -288,8 +288,6 @@ export function App() {
   const [workRepository, setWorkRepository] = useState('all');
   const [queueSearch, setQueueSearch] = useState('');
   const queueSearchRef = useRef<HTMLInputElement>(null);
-  const [feedbackViewportRef, feedbackScrollable] = useScrollableViewport();
-  const [reviewViewportRef, reviewsScrollable] = useScrollableViewport();
   const [issueViewportRef, issuesScrollable] = useScrollableViewport();
 
   const load = useCallback(async () => {
@@ -368,6 +366,8 @@ export function App() {
       && matchesQueueSearch(review, queueSearch)),
     reviewSort,
   ), [displayedReviews, queueSearch, reviewRepository, reviewSort]);
+  const visibleDraftFeedback = feedback.filter((review) => review.is_draft).length;
+  const visibleDraftReviews = reviews.filter((review) => review.is_draft).length;
   const repositories = useMemo(() => sortRepositoryBookmarks(dashboard?.repositories || []), [dashboard?.repositories]);
   const visibleReviewsNeedingApproval = countReviewsNeedingApproval(reviews.filter((review) => !review.is_draft));
   const visibleApprovedReviews = reviews.filter((review) => !review.is_draft && reviewDisplayStatus(review) === 'approved').length;
@@ -461,8 +461,8 @@ export function App() {
         </div>
 
         <section id="feedback" className="panel feedback-panel">
-          <div className="panel-head"><div><span className="section-label">YOUR PULL REQUESTS</span><div className="review-heading"><h2>Feedback</h2><span className="review-count" aria-label={`${feedback.length} matching open pull requests authored by you`}>{feedback.length} PR{feedback.length === 1 ? '' : 's'}</span></div></div><label className="review-drafts"><span>Drafts</span><input type="checkbox" checked={showDraftFeedback} onChange={(event) => setShowDraftFeedback(event.target.checked)} /></label></div>
-          <div ref={feedbackViewportRef} className={`review-grid queue-viewport feedback-viewport${feedbackScrollable ? ' is-scrollable' : ''}`}>
+          <div className="panel-head"><div><span className="section-label">YOUR PULL REQUESTS</span><div className="review-heading"><h2>Feedback</h2><span className="review-count" aria-label={`${feedback.length} matching open pull requests authored by you`}>{feedback.length} PR{feedback.length === 1 ? '' : 's'}</span>{showDraftFeedback && <span className="review-count draft-count" aria-label={`${visibleDraftFeedback} matching draft pull requests authored by you`}>{visibleDraftFeedback} draft{visibleDraftFeedback === 1 ? '' : 's'}</span>}</div></div><label className="review-drafts"><span>Drafts</span><input type="checkbox" checked={showDraftFeedback} onChange={(event) => setShowDraftFeedback(event.target.checked)} /></label></div>
+          <div className="review-grid feedback-viewport">
             {feedback.map((review) => <button className="review-card feedback-card" key={review.id} onClick={() => setSelectedReview(review.id)}>
               <div className="review-card-head"><span><span className="repo">{repositoryName(review.repository)}</span><span className="pr">#{review.number}</span></span><FeedbackBadges review={review} /></div>
               <h3>{review.title}</h3><p><InlineCode text={review.simple_summary} /></p>
@@ -478,12 +478,12 @@ export function App() {
         </section>
 
         <section id="reviews" className="panel reviews">
-          <div className="panel-head"><div><span className="section-label">CODE REVIEWS</span><div className="review-heading"><h2>Review queue</h2><span className="review-count" aria-label={`${visibleReviewsNeedingApproval} matching non-approved pull requests need your review`}>{visibleReviewsNeedingApproval} to review</span><span className="review-count approved-count" aria-label={`${visibleApprovedReviews} matching pull requests are approved`}>{visibleApprovedReviews} approved</span><ReviewStatusInfo /></div></div><div className="queue-controls">
+          <div className="panel-head"><div><span className="section-label">CODE REVIEWS</span><div className="review-heading"><h2>Review queue</h2><span className="review-count" aria-label={`${visibleReviewsNeedingApproval} matching non-approved pull requests need your review`}>{visibleReviewsNeedingApproval} to review</span><span className="review-count approved-count" aria-label={`${visibleApprovedReviews} matching pull requests are approved`}>{visibleApprovedReviews} approved</span>{showDraftReviews && <span className="review-count draft-count" aria-label={`${visibleDraftReviews} matching draft pull requests in the review queue`}>{visibleDraftReviews} draft{visibleDraftReviews === 1 ? '' : 's'}</span>}<ReviewStatusInfo /></div></div><div className="queue-controls">
             <label className="review-drafts"><span>Drafts</span><input type="checkbox" checked={showDraftReviews} onChange={(event) => setShowDraftReviews(event.target.checked)} /></label>
             <label className="review-sort queue-repository"><span>Repo</span><select value={reviewRepository} onChange={(event) => setReviewRepository(event.target.value)}><option value="all">All repositories</option>{reviewRepositories.map((repository) => <option value={repository} key={repository}>{repositoryName(repository)}</option>)}</select></label>
             <label className="review-sort"><span>Sort</span><select value={reviewSort} onChange={(event) => setReviewSort(event.target.value as ReviewSort)}><option value="priority">Priority</option><option value="pain">Pain</option><option value="oldest">Oldest</option><option value="newest">Newest</option><option value="repository">Repo name</option></select></label>
           </div></div>
-          <div ref={reviewViewportRef} className={`review-grid queue-viewport review-viewport${reviewsScrollable ? ' is-scrollable' : ''}`}>
+          <div className="review-grid review-viewport">
             {reviews.map((review) => <article className="review-card" key={review.id} onClick={() => {
               if (!window.getSelection()?.toString()) setSelectedReview(review.id);
             }}>
