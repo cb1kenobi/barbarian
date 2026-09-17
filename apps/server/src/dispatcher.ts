@@ -109,6 +109,12 @@ export class ReviewDispatcher {
       `).run(now.toISOString());
       const release = this.database.connection.prepare(`
         UPDATE review_queue SET status='agent_failed', claim_owner=NULL, claimed_at=NULL,
+          manual_requested_at=CASE
+            WHEN manual_requested_at IS NULL OR manual_requested_at<=claimed_at THEN NULL
+            ELSE manual_requested_at END,
+          manual_provider=CASE
+            WHEN manual_requested_at IS NULL OR manual_requested_at<=claimed_at THEN NULL
+            ELSE manual_provider END,
           retry_after=?, last_agent_error='Barbarian restarted during this run', updated_at=? WHERE id=?
       `);
       for (const row of claimed) {
@@ -132,10 +138,10 @@ export class ReviewDispatcher {
     const now = new Date().toISOString();
     const result = this.database.connection.prepare(`
       UPDATE review_queue SET
-        manual_requested_at=CASE WHEN claim_owner IS NULL THEN ? ELSE manual_requested_at END,
-        manual_provider=CASE WHEN claim_owner IS NULL THEN ? ELSE manual_provider END,
+        manual_requested_at=?,
+        manual_provider=?,
         review_paused=0, status=CASE WHEN claim_owner IS NULL THEN 'unreviewed' ELSE status END, updated_at=?
-      WHERE id=? AND remote_state='OPEN' AND is_draft=0 AND ignored_at IS NULL
+      WHERE id=? AND remote_state='OPEN' AND ignored_at IS NULL
     `).run(now, agentId || null, now, reviewId);
     if (result.changes) void this.pump();
     return Boolean(result.changes);
@@ -190,6 +196,7 @@ export class ReviewDispatcher {
       FROM agent_runs
       JOIN review_queue ON review_queue.id=agent_runs.review_id
       WHERE review_queue.is_draft=1 AND agent_runs.status='running'
+        AND review_queue.manual_requested_at IS NULL
         AND agent_runs.task LIKE 'code_review:%'
     `).all() as Array<{ id: number; review_id: string; runtime_key: string | null }>;
     if (!runs.length) return 0;
@@ -281,9 +288,10 @@ export class ReviewDispatcher {
           manual_requested_at, manual_provider, review_paused, attempt_count,
           attempt_head_sha, attempt_watermark, retry_after
         FROM review_queue
-        WHERE remote_state='OPEN' AND is_draft=0 AND ignored_at IS NULL AND claim_owner IS NULL
+        WHERE remote_state='OPEN' AND ignored_at IS NULL AND claim_owner IS NULL
           AND status NOT IN ('merged','closed')
-          AND (manual_requested_at IS NOT NULL OR (?=1 AND ?<>'' AND review_paused=0 AND lower(author)<>?))
+          AND (manual_requested_at IS NOT NULL
+            OR (is_draft=0 AND ?=1 AND ?<>'' AND review_paused=0 AND lower(author)<>?))
         ORDER BY manual_requested_at IS NULL, updated_at ASC
         LIMIT 50
       `).all(config.agents.autoReview ? 1 : 0, reviewer, reviewer) as unknown as CandidateRow[];
@@ -305,10 +313,10 @@ export class ReviewDispatcher {
         const claimOwner = `${this.owner}:${randomUUID()}`;
         const changed = this.database.connection.prepare(`
           UPDATE review_queue SET claim_owner=?, claimed_at=?, status='agent_working',
-            manual_requested_at=NULL, manual_provider=NULL, attempt_count=?,
-            attempt_head_sha=head_sha, attempt_watermark=discussion_watermark,
+            attempt_count=?, attempt_head_sha=head_sha, attempt_watermark=discussion_watermark,
             retry_after=NULL, updated_at=?
           WHERE id=? AND claim_owner IS NULL AND ignored_at IS NULL
+            AND (is_draft=0 OR manual_requested_at IS NOT NULL)
         `).run(claimOwner, now, attemptCount, now, row.id);
         if (!changed.changes) continue;
         this.database.connection.exec('COMMIT');

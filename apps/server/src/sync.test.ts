@@ -270,6 +270,27 @@ describe('applyDiscovery', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(claims).toHaveLength(2);
 
+    const manualRequestedAt = new Date().toISOString();
+    db.connection.prepare(`
+      UPDATE review_queue SET status='agent_working', claim_owner='active-owner', claimed_at=?,
+        manual_requested_at=?, manual_provider='codex' WHERE number=797
+    `).run(manualRequestedAt, manualRequestedAt);
+    await applyDiscovery(db, automaticConfig, discovery);
+    expect(db.connection.prepare(`
+      SELECT status, claim_owner, claimed_at, manual_requested_at, manual_provider
+      FROM review_queue WHERE number=797
+    `).get()).toEqual({
+      status: 'agent_working', claim_owner: 'active-owner', claimed_at: manualRequestedAt,
+      manual_requested_at: manualRequestedAt, manual_provider: 'codex',
+    });
+    db.connection.prepare(`
+      UPDATE review_queue SET status='agent_failed', claim_owner=NULL, claimed_at=NULL,
+        manual_requested_at=NULL, manual_provider=NULL WHERE number=797
+    `).run();
+    await applyDiscovery(db, automaticConfig, discovery);
+    expect(db.connection.prepare('SELECT status FROM review_queue WHERE number=797').get())
+      .toEqual({ status: 'agent_failed' });
+
     discovery.discoveredAt = '2026-09-03T00:25:00Z';
     discovery.pullRequests = [{
       ...discovery.pullRequests[0]!,

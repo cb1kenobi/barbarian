@@ -266,10 +266,9 @@ function renderContext(context) {
   const reviewRounds = reviewRoundCount(review);
   const counts = assessment?.counts || { open: review.findings_count || 0, resolved: 0, outdated: 0, total: review.findings_count || 0 };
   const reviewRunning = review.status === 'agent_working' || Boolean(review.manual_requested_at);
-  const draft = Boolean(review.is_draft);
   main.innerHTML = `
     <div class="status ${escapeHtml(assessment?.tone || 'attention')}">${escapeHtml(assessment?.label || 'Needs Review')}</div>
-    <section class="review-actions"><h2>Review actions</h2><div class="actions"><button class="agent-review${reviewRunning ? ' running' : ''}" data-running="${reviewRunning}" ${draft ? 'disabled' : ''}><span class="button-icon" aria-hidden="true">${reviewRunning ? '■' : '▶'}</span><span>${draft ? 'Draft — no review' : reviewRunning ? 'Stop agent review' : 'Agent review'}</span></button><button class="secondary test-locally">Test locally</button></div><p class="action-status"></p>${review.workspace_path ? `<code class="workspace-path">${escapeHtml(review.workspace_path)}</code>` : ''}</section>
+    <section class="review-actions"><h2>Review actions</h2><div class="actions"><button class="agent-review${reviewRunning ? ' running' : ''}" data-running="${reviewRunning}"><span class="button-icon" aria-hidden="true">${reviewRunning ? '■' : '▶'}</span><span>${reviewRunning ? 'Stop agent review' : 'Agent review'}</span></button><button class="secondary test-locally">Test locally</button></div><p class="action-status"></p>${review.workspace_path ? `<code class="workspace-path">${escapeHtml(review.workspace_path)}</code>` : ''}</section>
     <section><h2>Summary</h2><div class="summary markdown">${renderMarkdown(summary)}</div>${renderFixedIssues(review)}<p class="review-rounds" aria-label="${reviewRounds} agent review ${reviewRounds === 1 ? 'round' : 'rounds'}">AI Review Rounds: <strong>${reviewRounds}</strong></p></section>
     <section class="findings-panel"><div class="findings-heading"><h2>Findings</h2><label class="finding-filter"><input type="checkbox" ${suppressResolvedFindings ? 'checked' : ''}> Hide resolved</label></div><div class="assessment"><p class="assessment-message">${escapeHtml(assessment?.message || 'Waiting for an AI review.')}</p>${assessment?.stale ? '<p class="stale">⚠ This assessment is older than the latest commit.</p>' : ''}<div class="counts"><div class="count"><strong>${Number(counts.open) || 0}</strong><span>Open</span></div><div class="count"><strong>${Number(counts.resolved) || 0}</strong><span>Resolved</span></div><div class="count"><strong>${Number(counts.outdated) || 0}</strong><span>Outdated</span></div><div class="count"><strong>${Number(counts.total) || 0}</strong><span>Total</span></div></div></div><div class="findings-content">${renderFindings(findings)}</div></section>
     <div class="review-tabs" role="tablist" aria-label="Pull request details"><button type="button" role="tab" aria-selected="${activeReviewTab === 'review-room'}" class="${activeReviewTab === 'review-room' ? 'active' : ''}" data-review-tab="review-room">Review Room</button><button type="button" role="tab" aria-selected="${activeReviewTab === 'timeline'}" class="${activeReviewTab === 'timeline' ? 'active' : ''}" data-review-tab="timeline">Timeline</button></div>
@@ -319,9 +318,7 @@ async function trackCurrentReview() {
       method: 'POST', body: '{}',
     });
     status.textContent = result.reviewStarted === false
-      ? result.reason === 'draft'
-        ? 'Added as a draft. Agent review is disabled until it is ready for review.'
-        : 'Added. No code review agents are configured.'
+      ? 'Added. No code review agents are configured.'
       : 'Added. The review agent is starting…';
     await refresh({ quiet: true });
   } catch (caught) {
@@ -393,8 +390,6 @@ async function runReviewAction(kind) {
   } finally {
     busy = false;
     document.querySelectorAll('button').forEach((button) => { button.disabled = false; });
-    const reviewButton = document.querySelector('.agent-review');
-    if (reviewButton && currentContext?.review?.is_draft) reviewButton.disabled = true;
     updateSelectionPreview();
   }
 }

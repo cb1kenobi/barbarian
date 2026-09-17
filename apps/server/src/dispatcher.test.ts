@@ -96,21 +96,46 @@ describe('ReviewDispatcher', () => {
     db.close();
   });
 
-  it('does not queue or claim draft pull requests', async () => {
+  it('only claims a draft pull request when manually requested', async () => {
     const db = database();
     const id = seedReview(db, 6);
     db.connection.prepare('UPDATE review_queue SET is_draft=1 WHERE id=?').run(id);
-    let claimed = false;
+    const runtime = new AgentRuntime(1);
+    let claim: ReviewClaim | undefined;
     const dispatcher = new ReviewDispatcher(
-      db, config(1), new AgentRuntime(1), { error: () => undefined },
-      async () => { claimed = true; },
+      db, config(1), runtime, { error: () => undefined },
+      async (_runnerDb, _config, nextClaim) => { claim = nextClaim; },
     );
 
-    expect(dispatcher.requestManual(id)).toBe(false);
     await dispatcher.pump();
-    expect(claimed).toBe(false);
+    expect(claim).toBeUndefined();
     expect(db.connection.prepare('SELECT status, claim_owner, manual_requested_at FROM review_queue WHERE id=?').get(id))
       .toEqual({ status: 'unreviewed', claim_owner: null, manual_requested_at: null });
+    expect(dispatcher.requestManual(id)).toBe(true);
+    await waitFor(() => Boolean(claim));
+    expect(claim).toMatchObject({ reviewId: id, trigger: 'manual' });
+    expect(db.connection.prepare('SELECT manual_requested_at IS NOT NULL AS requested FROM review_queue WHERE id=?').get(id))
+      .toEqual({ requested: 1 });
+
+    dispatcher.stop();
+    await runtime.shutdown();
+    db.close();
+  });
+
+  it('records a manual request while an automatic review is already claimed', () => {
+    const db = database();
+    const id = seedReview(db, 16);
+    db.connection.prepare("UPDATE review_queue SET status='agent_working', claim_owner='automatic-owner' WHERE id=?")
+      .run(id);
+    const dispatcher = new ReviewDispatcher(db, config(1), new AgentRuntime(1), { error: () => undefined });
+
+    expect(dispatcher.requestManual(id, 'fake')).toBe(true);
+    expect(db.connection.prepare(`
+      SELECT status, claim_owner, manual_requested_at IS NOT NULL AS requested, manual_provider
+      FROM review_queue WHERE id=?
+    `).get(id)).toEqual({
+      status: 'agent_working', claim_owner: 'automatic-owner', requested: 1, manual_provider: 'fake',
+    });
 
     dispatcher.stop();
     db.close();
@@ -346,8 +371,8 @@ describe('ReviewDispatcher', () => {
     const now = new Date().toISOString();
     db.connection.prepare(`
       UPDATE review_queue SET is_draft=1, status='agent_working', claim_owner='owner',
-        claimed_at=?, manual_requested_at=?, manual_provider='fake' WHERE id=?
-    `).run(now, now, id);
+        claimed_at=? WHERE id=?
+    `).run(now, id);
     db.connection.prepare(`
       INSERT INTO agent_runs(review_id, provider, task, status, started_at, runtime_key)
       VALUES (?, 'fake', 'code_review:new_pr', 'running', ?, ?)
@@ -374,6 +399,31 @@ describe('ReviewDispatcher', () => {
     });
     dispatcher.stop();
     await runtime.shutdown();
+    db.close();
+  });
+
+  it('does not cancel an explicitly requested review just because the pull request is a draft', () => {
+    const db = database();
+    const id = seedReview(db, 17);
+    const now = new Date().toISOString();
+    db.connection.prepare(`
+      UPDATE review_queue SET is_draft=1, status='agent_working', claim_owner='owner',
+        claimed_at=?, manual_requested_at=?, manual_provider='fake' WHERE id=?
+    `).run(now, now, id);
+    db.connection.prepare(`
+      INSERT INTO agent_runs(review_id, provider, task, status, started_at, runtime_key)
+      VALUES (?, 'fake', 'code_review:manual', 'running', ?, ?)
+    `).run(id, now, `${id}:code-review:fake`);
+    const dispatcher = new ReviewDispatcher(db, config(1), new AgentRuntime(1), { error: () => undefined });
+
+    expect(dispatcher.cancelDraftReviews()).toBe(0);
+    expect(db.connection.prepare(`
+      SELECT status, claim_owner, manual_requested_at FROM review_queue WHERE id=?
+    `).get(id)).toEqual({ status: 'agent_working', claim_owner: 'owner', manual_requested_at: now });
+    expect(db.connection.prepare('SELECT status FROM agent_runs WHERE review_id=?').get(id))
+      .toEqual({ status: 'running' });
+
+    dispatcher.stop();
     db.close();
   });
 

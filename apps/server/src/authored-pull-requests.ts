@@ -40,8 +40,8 @@ export function openAuthoredPullRequests(
         )
         THEN 1 ELSE 0 END AS has_review_activity
     FROM review_queue
-    WHERE remote_state='OPEN' AND is_draft=0 AND ignored_at IS NULL AND lower(author)=lower(?)
-    ORDER BY updated_at DESC
+    WHERE remote_state='OPEN' AND ignored_at IS NULL AND lower(author)=lower(?)
+    ORDER BY is_draft ASC, updated_at DESC
   `).all(viewer) as Array<Record<string, unknown>>;
 
   return rows.map((row) => ({

@@ -165,7 +165,14 @@ export function upsertReview(database: BarbarianDatabase, config: BarbarianConfi
       url=excluded.url, author=excluded.author, additions=excluded.additions,
       deletions=excluded.deletions, commit_count=excluded.commit_count, head_sha=excluded.head_sha,
       head_ref_name=excluded.head_ref_name, base_ref_name=excluded.base_ref_name,
-      status=excluded.status, review_decision=excluded.review_decision,
+      status=CASE
+        WHEN excluded.is_draft=1 AND (
+          review_queue.manual_requested_at IS NOT NULL
+          OR review_queue.status IN ('agent_failed','issues_found','ready_to_merge')
+        )
+          THEN review_queue.status
+        ELSE excluded.status END,
+      review_decision=excluded.review_decision,
       requested_reviewers=excluded.requested_reviewers, requested_teams=excluded.requested_teams,
       linked_issues=excluded.linked_issues, review_skill=excluded.review_skill,
       discussion_watermark=excluded.discussion_watermark,
@@ -185,10 +192,14 @@ export function upsertReview(database: BarbarianDatabase, config: BarbarianConfi
         WHEN review_queue.head_sha<>excluded.head_sha
           OR excluded.discussion_watermark>review_queue.discussion_watermark THEN NULL
         ELSE review_queue.feedback_input_message_id END,
-      claim_owner=CASE WHEN excluded.is_draft=1 THEN NULL ELSE review_queue.claim_owner END,
-      claimed_at=CASE WHEN excluded.is_draft=1 THEN NULL ELSE review_queue.claimed_at END,
-      manual_requested_at=CASE WHEN excluded.is_draft=1 THEN NULL ELSE review_queue.manual_requested_at END,
-      manual_provider=CASE WHEN excluded.is_draft=1 THEN NULL ELSE review_queue.manual_provider END,
+      claim_owner=CASE
+        WHEN excluded.is_draft=1 AND review_queue.manual_requested_at IS NULL THEN NULL
+        ELSE review_queue.claim_owner END,
+      claimed_at=CASE
+        WHEN excluded.is_draft=1 AND review_queue.manual_requested_at IS NULL THEN NULL
+        ELSE review_queue.claimed_at END,
+      manual_requested_at=review_queue.manual_requested_at,
+      manual_provider=review_queue.manual_provider,
       retry_after=CASE WHEN excluded.is_draft=1 THEN NULL ELSE review_queue.retry_after END,
       last_reviewed_sha=CASE
         WHEN review_queue.is_draft=1 AND excluded.is_draft=0 THEN NULL

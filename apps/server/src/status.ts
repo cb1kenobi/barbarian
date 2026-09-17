@@ -119,7 +119,7 @@ export function buildStatusDraft(database: BarbarianDatabase, config: BarbarianC
       AND status<>'approved'
       AND NOT (COALESCE(viewer_review_state, '')='APPROVED' AND viewer_review_sha=head_sha)
   `).get(login) as { total: number }).total);
-  const authoredPullRequests = openAuthoredPullRequests(database, login);
+  const authoredPullRequests = openAuthoredPullRequests(database, login).filter((review) => !review.is_draft);
   const feedback = sortReviews(
     authoredPullRequests.filter((review) => review.has_new_feedback) as unknown as StatusReview[],
     config,

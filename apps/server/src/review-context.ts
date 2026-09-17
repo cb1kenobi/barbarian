@@ -54,13 +54,13 @@ export function buildReviewAssessment(review: ReviewAssessmentInput, findings: S
   let tone = 'attention';
   if (review.remote_state === 'MERGED' || displayStatus === 'merged') { label = 'Merged'; tone = 'done'; }
   else if (review.remote_state === 'CLOSED' || displayStatus === 'closed') { label = 'Closed'; tone = 'quiet'; }
-  else if (review.is_draft) { label = 'Draft'; tone = 'quiet'; }
-  else if (displayStatus === 'agent_working') { label = 'AI Reviewing'; tone = 'working'; }
-  else if (displayStatus === 'agent_failed') { label = 'Agent Failed'; tone = 'attention'; }
-  else if (open > 0 || displayStatus === 'issues_found' || displayStatus === 'awaiting_feedback') { label = 'Needs Fixes'; tone = 'attention'; }
+  else if (review.status === 'agent_working') { label = 'AI Reviewing'; tone = 'working'; }
+  else if (review.status === 'agent_failed') { label = 'Agent Failed'; tone = 'attention'; }
+  else if (open > 0 || review.status === 'issues_found' || displayStatus === 'awaiting_feedback') { label = 'Needs Fixes'; tone = 'attention'; }
   else if (displayStatus === 'approved') { label = 'Approved'; tone = 'done'; }
   else if (displayStatus === 'partially_reviewed') { label = 'Partially Reviewed'; tone = 'working'; }
-  else if (displayStatus === 'ready_to_merge') { label = 'Ready to Merge'; tone = 'done'; }
+  else if (review.status === 'ready_to_merge') { label = 'Ready to Merge'; tone = 'done'; }
+  else if (review.is_draft) { label = 'Draft'; tone = 'quiet'; }
 
   let message = 'No AI review has been completed for this version yet.';
   if (review.status === 'agent_working') message = 'An AI reviewer is checking this pull request now.';

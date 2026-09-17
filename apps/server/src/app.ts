@@ -1078,13 +1078,6 @@ export async function createApp(
     if (trackedId !== id) return reply.code(409).send({ error: 'GitHub returned a different pull request' });
     database.connection.prepare('UPDATE review_queue SET ignored_at=NULL, updated_at=? WHERE id=?')
       .run(new Date().toISOString(), id);
-    const tracked = database.connection.prepare('SELECT is_draft FROM review_queue WHERE id=?').get(id) as
-      { is_draft: number } | undefined;
-    if (tracked?.is_draft) {
-      publishReviewUpdated(id);
-      publishDashboardUpdated(id);
-      return reply.code(202).send({ accepted: true, id, reviewStarted: false, reason: 'draft' });
-    }
     if (!config.agents.codeReview.length) {
       publishReviewUpdated(id);
       publishDashboardUpdated(id);
@@ -1111,11 +1104,10 @@ export async function createApp(
       return reply.code(409).send({ error: 'Requested code review agent is not configured' });
     }
     const review = database.connection.prepare(
-      'SELECT id, is_draft, ignored_at FROM review_queue WHERE id=?',
-    ).get(id) as { id: string; is_draft: number; ignored_at: string | null } | undefined;
+      'SELECT id, ignored_at FROM review_queue WHERE id=?',
+    ).get(id) as { id: string; ignored_at: string | null } | undefined;
     if (!review) return reply.code(404).send({ error: 'Review not found' });
     if (review.ignored_at) return reply.code(409).send({ error: 'Pull request is ignored' });
-    if (review.is_draft) return reply.code(409).send({ error: 'Draft pull requests cannot be reviewed' });
     if (!dispatcher.requestManual(id, agentId)) return reply.code(404).send({ error: 'Review not found' });
     return reply.code(202).send({ accepted: true });
   });
@@ -1405,10 +1397,10 @@ export async function createApp(
     }
     if (branch.review_id && !branch.is_dirty) {
       const linkedReview = database.connection.prepare(`
-        SELECT is_draft FROM review_queue
+        SELECT id FROM review_queue
         WHERE id=? AND remote_state='OPEN' AND ignored_at IS NULL
-      `).get(branch.review_id) as { is_draft: number } | undefined;
-      if (!linkedReview?.is_draft && dispatcher.requestManual(branch.review_id, agentId)) {
+      `).get(branch.review_id) as { id: string } | undefined;
+      if (linkedReview && dispatcher.requestManual(branch.review_id, agentId)) {
         return reply.code(202).send({ accepted: true, target: 'pull_request' });
       }
     }

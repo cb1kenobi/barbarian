@@ -180,6 +180,25 @@ describe('runReviewAgent', () => {
     database.close();
   });
 
+  it('preserves a manual request made after the current claim started', async () => {
+    const script = "console.log('BARBARIAN_RESULT: {\"findings\":0,\"verdict\":\"ready\",\"summary\":\"Clear.\"}')";
+    const { database, config, claim } = setup(script);
+    database.connection.prepare(`
+      UPDATE review_queue SET manual_requested_at='9999-01-01T00:00:00.000Z', manual_provider='fake'
+      WHERE id=?
+    `).run(claim.reviewId);
+
+    await runReviewAgent(database, config, claim, undefined, dependencies);
+
+    expect(database.connection.prepare(`
+      SELECT claim_owner, claimed_at, manual_requested_at, manual_provider FROM review_queue WHERE id=?
+    `).get(claim.reviewId)).toEqual({
+      claim_owner: null, claimed_at: null,
+      manual_requested_at: '9999-01-01T00:00:00.000Z', manual_provider: 'fake',
+    });
+    database.close();
+  });
+
   it('runs only one provider for a review', async () => {
     const output = 'BARBARIAN_RESULT: {"findings":1,"verdict":"issues","summary":"One issue found.","comments":[{"path":"file.ts","line":1,"side":"RIGHT","body":"**High: broken invariant**\\n\\nFailure mode and fix."}]}';
     const script = `console.log(${JSON.stringify(output)})`;

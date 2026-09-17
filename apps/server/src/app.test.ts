@@ -198,7 +198,7 @@ describe('agent runs', () => {
     }
   });
 
-  it('rejects a manual agent review for a draft pull request', async () => {
+  it('allows a manual agent review for a draft pull request', async () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-draft-review-test-'));
     directories.push(directory);
     const database = new BarbarianDatabase(path.join(directory, 'test.db'));
@@ -210,15 +210,21 @@ describe('agent runs', () => {
       ) VALUES ('github:Acme/storage#6', 'Acme/storage', 6, 'Draft review',
         'https://example.test/6', 'author', 'head', 'feature', 'main', 1, ?, ?, ?)
     `).run(now, now, now);
-    const app = await createApp(database, new ConfigStore(config));
+    let requestedReview = '';
+    const dispatcher = {
+      setReviewChangedListener() {},
+      requestManual(id: string) { requestedReview = id; return true; },
+      async pump() {},
+      cancelReview() { return { found: false, stopped: false, cancelled: 0 }; },
+    } as unknown as ReviewDispatcher;
+    const app = await createApp(database, new ConfigStore(config), undefined, { dispatcher });
     try {
       const response = await app.inject({
         method: 'POST', url: '/api/reviews/github%3AAcme%2Fstorage%236/run-review', payload: {},
       });
-      expect(response.statusCode).toBe(409);
-      expect(response.json()).toEqual({ error: 'Draft pull requests cannot be reviewed' });
-      expect(database.connection.prepare('SELECT manual_requested_at FROM review_queue WHERE number=6').get())
-        .toEqual({ manual_requested_at: null });
+      expect(response.statusCode).toBe(202);
+      expect(response.json()).toEqual({ accepted: true });
+      expect(requestedReview).toBe('github:Acme/storage#6');
     } finally {
       await app.close();
       database.close();
@@ -726,6 +732,7 @@ describe('dashboard reviews', () => {
         }),
         expect.objectContaining({ number: 3, approved: false, has_new_feedback: true }),
         expect.objectContaining({ number: 2, approved: true, has_new_feedback: false }),
+        expect.objectContaining({ number: 4, is_draft: true, approved: true }),
       ]);
       expect(payload.metrics.reviewsNeedingApproval).toBe(1);
       const browserView = await app.inject({
@@ -952,7 +959,7 @@ describe('browser context appearance', () => {
     }
   });
 
-  it('tracks a draft pull request without requesting an agent review', async () => {
+  it('tracks a draft pull request and manually requests an agent review', async () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-browser-draft-track-test-'));
     directories.push(directory);
     const database = new BarbarianDatabase(path.join(directory, 'test.db'));
@@ -983,9 +990,9 @@ describe('browser context appearance', () => {
       });
       expect(response.statusCode).toBe(202);
       expect(response.json()).toEqual({
-        accepted: true, id: 'github:Acme/storage#98', reviewStarted: false, reason: 'draft',
+        accepted: true, id: 'github:Acme/storage#98', reviewStarted: true,
       });
-      expect(requestedReview).toBe('');
+      expect(requestedReview).toBe('github:Acme/storage#98');
     } finally {
       await app.close();
       database.close();
@@ -1193,7 +1200,14 @@ describe('local branch context', () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-local-pr-test-'));
     directories.push(directory);
     const database = new BarbarianDatabase(path.join(directory, 'test.db'));
-    const app = await createApp(database, new ConfigStore(config));
+    let requestedReview = '';
+    const dispatcher = {
+      setReviewChangedListener() {},
+      requestManual(id: string) { requestedReview = id; return true; },
+      async pump() {},
+      cancelReview() { return { found: false, stopped: false, cancelled: 0 }; },
+    } as unknown as ReviewDispatcher;
+    const app = await createApp(database, new ConfigStore(config), undefined, { dispatcher });
     try {
       const initial = await app.inject({
         method: 'POST', url: '/api/local/branches/context', payload: branchPayload(directory),
@@ -1255,10 +1269,8 @@ describe('local branch context', () => {
         payload: {},
       });
       expect(draftReview.statusCode).toBe(202);
-      expect(draftReview.json()).toEqual({ accepted: true, target: 'branch' });
-      await expect.poll(() => (database.connection.prepare(
-        'SELECT status FROM local_branches WHERE id=?',
-      ).get(branch.id) as { status: string }).status).not.toBe('agent_working');
+      expect(draftReview.json()).toEqual({ accepted: true, target: 'pull_request' });
+      expect(requestedReview).toBe('github:Acme/storage#2');
       database.connection.prepare(`
         UPDATE review_queue SET remote_state='MERGED', status='merged', is_draft=0 WHERE id='github:Acme/storage#2'
       `).run();

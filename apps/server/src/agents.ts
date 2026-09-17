@@ -417,7 +417,14 @@ function finishClaim(
         findings_count=?, last_reviewed_sha=?, last_reviewed_commit_count=commit_count,
         last_reviewed_watermark=?,
         plain_summary=CASE WHEN ?='' THEN plain_summary ELSE ? END,
-        claim_owner=NULL, claimed_at=NULL, attempt_count=0, retry_after=NULL,
+        claim_owner=NULL, claimed_at=NULL,
+        manual_requested_at=CASE
+          WHEN manual_requested_at IS NULL OR manual_requested_at<=claimed_at THEN NULL
+          ELSE manual_requested_at END,
+        manual_provider=CASE
+          WHEN manual_requested_at IS NULL OR manual_requested_at<=claimed_at THEN NULL
+          ELSE manual_provider END,
+        attempt_count=0, retry_after=NULL,
         last_agent_error=NULL, updated_at=?
       WHERE id=? AND claim_owner=?
     `).run(
@@ -445,6 +452,12 @@ function failClaim(database: BarbarianDatabase, config: BarbarianConfig, claim: 
     : null;
   database.connection.prepare(`
     UPDATE review_queue SET status='agent_failed', claim_owner=NULL, claimed_at=NULL,
+      manual_requested_at=CASE
+        WHEN manual_requested_at IS NULL OR manual_requested_at<=claimed_at THEN NULL
+        ELSE manual_requested_at END,
+      manual_provider=CASE
+        WHEN manual_requested_at IS NULL OR manual_requested_at<=claimed_at THEN NULL
+        ELSE manual_provider END,
       retry_after=?, last_agent_error=?, updated_at=? WHERE id=? AND claim_owner=?
   `).run(retryAfter, message.slice(0, 4000), new Date().toISOString(), claim.reviewId, claim.owner);
 }

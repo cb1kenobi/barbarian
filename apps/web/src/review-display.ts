@@ -29,7 +29,7 @@ const labels: Record<string, string> = {
 };
 
 export const reviewStatusGuide = [
-  { status: 'draft', description: 'The pull request is not ready for review; agent reviews are disabled.' },
+  { status: 'draft', description: 'Automatic reviews are paused until the pull request is ready; manual reviews remain available.' },
   { status: 'unreviewed', description: 'No completed review exists for the current PR head.' },
   { status: 'agent_working', description: 'A Barbarian agent is actively reviewing the PR.' },
   { status: 'agent_failed', description: 'The last agent attempt failed and may be retried.' },

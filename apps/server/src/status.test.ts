@@ -121,6 +121,8 @@ describe('status draft', () => {
       discussionWatermark: '2026-09-01T12:00:00Z', lastReviewedWatermark: '2026-09-01T11:00:00Z',
     });
     insertReview(database, 24, 'cb1kenobi', { reviewDecision: 'APPROVED' });
+    insertReview(database, 25, 'cb1kenobi', { reviewDecision: 'APPROVED', draft: true });
+    insertReview(database, 26, 'cb1kenobi', { status: 'issues_found', draft: true });
     database.connection.prepare(`
       INSERT INTO review_findings(
         id, review_id, remote_id, author, body, summary, url, created_at, updated_at
