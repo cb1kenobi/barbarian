@@ -28,10 +28,12 @@ repositories: []
 # Example:
 # repositories:
 #   - name: your-org/important-storage-repo
+#     path: /absolute/path/to/important-storage-repo
 #     priority: 100
 #     watchIssues: true
 #     watchPullRequests: true
 #     reviewSkill: cb1-code-review
+#     feedbackSkill: harper-engineering-guidelines
 #     labels:
 #       data-loss: 100
 #       security: 80

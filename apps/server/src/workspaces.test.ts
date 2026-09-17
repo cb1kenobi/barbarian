@@ -1,12 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BarbarianDatabase } from './database.js';
 import type { BarbarianConfig } from './types.js';
 import {
-  cleanupCompletedWorkspaces, commitFeedbackWorkspace, pushFeedbackWorkspace,
+  cleanupCompletedWorkspaces, commitFeedbackWorkspace, prepareFeedbackWorkspace, pushFeedbackWorkspace,
 } from './workspaces.js';
 
 const directories: string[] = [];
@@ -74,10 +74,46 @@ describe('workspace cleanup', () => {
       .toEqual({ feedback_workspace_path: null });
     database.close();
   });
+
+  it('continues cleanup when one recorded feedback workspace is unrecognized', async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-cleanup-continue-'));
+    directories.push(directory);
+    const root = path.join(directory, 'managed');
+    const unrecognized = path.join(directory, 'external-worktree');
+    const managed = path.join(root, 'feedback', 'Acme-storage-pr2');
+    execFileSync('mkdir', ['-p', unrecognized, managed]);
+    writeFileSync(path.join(unrecognized, '.git'), 'gitdir: /not/a/managed/worktree\n');
+    writeFileSync(path.join(managed, 'artifact.txt'), 'managed scratch data\n');
+    const database = new BarbarianDatabase(path.join(directory, 'test.db'));
+    const now = new Date().toISOString();
+    const insert = database.connection.prepare(`
+      INSERT INTO review_queue(
+        id, repository, number, title, url, author, head_sha, head_ref_name, base_ref_name,
+        status, first_seen_at, updated_at, last_seen_at, feedback_workspace_path
+      ) VALUES (?, 'Acme/storage', ?, 'Closed', ?, 'author', 'abcdef1', 'feature', 'main',
+        'closed', ?, ?, ?, ?)
+    `);
+    insert.run('github:Acme/storage#1', 1, 'https://example.test/1', now, now, now, unrecognized);
+    insert.run('github:Acme/storage#2', 2, 'https://example.test/2', now, now, now, managed);
+    const cleanupConfig = { ...config, review: { ...config.review, workspaceRoot: root } };
+
+    await expect(cleanupCompletedWorkspaces(database, cleanupConfig)).resolves.toBe(1);
+    expect(existsSync(managed)).toBe(false);
+    expect(database.connection.prepare('SELECT feedback_workspace_path FROM review_queue WHERE id=?').get('github:Acme/storage#1'))
+      .toEqual({ feedback_workspace_path: unrecognized });
+    expect(database.connection.prepare('SELECT feedback_workspace_path FROM review_queue WHERE id=?').get('github:Acme/storage#2'))
+      .toEqual({ feedback_workspace_path: null });
+    database.close();
+  });
 });
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
+}
+
+function optionalGit(cwd: string, ...args: string[]): string {
+  try { return git(cwd, ...args); }
+  catch { return ''; }
 }
 
 function feedbackRepository(): { directory: string; workspace: string; initialHead: string } {
@@ -109,6 +145,129 @@ function feedbackRepository(): { directory: string; workspace: string; initialHe
 }
 
 describe('feedback workspace push', () => {
+  it('uses a configured repository for an isolated guarded worktree lifecycle', async () => {
+    const { directory, workspace: repository, initialHead } = feedbackRepository();
+    git(repository, 'config', '--unset-all', 'remote.origin.pushurl');
+    rmSync(path.join(repository, '.git', 'info', 'exclude'));
+    const database = new BarbarianDatabase(path.join(directory, 'test.db'));
+    const now = new Date().toISOString();
+    const reviewId = 'github:Acme/storage#1';
+    database.connection.prepare(`
+      INSERT INTO review_queue(
+        id, repository, number, title, url, author, head_sha, head_ref_name, base_ref_name,
+        status, first_seen_at, updated_at, last_seen_at
+      ) VALUES (?, 'Acme/storage', 1, 'Feedback', 'https://example.test/1',
+        'author', ?, 'feature', 'main', 'unreviewed', ?, ?, ?)
+    `).run(reviewId, initialHead, now, now, now);
+    const localConfig = {
+      ...config,
+      repositories: [{
+        name: 'Acme/storage', path: repository, priority: 0,
+        watchIssues: true, watchPullRequests: true,
+        reviewSkill: 'cb1-code-review', feedbackSkill: 'harper-engineering-guidelines', labels: {},
+      }],
+      review: { ...config.review, workspaceRoot: path.join(directory, 'cache') },
+    } satisfies BarbarianConfig;
+    const before = {
+      head: git(repository, 'rev-parse', 'HEAD'),
+      status: git(repository, 'status', '--porcelain'),
+      origin: git(repository, 'remote', 'get-url', 'origin'),
+      pushUrl: optionalGit(repository, 'config', '--get-all', 'remote.origin.pushurl'),
+    };
+
+    const prepared = await prepareFeedbackWorkspace(database, localConfig, reviewId);
+    expect(prepared).toEqual({
+      path: path.join(realpathSync(repository), '.claude', 'worktrees', 'barbarian-feedback-pr1'),
+      initialHeadSha: initialHead,
+      pushGuard: 'sandbox',
+    });
+    expect(readFileSync(path.join(repository, '.git', 'info', 'exclude'), 'utf8'))
+      .toContain('.claude/worktrees/');
+    expect(git(repository, 'status', '--porcelain')).toBe('');
+
+    writeFileSync(path.join(prepared.path, 'file.txt'), 'partial fix\n');
+    writeFileSync(path.join(prepared.path, 'scratch.txt'), 'scratch\n');
+    const retried = await prepareFeedbackWorkspace(database, localConfig, reviewId);
+    expect(retried).toEqual(prepared);
+    expect(git(prepared.path, 'status', '--porcelain')).toBe('');
+    expect(readFileSync(path.join(prepared.path, 'file.txt'), 'utf8')).toBe('feature\n');
+
+    writeFileSync(path.join(prepared.path, 'file.txt'), 'fixed\n');
+    const committedHead = await commitFeedbackWorkspace(prepared.path, initialHead, 'Address feedback');
+    await expect(pushFeedbackWorkspace(
+      prepared.path, 'Acme/storage', 'feature', initialHead, undefined, prepared.pushGuard,
+    )).resolves.toBe(committedHead);
+    database.connection.prepare("UPDATE review_queue SET status='merged' WHERE id=?").run(reviewId);
+    await expect(cleanupCompletedWorkspaces(database, localConfig)).resolves.toBe(1);
+
+    expect(existsSync(prepared.path)).toBe(false);
+    expect(git(repository, 'worktree', 'list', '--porcelain')).not.toContain(prepared.path);
+    expect(() => git(repository, 'show-ref', '--verify', 'refs/barbarian/feedback/1')).toThrow();
+    expect({
+      head: git(repository, 'rev-parse', 'HEAD'),
+      status: git(repository, 'status', '--porcelain'),
+      origin: git(repository, 'remote', 'get-url', 'origin'),
+      pushUrl: optionalGit(repository, 'config', '--get-all', 'remote.origin.pushurl'),
+    }).toEqual(before);
+    database.close();
+  });
+
+  it('rejects a configured repository whose origin does not match', async () => {
+    const { directory, workspace: repository, initialHead } = feedbackRepository();
+    const database = new BarbarianDatabase(path.join(directory, 'mismatch.db'));
+    const now = new Date().toISOString();
+    database.connection.prepare(`
+      INSERT INTO review_queue(
+        id, repository, number, title, url, author, head_sha, head_ref_name, base_ref_name,
+        status, first_seen_at, updated_at, last_seen_at
+      ) VALUES ('github:Other/storage#2', 'Other/storage', 2, 'Feedback', 'https://example.test/2',
+        'author', ?, 'feature', 'main', 'unreviewed', ?, ?, ?)
+    `).run(initialHead, now, now, now);
+    const mismatchConfig = {
+      ...config,
+      repositories: [{
+        name: 'Other/storage', path: repository, priority: 0,
+        watchIssues: true, watchPullRequests: true,
+        reviewSkill: 'cb1-code-review', feedbackSkill: '', labels: {},
+      }],
+    } satisfies BarbarianConfig;
+
+    await expect(prepareFeedbackWorkspace(database, mismatchConfig, 'github:Other/storage#2'))
+      .rejects.toThrow('origin does not match Other/storage');
+    database.close();
+  });
+
+  it('refuses to reuse an ordinary directory nested at the managed worktree path', async () => {
+    const { directory, workspace: repository, initialHead } = feedbackRepository();
+    git(repository, 'config', '--unset-all', 'remote.origin.pushurl');
+    const deceptiveWorkspace = path.join(repository, '.claude', 'worktrees', 'barbarian-feedback-pr3');
+    execFileSync('mkdir', ['-p', deceptiveWorkspace]);
+    writeFileSync(path.join(deceptiveWorkspace, 'untracked.txt'), 'must survive\n');
+    const database = new BarbarianDatabase(path.join(directory, 'ordinary-directory.db'));
+    const now = new Date().toISOString();
+    database.connection.prepare(`
+      INSERT INTO review_queue(
+        id, repository, number, title, url, author, head_sha, head_ref_name, base_ref_name,
+        status, first_seen_at, updated_at, last_seen_at
+      ) VALUES ('github:Acme/storage#3', 'Acme/storage', 3, 'Feedback', 'https://example.test/3',
+        'author', ?, 'feature', 'main', 'unreviewed', ?, ?, ?)
+    `).run(initialHead, now, now, now);
+    const localConfig = {
+      ...config,
+      repositories: [{
+        name: 'Acme/storage', path: repository, priority: 0,
+        watchIssues: true, watchPullRequests: true,
+        reviewSkill: 'cb1-code-review', feedbackSkill: '', labels: {},
+      }],
+    } satisfies BarbarianConfig;
+
+    await expect(prepareFeedbackWorkspace(database, localConfig, 'github:Acme/storage#3'))
+      .rejects.toThrow('not a recognized linked Git worktree');
+    expect(readFileSync(path.join(deceptiveWorkspace, 'untracked.txt'), 'utf8')).toBe('must survive\n');
+    expect(git(repository, 'rev-parse', 'HEAD')).toBe(initialHead);
+    database.close();
+  });
+
   it('lets Barbarian create the commit after a sandboxed agent leaves working-tree edits', async () => {
     const { workspace, initialHead } = feedbackRepository();
     writeFileSync(path.join(workspace, 'fix.txt'), 'fixed\n');

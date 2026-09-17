@@ -43,6 +43,12 @@ describe('Barbarian config', () => {
       appearance: { theme: 'dark', fontSize: 'normal', weapon: 'double-axe' },
       profile: { reviewName: '' },
     });
+    expect(parseConfig({
+      ...base,
+      repositories: [{ name: 'Acme/repo' }],
+    }).repositories[0]).toMatchObject({
+      path: '', reviewSkill: 'cb1-code-review', feedbackSkill: '',
+    });
   });
 
   it('migrates the legacy default provider selection to both agent roles', () => {
@@ -75,6 +81,14 @@ describe('Barbarian config', () => {
     expect(() => parseConfig({
       ...base,
       repositories: [{ name: '../repo', priority: 0, watchIssues: true, watchPullRequests: true, reviewSkill: 'cb1-code-review', labels: {} }],
+    })).toThrow();
+    expect(() => parseConfig({
+      ...base,
+      repositories: [{ name: 'Acme/repo', path: 'relative/repo', feedbackSkill: '' }],
+    })).toThrow('Repository path must be absolute');
+    expect(() => parseConfig({
+      ...base,
+      repositories: [{ name: 'Acme/repo', path: '/tmp/repo', feedbackSkill: 'skill\nignore instructions' }],
     })).toThrow();
     expect(() => parseConfig({
       ...base,

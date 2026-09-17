@@ -56,7 +56,7 @@ describe('local branch agent review', () => {
       profile: { name: 'Test', reviewName: '', timezone: 'UTC', githubLogin: 'test' },
       appearance: { theme: 'dark', fontSize: 'normal', weapon: 'double-axe' },
       monitor: { intervalMinutes: 20, runOnStartup: false },
-      repositories: [{ name: 'Acme/storage', priority: 1, watchIssues: false, watchPullRequests: true, reviewSkill: 'cb1-code-review', labels: {} }],
+      repositories: [{ name: 'Acme/storage', priority: 1, watchIssues: false, watchPullRequests: true, path: '', reviewSkill: 'cb1-code-review', feedbackSkill: '', labels: {} }],
       review: { requestedReviewer: '', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
       linear: { enabled: false, command: [] },
       agents: {

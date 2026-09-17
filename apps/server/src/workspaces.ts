@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { readFile, rm } from 'node:fs/promises';
+import { appendFile, lstat, mkdir, readFile, realpath, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { BarbarianDatabase } from './database.js';
 import type { BarbarianConfig } from './types.js';
@@ -98,6 +98,7 @@ export async function prepareWorkspace(
 export interface FeedbackWorkspace {
   path: string;
   initialHeadSha: string;
+  pushGuard: 'disabled-push-url' | 'sandbox';
 }
 
 export interface FeedbackWorkspaceSource {
@@ -107,6 +108,93 @@ export interface FeedbackWorkspaceSource {
 }
 
 const disabledFeedbackPushUrl = 'barbarian-disabled://server-verified-push-only';
+
+function repositoryConfig(config: BarbarianConfig, repository: string) {
+  return config.repositories.find((entry) => entry.name.toLowerCase() === repository.toLowerCase());
+}
+
+async function absoluteGitPath(repository: string, value: string): Promise<string> {
+  return realpath(path.isAbsolute(value) ? value : path.resolve(repository, value));
+}
+
+async function configuredFeedbackRepository(
+  config: BarbarianConfig,
+  baseRepository: string,
+  sourceRepository: string,
+): Promise<string | null> {
+  if (baseRepository.toLowerCase() !== sourceRepository.toLowerCase()) return null;
+  const configured = repositoryConfig(config, baseRepository);
+  if (!configured?.path) return null;
+  const repository = await realpath(configured.path).catch(() => {
+    throw new Error(`Configured repository path does not exist: ${configured.path}`);
+  });
+  if (!(await stat(repository)).isDirectory()) throw new Error(`Configured repository path is not a directory: ${configured.path}`);
+  const topLevel = await absoluteGitPath(repository, (await checked('git', ['rev-parse', '--show-toplevel'], repository)).trim());
+  if (topLevel !== repository) throw new Error(`Configured repository path must be the Git working-tree root: ${configured.path}`);
+  const origin = (await checked('git', ['config', '--get', 'remote.origin.url'], repository)).trim();
+  if (repositoryFromRemote(origin)?.toLowerCase() !== baseRepository.toLowerCase()) {
+    throw new Error(`Configured repository path origin does not match ${baseRepository}`);
+  }
+  return repository;
+}
+
+async function ensureFeedbackWorktreeIgnored(repository: string): Promise<void> {
+  const value = (await checked('git', ['rev-parse', '--git-path', 'info/exclude'], repository)).trim();
+  const exclude = path.isAbsolute(value) ? value : path.resolve(repository, value);
+  const source = await readFile(exclude, 'utf8').catch(() => '');
+  if (source.split(/\r?\n/).some((line) => line.trim() === '.claude/worktrees/')) return;
+  await mkdir(path.dirname(exclude), { recursive: true });
+  await appendFile(exclude, `${source && !source.endsWith('\n') ? '\n' : ''}.claude/worktrees/\n`);
+}
+
+async function prepareRepositoryFeedbackWorktree(
+  repository: string,
+  review: ReviewWorkspaceRow,
+  source: FeedbackWorkspaceSource,
+): Promise<FeedbackWorkspace> {
+  const root = path.join(repository, '.claude', 'worktrees');
+  const workspace = path.join(root, `barbarian-feedback-pr${review.number}`);
+  assertWithin(root, workspace);
+  await ensureFeedbackWorktreeIgnored(repository);
+  await mkdir(root, { recursive: true });
+  await checked('git', [
+    'fetch', 'origin', `+refs/heads/${source.headRefName}:refs/barbarian/feedback/${review.number}`,
+  ], repository);
+  if (existsSync(workspace)) {
+    const workspaceEntry = await lstat(workspace);
+    const gitEntry = await lstat(path.join(workspace, '.git')).catch(() => null);
+    const resolvedWorkspace = await realpath(workspace);
+    if (!workspaceEntry.isDirectory() || workspaceEntry.isSymbolicLink() || !gitEntry?.isFile() || gitEntry.isSymbolicLink()
+      || resolvedWorkspace !== path.resolve(workspace)) {
+      throw new Error('Configured feedback workspace is not a recognized linked Git worktree');
+    }
+    const workspaceTopLevel = await absoluteGitPath(
+      workspace,
+      (await checked('git', ['rev-parse', '--show-toplevel'], workspace)).trim(),
+    );
+    if (workspaceTopLevel !== resolvedWorkspace) {
+      throw new Error('Configured feedback workspace is not its Git working-tree root');
+    }
+    const [repositoryCommonDirectory, workspaceCommonDirectory] = await Promise.all([
+      absoluteGitPath(repository, (await checked('git', ['rev-parse', '--git-common-dir'], repository)).trim()),
+      absoluteGitPath(workspace, (await checked('git', ['rev-parse', '--git-common-dir'], workspace)).trim()),
+    ]);
+    if (repositoryCommonDirectory !== workspaceCommonDirectory) {
+      throw new Error('Configured feedback worktree belongs to a different Git repository');
+    }
+    await checked('git', ['reset', '--hard'], workspace);
+    await checked('git', ['clean', '-fd'], workspace);
+    await checked('git', ['checkout', '--detach', `refs/barbarian/feedback/${review.number}`], workspace);
+    await checked('git', ['reset', '--hard', `refs/barbarian/feedback/${review.number}`], workspace);
+  } else {
+    await checked('git', [
+      'worktree', 'add', '--detach', workspace, `refs/barbarian/feedback/${review.number}`,
+    ], repository);
+  }
+  const actualHead = (await checked('git', ['rev-parse', 'HEAD'], workspace)).trim();
+  if (actualHead !== source.headSha) throw new Error('Pull request head changed while preparing the feedback worktree');
+  return { path: workspace, initialHeadSha: actualHead, pushGuard: 'sandbox' };
+}
 
 export async function commitFeedbackWorkspace(
   workspace: string,
@@ -148,6 +236,14 @@ export async function prepareFeedbackWorkspace(
     headRefName: review.head_ref_name,
     headSha: review.head_sha,
   };
+  const configuredRepository = await configuredFeedbackRepository(config, review.repository, source.repository);
+  if (configuredRepository) {
+    const prepared = await prepareRepositoryFeedbackWorktree(configuredRepository, review, source);
+    database.connection.prepare('UPDATE review_queue SET feedback_workspace_path=?, updated_at=? WHERE id=?')
+      .run(prepared.path, new Date().toISOString(), reviewId);
+    recordActivity(database, 'feedback_workspace_prepared', `Prepared ${review.repository}#${review.number} for feedback fixes`, reviewId, { workspace: prepared.path });
+    return prepared;
+  }
   const root = resolveProjectPath(config.review.workspaceRoot);
   const [owner, repo] = review.repository.split('/');
   if (!owner || !repo) throw new Error('Invalid repository name');
@@ -182,7 +278,7 @@ export async function prepareFeedbackWorkspace(
   database.connection.prepare('UPDATE review_queue SET feedback_workspace_path=?, updated_at=? WHERE id=?')
     .run(workspace, new Date().toISOString(), reviewId);
   recordActivity(database, 'feedback_workspace_prepared', `Prepared ${review.repository}#${review.number} for feedback fixes`, reviewId, { workspace });
-  return { path: workspace, initialHeadSha: actualHead };
+  return { path: workspace, initialHeadSha: actualHead, pushGuard: 'disabled-push-url' };
 }
 
 export async function pushFeedbackWorkspace(
@@ -191,15 +287,18 @@ export async function pushFeedbackWorkspace(
   headRefName: string,
   expectedRemoteHead: string,
   signal?: AbortSignal,
+  pushGuard: FeedbackWorkspace['pushGuard'] = 'disabled-push-url',
 ): Promise<string> {
   signal?.throwIfAborted();
   const origin = (await checked('git', ['config', '--get', 'remote.origin.url'], workspace)).trim();
   if (repositoryFromRemote(origin)?.toLowerCase() !== repository.toLowerCase()) {
     throw new Error('The feedback workspace origin changed before the fix could be pushed');
   }
-  const pushUrl = (await checked('git', ['config', '--get-all', 'remote.origin.pushurl'], workspace)).trim();
-  if (pushUrl !== disabledFeedbackPushUrl) {
-    throw new Error('The feedback workspace push protection changed before the fix could be pushed');
+  if (pushGuard === 'disabled-push-url') {
+    const pushUrl = (await checked('git', ['config', '--get-all', 'remote.origin.pushurl'], workspace)).trim();
+    if (pushUrl !== disabledFeedbackPushUrl) {
+      throw new Error('The feedback workspace push protection changed before the fix could be pushed');
+    }
   }
   const status = await checked('git', ['status', '--porcelain'], workspace);
   if (status.trim()) throw new Error('The feedback agent left uncommitted changes in its workspace');
@@ -212,13 +311,19 @@ export async function pushFeedbackWorkspace(
     throw new Error('The pull request branch changed while the feedback fix was running');
   }
   signal?.throwIfAborted();
-  await checked('git', ['config', '--unset-all', 'remote.origin.pushurl'], workspace);
-  try {
+  if (pushGuard === 'disabled-push-url') {
+    await checked('git', ['config', '--unset-all', 'remote.origin.pushurl'], workspace);
+    try {
+      await checked('git', [
+        '-c', 'core.hooksPath=/dev/null', 'push', 'origin', `${newHead}:refs/heads/${headRefName}`,
+      ], workspace, 15 * 60_000, signal);
+    } finally {
+      await checked('git', ['config', '--replace-all', 'remote.origin.pushurl', disabledFeedbackPushUrl], workspace);
+    }
+  } else {
     await checked('git', [
       '-c', 'core.hooksPath=/dev/null', 'push', 'origin', `${newHead}:refs/heads/${headRefName}`,
     ], workspace, 15 * 60_000, signal);
-  } finally {
-    await checked('git', ['config', '--replace-all', 'remote.origin.pushurl', disabledFeedbackPushUrl], workspace);
   }
   return newHead;
 }
@@ -242,8 +347,42 @@ export async function cleanupWorkspace(
   const [owner, repo] = review.repository.split('/');
   if (!owner || !repo) throw new Error('Invalid repository name');
   if (review.feedback_workspace_path) {
-    assertWithin(root, review.feedback_workspace_path);
-    await rm(review.feedback_workspace_path, { recursive: true, force: true });
+    const workspace = review.feedback_workspace_path;
+    const gitEntry = await lstat(path.join(workspace, '.git')).catch(() => null);
+    if (gitEntry?.isFile()) {
+      const resolvedWorkspace = await realpath(workspace);
+      const worktreeRoot = path.dirname(resolvedWorkspace);
+      const repository = path.dirname(path.dirname(worktreeRoot));
+      if (
+        resolvedWorkspace !== path.resolve(workspace)
+        || path.basename(worktreeRoot) !== 'worktrees'
+        || path.basename(path.dirname(worktreeRoot)) !== '.claude'
+        || path.basename(resolvedWorkspace) !== `barbarian-feedback-pr${review.number}`
+      ) {
+        throw new Error('Refusing to remove an unrecognized repository-backed feedback worktree');
+      }
+      const origin = (await checked('git', ['config', '--get', 'remote.origin.url'], repository)).trim();
+      if (repositoryFromRemote(origin)?.toLowerCase() !== review.repository.toLowerCase()) {
+        throw new Error('Feedback worktree origin no longer matches its review repository');
+      }
+      const commonDirectory = await absoluteGitPath(
+        workspace,
+        (await checked('git', ['rev-parse', '--git-common-dir'], workspace)).trim(),
+      );
+      const repositoryCommonDirectory = await absoluteGitPath(
+        repository,
+        (await checked('git', ['rev-parse', '--git-common-dir'], repository)).trim(),
+      );
+      if (commonDirectory !== repositoryCommonDirectory) {
+        throw new Error('Feedback worktree Git directory no longer matches its repository');
+      }
+      await checked('git', ['worktree', 'remove', '--force', workspace], repository);
+      await checked('git', ['update-ref', '-d', `refs/barbarian/feedback/${review.number}`], repository);
+    } else if (isWithin(root, workspace)) {
+      await rm(workspace, { recursive: true, force: true });
+    } else if (existsSync(workspace)) {
+      throw new Error('Refusing to remove an unrecognized feedback workspace outside the configured workspace root');
+    }
     database.connection.prepare('UPDATE review_queue SET feedback_workspace_path=NULL, updated_at=? WHERE id=?')
       .run(new Date().toISOString(), reviewId);
   }
@@ -278,6 +417,16 @@ export async function cleanupCompletedWorkspaces(database: BarbarianDatabase, co
     SELECT id FROM review_queue
     WHERE (workspace_path IS NOT NULL OR feedback_workspace_path IS NOT NULL) AND status IN ('merged','closed')
   `).all() as Array<{ id: string }>;
-  for (const row of rows) await cleanupWorkspace(database, config, row.id);
-  return rows.length;
+  let cleaned = 0;
+  for (const row of rows) {
+    try {
+      await cleanupWorkspace(database, config, row.id);
+      cleaned += 1;
+    } catch (error) {
+      recordActivity(database, 'workspace_cleanup_failed', `Could not clean workspace for ${row.id}`, row.id, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return cleaned;
 }

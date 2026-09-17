@@ -17,8 +17,8 @@ const config: BarbarianConfig = {
   appearance: { theme: 'dark', fontSize: 'small', weapon: 'double-axe' },
   monitor: { intervalMinutes: 20, runOnStartup: true },
   repositories: [
-    { name: 'Acme/secondary', priority: 10, watchIssues: true, watchPullRequests: true, reviewSkill: 'cb1-code-review', labels: {} },
-    { name: 'Acme/primary', priority: 100, watchIssues: true, watchPullRequests: true, reviewSkill: 'cb1-code-review', labels: {} },
+    { name: 'Acme/secondary', priority: 10, watchIssues: true, watchPullRequests: true, path: '', reviewSkill: 'cb1-code-review', feedbackSkill: '', labels: {} },
+    { name: 'Acme/primary', priority: 100, watchIssues: true, watchPullRequests: true, path: '', reviewSkill: 'cb1-code-review', feedbackSkill: '', labels: {} },
   ],
   review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
   linear: { enabled: false, command: [] },
