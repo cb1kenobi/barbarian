@@ -4,6 +4,8 @@ Barbarian is a personal command center for developer work. It turns assigned iss
 
 The server binds to `127.0.0.1` by default, stores state in SQLite, and talks to GitHub through your existing authenticated `gh` CLI. No Barbarian account or hosted service is involved. It can explicitly bind to `0.0.0.0` for access over a trusted VPN, but Barbarian has no built-in authentication.
 
+![Barbarian dashboard](assets/screenshot.png)
+
 ## What works
 
 - A priority queue for assigned GitHub issues, with configurable repository/label weights and repository-neutral milestone, severity, and data-integrity signals.
@@ -134,6 +136,14 @@ rm ~/Library/LaunchAgents/io.barbarian.local.plist
 ```
 
 Service output is written to `~/Library/Caches/Barbarian/barbarian.log` and errors to `~/Library/Caches/Barbarian/barbarian-error.log`.
+
+## Settings
+
+Open **Settings** from the dashboard rail to edit profile, appearance, and the server listener. Changes are written to `~/Library/Application Support/Barbarian/config/barbarian.yaml`. Secrets in `.env` are never shown in the dialog.
+
+![Barbarian settings](assets/settings.png)
+
+Listener changes do not take effect until the server restarts. Repositories, priorities, review routing, and agent commands are also stored in that YAML file; see the next section for the repository and priority shape.
 
 ## Configure repositories and priority
 
