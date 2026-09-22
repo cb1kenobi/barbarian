@@ -747,7 +747,18 @@ export async function fetchGithubPullRequest(
   return convertPullRequest(repository, pullRequest, reviewedBy, reviewTarget);
 }
 
-export async function discoverGithub(config: BarbarianConfig): Promise<DiscoveryResult> {
+export interface GithubDiscoveryOptions {
+  onRepositoryStarted?: (repository: RepositoryConfig) => void;
+  onRepositoryFinished?: (
+    repository: RepositoryConfig,
+    result: { issues: number; pullRequests: number; error?: string },
+  ) => void;
+}
+
+export async function discoverGithub(
+  config: BarbarianConfig,
+  options: GithubDiscoveryOptions = {},
+): Promise<DiscoveryResult> {
   const discoveredAt = new Date().toISOString();
   const githubLogin = await resolveGithubLogin(config);
   const issues: DiscoveredIssue[] = [];
@@ -763,6 +774,7 @@ export async function discoverGithub(config: BarbarianConfig): Promise<Discovery
   }
 
   for (const repository of config.repositories) {
+    options.onRepositoryStarted?.(repository);
     try {
       const [issueNodes, pullRequestNodes] = await Promise.all([
         repository.watchIssues ? queryRepositoryIssues(repository) : Promise.resolve([]),
@@ -782,8 +794,14 @@ export async function discoverGithub(config: BarbarianConfig): Promise<Discovery
           issues.push(convertIssue(repository, node));
         }
       }
+      options.onRepositoryFinished?.(repository, {
+        issues: repository.watchIssues ? issueNodes.length : 0,
+        pullRequests: repository.watchPullRequests ? pullRequestNodes.length : 0,
+      });
     } catch (error) {
-      warnings.push(`${repository.name}: ${error instanceof Error ? error.message : String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      warnings.push(`${repository.name}: ${message}`);
+      options.onRepositoryFinished?.(repository, { issues: 0, pullRequests: 0, error: message });
     }
   }
 

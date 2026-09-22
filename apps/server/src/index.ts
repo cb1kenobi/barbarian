@@ -29,11 +29,18 @@ const instanceLock = await acquireInstanceLock();
 const database = new BarbarianDatabase();
 const monitorRuntime: MonitorRuntime = { nextSyncAt: null };
 const runtime = new AgentRuntime(startupConfig.agents.maxConcurrent);
-let appLogger: { error(error: unknown, message?: string): void } | undefined;
+let appLogger: {
+  error(error: unknown, message?: string): void;
+  info(details: unknown, message?: string): void;
+} | undefined;
 const dispatcher = new ReviewDispatcher(database, () => configStore.get(), runtime, {
   error(error, message) {
     if (appLogger) appLogger.error(error, message);
     else console.error(message || 'review dispatcher failed', error);
+  },
+  info(details, message) {
+    if (appLogger) appLogger.info(details, message);
+    else console.info(message || 'review dispatcher', details);
   },
 });
 const feedbackDispatcher = new FeedbackDispatcher(database, () => configStore.get(), runtime, {
@@ -96,7 +103,9 @@ async function monitorTick(): Promise<void> {
   monitorRuntime.nextSyncAt = null;
   try {
     await synchronize(database, config, {
-      onDiscoveryApplied() {
+      log: app.log,
+      onDiscoveryApplied(discovery) {
+        dispatcher.logSyncDecisions(discovery.pullRequests.map((pullRequest) => `github:${pullRequest.repository}#${pullRequest.number}`));
         dispatcher.cancelDraftReviews();
         void dispatcher.pump();
       },

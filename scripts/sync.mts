@@ -7,7 +7,12 @@ import { cleanupCompletedWorkspaces } from '../apps/server/src/workspaces.ts';
 const config = await loadConfig();
 const database = new BarbarianDatabase();
 try {
-  const result = await synchronize(database, config);
+  const result = await synchronize(database, config, {
+    log: {
+      info(details, message) { console.log(message || 'sync', details); },
+      error(error, message) { console.error(message || 'sync failed', error); },
+    },
+  });
   const cleaned = config.review.autoCleanup ? await cleanupCompletedWorkspaces(database, config) : 0;
   console.log(JSON.stringify({ issues: result.issues.length, pullRequests: result.pullRequests.length, warnings: result.warnings, cleaned }, null, 2));
 } finally {

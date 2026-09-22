@@ -9,13 +9,17 @@ import { authenticatedGithubLogin } from './github-identity.js';
 interface CandidateRow {
   id: string;
   status: string;
+  author: string;
   head_sha: string;
   discussion_watermark: string;
   last_reviewed_sha: string | null;
   last_reviewed_watermark: string | null;
   manual_requested_at: string | null;
   manual_provider: string | null;
+  claim_owner: string | null;
   review_paused: number;
+  ignored_at: string | null;
+  is_draft: number;
   attempt_count: number;
   attempt_head_sha: string | null;
   attempt_watermark: string | null;
@@ -32,6 +36,12 @@ type ReviewRunner = (
 interface DispatcherLog {
   error(error: unknown, message?: string): void;
   info?(details: unknown, message?: string): void;
+}
+
+interface ReviewPlan {
+  trigger: ReviewClaim['trigger'] | null;
+  run: boolean;
+  reason: string;
 }
 
 export function reviewTrigger(row: Pick<
@@ -143,8 +153,37 @@ export class ReviewDispatcher {
         review_paused=0, status=CASE WHEN claim_owner IS NULL THEN 'unreviewed' ELSE status END, updated_at=?
       WHERE id=? AND remote_state='OPEN' AND ignored_at IS NULL
     `).run(now, agentId || null, now, reviewId);
-    if (result.changes) void this.pump();
+    if (result.changes) {
+      this.log.info?.({ reviewId, agentId: agentId || null }, 'manual code review requested');
+      void this.pump();
+    }
     return Boolean(result.changes);
+  }
+
+  logSyncDecisions(reviewIds: string[]): void {
+    const config = this.configSource();
+    const reviewer = authenticatedGithubLogin(
+      this.database,
+      config.profile.githubLogin || config.review.requestedReviewer,
+    ).toLowerCase();
+    const now = new Date().toISOString();
+    for (const reviewId of new Set(reviewIds)) {
+      const row = this.database.connection.prepare(`
+        SELECT id, status, author, head_sha, discussion_watermark, last_reviewed_sha,
+          last_reviewed_watermark, manual_requested_at, manual_provider, claim_owner,
+          review_paused, ignored_at, is_draft, attempt_count, attempt_head_sha,
+          attempt_watermark, retry_after
+        FROM review_queue WHERE id=? AND remote_state='OPEN'
+      `).get(reviewId) as CandidateRow | undefined;
+      if (!row) continue;
+      const plan = this.reviewPlan(row, config, reviewer, now);
+      this.log.info?.({
+        reviewId,
+        trigger: plan.trigger,
+        automatic: plan.trigger !== 'manual',
+        reason: plan.reason,
+      }, plan.run ? 'code review will run' : 'code review skipped');
+    }
   }
 
   cancelReview(reviewId: string): { found: boolean; stopped: boolean; cancelled: number } {
@@ -241,14 +280,62 @@ export class ReviewDispatcher {
       while (!this.stopped && this.runtime.availableSlots > 0 && this.activeGroups < config.agents.maxConcurrent) {
         const claim = this.claimNext(config);
         if (!claim) break;
+        this.log.info?.({
+          reviewId: claim.reviewId,
+          trigger: claim.trigger,
+          attempt: claim.attemptCount,
+          headSha: claim.headSha,
+          agentId: claim.agentId || null,
+        }, claim.trigger === 'manual' ? 'manual code review dispatched' : 'automatic code review dispatched');
         this.publishReviewChanged(claim.reviewId);
         if (this.runnerSchedulesAgents) this.activeGroups += 1;
         const running = this.runnerSchedulesAgents
           ? this.runtime.track((signal) => this.runner(this.database, config, claim, signal), claim.reviewId)
           : this.runtime.run((signal) => this.runner(this.database, config, claim, signal), claim.reviewId);
         void running
+          .then(() => {
+            const result = this.database.connection.prepare(`
+              SELECT status, findings_count, plain_summary, last_agent_error, retry_after
+              FROM review_queue WHERE id=?
+            `).get(claim.reviewId) as {
+              status: string;
+              findings_count: number;
+              plain_summary: string;
+              last_agent_error: string | null;
+              retry_after: string | null;
+            } | undefined;
+            this.log.info?.({
+              reviewId: claim.reviewId,
+              trigger: claim.trigger,
+              status: result?.status || 'unknown',
+              findings: result?.findings_count ?? null,
+              summary: result?.plain_summary || null,
+              error: result?.last_agent_error || null,
+              retryAfter: result?.retry_after || null,
+            }, 'code review completed');
+          })
           .catch((error) => {
-            if (!(error instanceof Error && error.name === 'AbortError')) {
+            if (error instanceof Error && error.name === 'AbortError') {
+              this.log.info?.({
+                reviewId: claim.reviewId,
+                trigger: claim.trigger,
+                reason: error.message || 'code review was cancelled',
+              }, 'code review cancelled');
+            } else {
+              const result = this.database.connection.prepare(`
+                SELECT status, last_agent_error, retry_after FROM review_queue WHERE id=?
+              `).get(claim.reviewId) as {
+                status: string;
+                last_agent_error: string | null;
+                retry_after: string | null;
+              } | undefined;
+              this.log.info?.({
+                reviewId: claim.reviewId,
+                trigger: claim.trigger,
+                status: result?.status || 'agent_failed',
+                error: result?.last_agent_error || (error instanceof Error ? error.message : String(error)),
+                retryAfter: result?.retry_after || null,
+              }, 'code review failed');
               this.log.error(error, `review agent failed for ${claim.reviewId}`);
             }
           })
@@ -284,9 +371,9 @@ export class ReviewDispatcher {
     this.database.connection.exec('BEGIN IMMEDIATE');
     try {
       const rows = this.database.connection.prepare(`
-        SELECT id, status, head_sha, discussion_watermark, last_reviewed_sha, last_reviewed_watermark,
-          manual_requested_at, manual_provider, review_paused, attempt_count,
-          attempt_head_sha, attempt_watermark, retry_after
+        SELECT id, status, author, head_sha, discussion_watermark, last_reviewed_sha, last_reviewed_watermark,
+          manual_requested_at, manual_provider, claim_owner, review_paused, ignored_at, is_draft,
+          attempt_count, attempt_head_sha, attempt_watermark, retry_after
         FROM review_queue
         WHERE remote_state='OPEN' AND ignored_at IS NULL AND claim_owner IS NULL
           AND status NOT IN ('merged','closed')
@@ -296,20 +383,11 @@ export class ReviewDispatcher {
         LIMIT 50
       `).all(config.agents.autoReview ? 1 : 0, reviewer, reviewer) as unknown as CandidateRow[];
       for (const row of rows) {
-        const trigger = reviewTrigger(row);
-        if (!trigger || (row.status === 'approved' && trigger !== 'manual' && trigger !== 'new_commits')) continue;
+        const plan = this.reviewPlan(row, config, reviewer, now);
+        if (!plan.run || !plan.trigger) continue;
+        const trigger = plan.trigger;
         const sameAttempt = row.attempt_head_sha === row.head_sha && row.attempt_watermark === row.discussion_watermark;
         const attemptCount = sameAttempt ? row.attempt_count + 1 : 1;
-        if (trigger !== 'manual') {
-          if (sameAttempt && row.attempt_count >= config.agents.maxAutomaticAttempts) continue;
-          if (sameAttempt && row.retry_after && row.retry_after > now) continue;
-          const since = new Date(Date.now() - 60 * 60_000).toISOString();
-          const recentRuns = Number((this.database.connection.prepare(`
-            SELECT COUNT(DISTINCT COALESCE(reviewed_head_sha, '') || ':' || COALESCE(reviewed_watermark, '')) AS total FROM agent_runs
-            WHERE review_id=? AND task LIKE 'code_review:%' AND started_at>=?
-          `).get(row.id, since) as { total: number }).total);
-          if (recentRuns >= config.agents.maxRunsPerPullRequestPerHour) continue;
-        }
         const claimOwner = `${this.owner}:${randomUUID()}`;
         const changed = this.database.connection.prepare(`
           UPDATE review_queue SET claim_owner=?, claimed_at=?, status='agent_working',
@@ -336,6 +414,47 @@ export class ReviewDispatcher {
       this.database.connection.exec('ROLLBACK');
       throw error;
     }
+  }
+
+  private reviewPlan(
+    row: CandidateRow,
+    config: BarbarianConfig,
+    reviewer: string,
+    now: string,
+  ): ReviewPlan {
+    const trigger = reviewTrigger(row);
+    if (row.claim_owner) return { trigger, run: false, reason: 'a code review is already in progress' };
+    if (row.ignored_at) return { trigger, run: false, reason: 'the pull request is ignored' };
+    if (config.agents.codeReview.length === 0) return { trigger, run: false, reason: 'no code review agents are configured' };
+    if (!trigger) return { trigger, run: false, reason: 'the current commits and discussion were already reviewed' };
+    if (trigger === 'manual') return { trigger, run: true, reason: 'a manual code review was requested' };
+    if (!config.agents.autoReview) return { trigger, run: false, reason: 'automatic code review is disabled' };
+    if (!reviewer) return { trigger, run: false, reason: 'no GitHub reviewer is configured' };
+    if (row.is_draft) return { trigger, run: false, reason: 'the pull request is a draft' };
+    if (row.review_paused) return { trigger, run: false, reason: 'automatic code review is paused for this pull request' };
+    if (row.author.toLowerCase() === reviewer) {
+      return { trigger, run: false, reason: `the pull request was authored by ${reviewer}` };
+    }
+    if (row.status === 'approved' && trigger !== 'new_commits') {
+      return { trigger, run: false, reason: 'the current pull request head is already approved' };
+    }
+    const sameAttempt = row.attempt_head_sha === row.head_sha
+      && row.attempt_watermark === row.discussion_watermark;
+    if (sameAttempt && row.attempt_count >= config.agents.maxAutomaticAttempts) {
+      return { trigger, run: false, reason: 'the maximum automatic attempts were reached for the current inputs' };
+    }
+    if (sameAttempt && row.retry_after && row.retry_after > now) {
+      return { trigger, run: false, reason: `waiting to retry after ${row.retry_after}` };
+    }
+    const since = new Date(new Date(now).getTime() - 60 * 60_000).toISOString();
+    const recentRuns = Number((this.database.connection.prepare(`
+      SELECT COUNT(DISTINCT COALESCE(reviewed_head_sha, '') || ':' || COALESCE(reviewed_watermark, '')) AS total
+      FROM agent_runs WHERE review_id=? AND task LIKE 'code_review:%' AND started_at>=?
+    `).get(row.id, since) as { total: number }).total);
+    if (recentRuns >= config.agents.maxRunsPerPullRequestPerHour) {
+      return { trigger, run: false, reason: 'the hourly automatic review limit was reached' };
+    }
+    return { trigger, run: true, reason: `eligible because of ${trigger.replaceAll('_', ' ')}` };
   }
 
   private scheduleRetry(): void {

@@ -73,6 +73,58 @@ describe('reviewTrigger', () => {
 });
 
 describe('ReviewDispatcher', () => {
+  it('logs sync decisions, manual dispatch, and the completed review result', async () => {
+    const db = database();
+    const automaticId = seedReview(db, 18);
+    const draftId = seedReview(db, 19);
+    db.connection.prepare('UPDATE review_queue SET is_draft=1 WHERE id=?').run(draftId);
+    const runtime = new AgentRuntime(1);
+    const messages: Array<{ details: unknown; message: string | undefined }> = [];
+    const runner = async (runnerDb: BarbarianDatabase, _config: BarbarianConfig, claim: ReviewClaim) => {
+      runnerDb.connection.prepare(`
+        UPDATE review_queue SET status='ready_to_merge', findings_count=0, plain_summary='No issues found.',
+          last_reviewed_sha=head_sha, last_reviewed_watermark=discussion_watermark,
+          claim_owner=NULL, claimed_at=NULL, manual_requested_at=NULL, manual_provider=NULL
+        WHERE id=? AND claim_owner=?
+      `).run(claim.reviewId, claim.owner);
+    };
+    const dispatcher = new ReviewDispatcher(db, config(1), runtime, {
+      error: () => undefined,
+      info: (details, message) => messages.push({ details, message }),
+    }, runner);
+
+    dispatcher.logSyncDecisions([automaticId, draftId]);
+    expect(messages).toContainEqual({
+      details: expect.objectContaining({ reviewId: automaticId, trigger: 'new_pr', reason: 'eligible because of new pr' }),
+      message: 'code review will run',
+    });
+    expect(messages).toContainEqual({
+      details: expect.objectContaining({ reviewId: draftId, reason: 'the pull request is a draft' }),
+      message: 'code review skipped',
+    });
+
+    expect(dispatcher.requestManual(automaticId, 'fake')).toBe(true);
+    await waitFor(() => messages.some(({ message }) => message === 'code review completed'));
+    expect(messages).toContainEqual({
+      details: { reviewId: automaticId, agentId: 'fake' },
+      message: 'manual code review requested',
+    });
+    expect(messages).toContainEqual({
+      details: expect.objectContaining({ reviewId: automaticId, trigger: 'manual', agentId: 'fake' }),
+      message: 'manual code review dispatched',
+    });
+    expect(messages).toContainEqual({
+      details: expect.objectContaining({
+        reviewId: automaticId, status: 'ready_to_merge', findings: 0, summary: 'No issues found.',
+      }),
+      message: 'code review completed',
+    });
+
+    dispatcher.stop();
+    await runtime.shutdown();
+    db.close();
+  });
+
   it('does not request, claim, or schedule retries for an ignored pull request', async () => {
     const db = database();
     const id = seedReview(db, 5);

@@ -331,7 +331,11 @@ export async function applyDiscovery(
 let activeSync: Promise<DiscoveryResult> | null = null;
 
 export interface SynchronizeOptions {
-  onDiscoveryApplied?: () => void;
+  onDiscoveryApplied?: (discovery: DiscoveryResult) => void;
+  log?: {
+    info(details: unknown, message?: string): void;
+    error?(error: unknown, message?: string): void;
+  };
 }
 
 export function synchronize(
@@ -346,14 +350,53 @@ export function synchronize(
       "INSERT INTO sync_runs(started_at, status) VALUES (?, 'running')",
     ).run(startedAt);
     const syncId = Number(insert.lastInsertRowid);
+    options.log?.info({ syncId, repositories: config.repositories.map((repository) => repository.name) }, 'sync started');
     try {
-      const discovery = await discoverGithub(config);
+      const discovery = await discoverGithub(config, {
+        onRepositoryStarted(repository) {
+          options.log?.info({
+            syncId,
+            repository: repository.name,
+            watchIssues: repository.watchIssues,
+            watchPullRequests: repository.watchPullRequests,
+          }, 'sync scanning repository');
+        },
+        onRepositoryFinished(repository, result) {
+          options.log?.info({ syncId, repository: repository.name, ...result }, result.error
+            ? 'sync repository scan failed'
+            : 'sync repository scan complete');
+        },
+      });
+      for (const pullRequest of discovery.pullRequests) {
+        options.log?.info({
+          syncId,
+          reviewId: reviewId(pullRequest),
+          repository: pullRequest.repository,
+          number: pullRequest.number,
+          title: pullRequest.title,
+          author: pullRequest.author,
+          headSha: pullRequest.headSha,
+          isDraft: pullRequest.isDraft,
+        }, 'sync found pull request');
+      }
       if (config.linear.enabled) {
         try { discovery.issues.push(...await discoverLinear(config)); }
         catch (error) { discovery.warnings.push(`linear: ${error instanceof Error ? error.message : String(error)}`); }
       }
       await applyDiscovery(database, config, discovery);
-      options.onDiscoveryApplied?.();
+      for (const pullRequest of discovery.pullRequests) {
+        const id = reviewId(pullRequest);
+        if (!database.connection.prepare('SELECT 1 FROM review_queue WHERE id=?').get(id)) {
+          options.log?.info({
+            syncId,
+            reviewId: id,
+            repository: pullRequest.repository,
+            number: pullRequest.number,
+            reason: 'not relevant to the configured reviewer, fallback teams, author, or existing review history',
+          }, 'code review skipped');
+        }
+      }
+      options.onDiscoveryApplied?.(discovery);
       const trackedReviews = database.connection.prepare(`
         SELECT id FROM review_queue
         WHERE remote_state='OPEN' AND ignored_at IS NULL ORDER BY updated_at DESC
@@ -384,12 +427,19 @@ export function synchronize(
       database.connection.prepare(`
         UPDATE sync_runs SET finished_at=?, status='complete', issues_seen=?, prs_seen=?, warnings=? WHERE id=?
       `).run(new Date().toISOString(), discovery.issues.length, discovery.pullRequests.length, JSON.stringify(discovery.warnings), syncId);
+      options.log?.info({
+        syncId,
+        issues: discovery.issues.length,
+        pullRequests: discovery.pullRequests.length,
+        warnings: discovery.warnings,
+      }, 'sync complete');
       return discovery;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       database.connection.prepare(`
         UPDATE sync_runs SET finished_at=?, status='failed', error=? WHERE id=?
       `).run(new Date().toISOString(), message, syncId);
+      options.log?.error?.(error, `sync ${syncId} failed`);
       throw error;
     } finally {
       activeSync = null;

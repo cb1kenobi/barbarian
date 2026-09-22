@@ -839,7 +839,9 @@ export async function createApp(
     try {
       const config = configStore.get();
       const result = await synchronize(database, config, {
-        onDiscoveryApplied() {
+        log: app.log,
+        onDiscoveryApplied(discovery) {
+          dispatcher.logSyncDecisions?.(discovery.pullRequests.map((pullRequest) => `github:${pullRequest.repository}#${pullRequest.number}`));
           dispatcher.cancelDraftReviews();
           void dispatcher.pump();
         },
@@ -1408,6 +1410,12 @@ export async function createApp(
       UPDATE local_branches SET status='agent_working', last_agent_error=NULL, updated_at=? WHERE id=?
     `).run(new Date().toISOString(), id);
     activeWritableBranches.add(id);
+    app.log.info({
+      branchId: id,
+      repository: branch.repository,
+      branch: branch.branch_name,
+      agentId: agentId || null,
+    }, 'manual local branch code review dispatched');
     void runtime.run(
       (signal) => runLocalBranchReview(
         database, reviewConfig, id, signal, agentId, { currentConfig: () => configStore.get() },
