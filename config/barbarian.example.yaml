@@ -60,7 +60,7 @@ agents:
   autoAddressFeedback: false
   maxConcurrent: 2
   maxAutomaticAttempts: 3
-  retryBaseMinutes: 5
+  retryBaseMinutes: 5 # feedback-fix retries; failed code reviews retry after 60 seconds
   maxRunsPerPullRequestPerHour: 3
   providers:
     codex:

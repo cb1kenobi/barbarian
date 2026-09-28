@@ -236,7 +236,7 @@ agents:
   autoAddressFeedback: false # opt in to writable fix agents on your own PRs
   maxConcurrent: 2
   maxAutomaticAttempts: 3
-  retryBaseMinutes: 5
+  retryBaseMinutes: 5 # feedback-fix retries; failed code reviews retry after 60 seconds
   maxRunsPerPullRequestPerHour: 3
   providers:
     codex:
@@ -265,7 +265,7 @@ Provider API keys are optional because Barbarian launches local CLI programs. A 
 
 Automatic review is off by default for existing installations so an upgrade cannot begin spending agent usage unexpectedly. Set `agents.autoReview: true` to enable it. Barbarian runs agents only while an eligible event is being handled; a healthy idle system can therefore show zero running agents even though monitoring remains active.
 
-The dispatchers atomically claim each PR, limit review, feedback-fix, and chat agents to `maxConcurrent`, retry failures with bounded exponential backoff, and checkpoint the head SHA and discussion watermark captured before launch. A commit or trusted reply arriving during an agent run remains eligible for the next pass. Automatic reviews never clone, install, build, or execute the PR branch.
+The dispatchers atomically claim each PR, limit review, feedback-fix, and chat agents to `maxConcurrent`, retry failed code reviews every 60 seconds, retry feedback fixes with bounded exponential backoff, and checkpoint the head SHA and discussion watermark captured before launch. A commit or trusted reply arriving during an agent run remains eligible for the next pass. Automatic reviews never clone, install, build, or execute the PR branch.
 
 GitHub authentication stays in the Barbarian server. The server captures the PR metadata, exact diff, and existing discussion, then sends that untrusted JSON bundle to the read-only reviewer without `GH_TOKEN` or `GITHUB_TOKEN`. Barbarian accepts only a strict machine-readable result, verifies that every proposed inline comment points to a line in the captured diff, and publishes the review itself. The agent never needs GitHub credentials.
 

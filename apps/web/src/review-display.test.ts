@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   authoredReviewDisplayStatus,
   countReviewsNeedingApproval,
+  reviewCardStatuses,
   reviewDisplayStatus,
   reviewStatusGuide,
   statusLabel,
@@ -21,6 +22,13 @@ describe('review display status', () => {
   it('uses the computed display status when the server provides it', () => {
     expect(reviewDisplayStatus({ status: 'unreviewed', display_status: 'partially_reviewed' }))
       .toBe('partially_reviewed');
+  });
+
+  it('keeps an agent failure visible when another display status would mask it', () => {
+    expect(reviewCardStatuses({ status: 'agent_failed', display_status: 'approved' }))
+      .toEqual(['agent_failed', 'approved']);
+    expect(reviewCardStatuses({ status: 'agent_failed', display_status: 'agent_failed' }))
+      .toEqual(['agent_failed']);
   });
 
   it('supports payloads from servers that do not provide display_status yet', () => {

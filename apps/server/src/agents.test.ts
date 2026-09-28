@@ -450,8 +450,10 @@ describe('runReviewAgent', () => {
     database.close();
   });
 
-  it('releases failed claims with backoff instead of spinning', async () => {
+  it('logs failed claims and schedules their retry for 60 seconds later', async () => {
     const { database, config, claim } = setup("console.log('no sentinel')");
+    config.agents.retryBaseMinutes = 17;
+    const failedAt = Date.now();
     await expect(runReviewAgent(database, config, claim, undefined, dependencies)).rejects.toThrow('did not emit');
     const row = database.connection.prepare(`
       SELECT status, claim_owner, attempt_count, retry_after, last_agent_error FROM review_queue WHERE id=?
@@ -460,7 +462,17 @@ describe('runReviewAgent', () => {
     expect(row.claim_owner).toBeNull();
     expect(row.attempt_count).toBe(1);
     expect(row.retry_after).not.toBeNull();
+    expect(Date.parse(row.retry_after!) - failedAt).toBeGreaterThanOrEqual(59_000);
+    expect(Date.parse(row.retry_after!) - failedAt).toBeLessThanOrEqual(61_000);
     expect(row.last_agent_error).toContain('did not emit');
+    const failure = database.connection.prepare(`
+      SELECT kind, summary, payload_json FROM activity_events
+      WHERE subject_id=? AND kind='agent_review_failed'
+    `).get(claim.reviewId) as { kind: string; summary: string; payload_json: string };
+    expect(failure).toMatchObject({ kind: 'agent_review_failed', summary: expect.stringContaining('did not emit') });
+    expect(JSON.parse(failure.payload_json)).toMatchObject({
+      error: expect.stringContaining('did not emit'), attempt: 1, retryAfter: row.retry_after,
+    });
     database.close();
   });
 

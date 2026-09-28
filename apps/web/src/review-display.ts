@@ -48,6 +48,13 @@ export function reviewDisplayStatus(review: ReviewStatusSource): string {
   return 'unreviewed';
 }
 
+export function reviewCardStatuses(review: ReviewStatusSource): string[] {
+  const displayStatus = reviewDisplayStatus(review);
+  return review.status === 'agent_failed' && displayStatus !== 'agent_failed'
+    ? ['agent_failed', displayStatus]
+    : [displayStatus];
+}
+
 export function authoredReviewDisplayStatus(review: AuthoredReviewStatusSource): string {
   if (review.needs_input) return 'needs_input';
   if (review.has_new_feedback) return 'new_feedback';

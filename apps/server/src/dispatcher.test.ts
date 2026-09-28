@@ -125,6 +125,44 @@ describe('ReviewDispatcher', () => {
     db.close();
   });
 
+  it('records, logs, and schedules a retry when the review runner fails unexpectedly', async () => {
+    const db = database();
+    const id = seedReview(db, 20);
+    const errors: Array<{ error: unknown; message: string | undefined }> = [];
+    const currentConfig = config(1);
+    currentConfig.agents.retryBaseMinutes = 12;
+    const failedAt = Date.now();
+    const dispatcher = new ReviewDispatcher(
+      db,
+      currentConfig,
+      new AgentRuntime(1),
+      { error: (error, message) => errors.push({ error, message }) },
+      async () => { throw new Error('local reviewer crashed'); },
+    );
+
+    await dispatcher.pump();
+    await waitFor(() => Boolean(errors.length));
+    const row = db.connection.prepare(`
+      SELECT status, claim_owner, last_agent_error, retry_after FROM review_queue WHERE id=?
+    `).get(id) as { status: string; claim_owner: string | null; last_agent_error: string; retry_after: string };
+    expect(row).toMatchObject({
+      status: 'agent_failed', claim_owner: null, last_agent_error: 'local reviewer crashed',
+    });
+    expect(Date.parse(row.retry_after) - failedAt).toBeGreaterThanOrEqual(59_000);
+    expect(Date.parse(row.retry_after) - failedAt).toBeLessThanOrEqual(61_000);
+    expect(errors).toContainEqual({
+      error: expect.objectContaining({ message: 'local reviewer crashed' }),
+      message: `review agent failed for ${id}`,
+    });
+    expect(db.connection.prepare(`
+      SELECT COUNT(*) AS total FROM activity_events
+      WHERE subject_id=? AND kind='agent_review_failed'
+    `).get(id)).toEqual({ total: 1 });
+
+    dispatcher.stop();
+    db.close();
+  });
+
   it('does not request, claim, or schedule retries for an ignored pull request', async () => {
     const db = database();
     const id = seedReview(db, 5);

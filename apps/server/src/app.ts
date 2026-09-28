@@ -345,6 +345,7 @@ interface ReviewTimelineEvent {
   created_at: string;
   agents: ReviewTimelineAgent[];
   outcome: ReviewTimelineOutcome | null;
+  error: string | null;
 }
 
 function reviewRoundLabel(index: number, trigger: string): string {
@@ -360,7 +361,7 @@ function reviewTimeline(database: BarbarianDatabase, config: BarbarianConfig, re
     SELECT id, kind, payload_json, created_at FROM activity_events
     WHERE subject_id=? AND kind IN (
       'review_discovered', 'review_ready', 'review_updated', 'review_started',
-      'agent_review_completed', 'agent_review_cancelled', 'feedback_fix_started',
+      'agent_review_completed', 'agent_review_failed', 'agent_review_cancelled', 'feedback_fix_started',
       'feedback_fix_completed', 'feedback_fix_reviewed', 'pr_merged', 'pr_closed'
     )
     ORDER BY created_at ASC, id ASC
@@ -392,21 +393,26 @@ function reviewTimeline(database: BarbarianDatabase, config: BarbarianConfig, re
     });
   }
   const rounds = [...groupedRuns.values()].sort((left, right) => left.startedAt.localeCompare(right.startedAt));
+  const agentsForActivity = (payload: Record<string, unknown>, fallbackIndex: number): ReviewTimelineAgent[] => {
+    if (typeof payload.owner === 'string') return groupedRuns.get(payload.owner)?.agents || [];
+    return rounds[fallbackIndex]?.agents || [];
+  };
   let startedIndex = 0;
-  let completedIndex = 0;
+  let finishedIndex = 0;
   const events: ReviewTimelineEvent[] = [];
   for (const activity of activities) {
     const payload = parseJson<Record<string, unknown>>(activity.payload_json || '{}');
     let label = '';
     let agents: ReviewTimelineAgent[] = [];
     let outcome: ReviewTimelineOutcome | null = null;
+    let error: string | null = null;
     switch (activity.kind) {
       case 'review_discovered': label = 'Barbarian discovered this PR'; break;
       case 'review_ready': label = 'PR marked ready for review'; break;
       case 'review_updated': label = 'PR updated with new commits'; break;
       case 'review_started':
         label = reviewRoundLabel(startedIndex, String(payload.trigger || ''));
-        agents = rounds[startedIndex]?.agents || [];
+        agents = agentsForActivity(payload, startedIndex);
         startedIndex += 1;
         break;
       case 'agent_review_completed':
@@ -420,14 +426,20 @@ function reviewTimeline(database: BarbarianDatabase, config: BarbarianConfig, re
             }
             : null;
         }
-        label = completedIndex === 0 ? 'Initial AI review completed' : 'AI re-review completed';
+        label = finishedIndex === 0 ? 'Initial AI review completed' : 'AI re-review completed';
         if (outcome) {
           label += outcome.verdict === 'ready'
             ? ' — ready'
             : ` — ${outcome.findings} ${outcome.findings === 1 ? 'finding' : 'findings'}`;
         }
-        agents = rounds[completedIndex]?.agents || [];
-        completedIndex += 1;
+        agents = agentsForActivity(payload, finishedIndex);
+        finishedIndex += 1;
+        break;
+      case 'agent_review_failed':
+        label = finishedIndex === 0 ? 'Initial AI review failed' : 'AI re-review failed';
+        agents = agentsForActivity(payload, finishedIndex);
+        error = typeof payload.error === 'string' ? payload.error : 'The AI review failed without recording an error.';
+        finishedIndex += 1;
         break;
       case 'agent_review_cancelled': label = 'AI review stopped'; break;
       case 'feedback_fix_started': label = 'AI started addressing feedback'; break;
@@ -445,6 +457,7 @@ function reviewTimeline(database: BarbarianDatabase, config: BarbarianConfig, re
         : activity.created_at,
       agents,
       outcome,
+      error,
     });
   }
   return events.sort((left, right) => left.created_at.localeCompare(right.created_at));

@@ -64,7 +64,7 @@ export function buildReviewAssessment(review: ReviewAssessmentInput, findings: S
 
   let message = 'No AI review has been completed for this version yet.';
   if (review.status === 'agent_working') message = 'An AI reviewer is checking this pull request now.';
-  else if (review.status === 'agent_failed') message = 'The AI reviewer failed. Barbarian will retry with backoff or you can start it manually.';
+  else if (review.status === 'agent_failed') message = 'The AI reviewer failed. Barbarian will retry in 60 seconds or you can start it manually.';
   else if (stale) message = 'New commits were pushed after the last AI review. It needs another pass.';
   else if (displayStatus === 'partially_reviewed') message = 'Another reviewer approved this pull request, but your approval is still pending.';
   else if (open > 0) message = `${open} of ${total} AI review ${total === 1 ? 'comment is' : 'comments are'} still open.`;

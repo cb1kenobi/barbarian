@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { createPortal } from 'react-dom';
 import { formatLastSync, formatNextSync, formatSyncTimestamp, type SyncRun } from './sync-time';
 import { sortReviews, type ReviewSort } from './review-sort';
-import { authoredReviewDisplayStatus, countReviewsNeedingApproval, reviewDisplayStatus, reviewStatusGuide, statusLabel, statusTone } from './review-display';
+import { authoredReviewDisplayStatus, countReviewsNeedingApproval, reviewCardStatuses, reviewDisplayStatus, reviewStatusGuide, statusLabel, statusTone } from './review-display';
 import { formatElapsed } from './elapsed-time';
 import { applyAppearance, SettingsModal, type AppearanceConfig } from './settings';
 import { copyStatusUpdate, editStatusText } from './status-editor';
@@ -68,6 +68,7 @@ interface ReviewTimelineEvent {
     finished_at: string | null; output: string; error: string | null;
   }>;
   outcome: null | { verdict: 'ready' | 'issues'; findings: number; summary: string };
+  error: string | null;
 }
 
 interface ReviewAgentOption {
@@ -541,10 +542,11 @@ function FeedbackBadges({ review, onAgentFailed }: { review: Pick<Review, 'appro
 }
 
 function ReviewBadges({ review, onAgentFailed }: { review: Pick<Review, 'is_draft' | 'status' | 'display_status'>; onAgentFailed?: () => void }) {
-  const status = review.is_draft ? review.status : reviewDisplayStatus(review);
+  const statuses = review.is_draft ? [review.status] : reviewCardStatuses(review);
   return <span className="feedback-badges">
     {review.is_draft && <ReviewStatusBadge status="draft" />}
-    {(!review.is_draft || status !== 'unreviewed') && <ReviewStatusBadge status={status} {...(onAgentFailed ? { onAgentFailed } : {})} />}
+    {statuses.map((status) => (!review.is_draft || status !== 'unreviewed')
+      && <ReviewStatusBadge key={status} status={status} {...(onAgentFailed ? { onAgentFailed } : {})} />)}
   </span>;
 }
 
@@ -937,7 +939,7 @@ function ReviewDrawer({ id, timezone, now, onClose, onChanged, onAgentFailed }: 
       <form className="chat-form" onSubmit={(event) => void send(event)}>{agentWorkspace && <label className="chat-workspace"><input type="checkbox" checked={workspaceWrite} onChange={(event) => setWorkspaceWrite(event.target.checked)} /><span>Work in local branch <strong>{agentWorkspace.branchName}</strong><small>{agentWorkspace.path}</small></span></label>}<textarea value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={submitOnEnter} placeholder={review.needs_input ? "Answer Barbarian’s question to resume the feedback fix…" : "Ask about this pull request…"} /></form></section>
       : <section className="review-timeline" role="tabpanel">{timeline.length ? <ol>{timeline.map((event) => <li key={event.id}>
         <time title={formatSyncTimestamp(event.created_at, timezone)}>{formatTimelineTime(event.created_at, timezone)}</time>
-        {event.agents.length || event.outcome ? <span className="timeline-agent" tabIndex={0}>{event.label}<span className="timeline-agent-tooltip" role="tooltip">{event.outcome && <span className={`timeline-outcome ${event.outcome.verdict}`}><strong>{event.outcome.verdict === 'ready' ? 'Ready' : `${event.outcome.findings} ${event.outcome.findings === 1 ? 'finding' : 'findings'}`}</strong>{event.outcome.summary && <span>{event.outcome.summary}</span>}</span>}{event.agents.map((agent) => <span className="timeline-run" key={`${event.id}:${agent.id}`}><span className="timeline-run-heading"><strong>{agent.provider}</strong><span>{agent.status}</span></span><span>{agent.model} · {agent.effort === 'CLI default' ? 'default effort' : `${agent.effort} effort`}</span>{agent.error && <span className="timeline-run-error">{agent.error}</span>}<pre>{agent.output || (agent.status === 'running' ? 'Agent is still running…' : 'No output was retained for this run.')}</pre></span>)}</span></span> : <span>{event.label}</span>}
+        {event.agents.length || event.outcome || event.error ? <span className="timeline-agent" tabIndex={0}>{event.label}<span className="timeline-agent-tooltip" role="tooltip">{event.outcome && <span className={`timeline-outcome ${event.outcome.verdict}`}><strong>{event.outcome.verdict === 'ready' ? 'Ready' : `${event.outcome.findings} ${event.outcome.findings === 1 ? 'finding' : 'findings'}`}</strong>{event.outcome.summary && <span>{event.outcome.summary}</span>}</span>}{event.error && <span className="timeline-run-error">{event.error}</span>}{event.agents.map((agent) => <span className="timeline-run" key={`${event.id}:${agent.id}`}><span className="timeline-run-heading"><strong>{agent.provider}</strong><span>{agent.status}</span></span><span>{agent.model} · {agent.effort === 'CLI default' ? 'default effort' : `${agent.effort} effort`}</span>{agent.error && agent.error !== event.error && <span className="timeline-run-error">{agent.error}</span>}<pre>{agent.output || (agent.status === 'running' ? 'Agent is still running…' : 'No output was retained for this run.')}</pre></span>)}</span></span> : <span>{event.label}</span>}
       </li>)}</ol> : <p className="timeline-empty">No timeline events have been recorded for this PR yet.</p>}</section>}
     </>}
   </aside></div>;

@@ -40,6 +40,8 @@ export interface ReviewClaim {
   attemptCount: number;
 }
 
+export const AUTOMATIC_REVIEW_RETRY_DELAY_MS = 60_000;
+
 function commandText(command: string, args: string[]): string {
   const safeArgs = args.map((argument, index) => {
     if (/^(?:--?[^=]*(?:api[-_]?key|token|password|secret)[^=]*)=/i.test(argument)) {
@@ -445,12 +447,19 @@ function finishClaim(
   }
 }
 
-function failClaim(database: BarbarianDatabase, config: BarbarianConfig, claim: ReviewClaim, error: unknown): void {
+export function failReviewClaim(
+  database: BarbarianDatabase,
+  config: BarbarianConfig,
+  claim: ReviewClaim,
+  error: unknown,
+): boolean {
   const message = error instanceof Error ? error.message : String(error);
+  const storedMessage = message.slice(0, 4000);
+  const now = new Date();
   const retryAfter = claim.attemptCount < config.agents.maxAutomaticAttempts
-    ? new Date(Date.now() + config.agents.retryBaseMinutes * 60_000 * (2 ** Math.max(0, claim.attemptCount - 1))).toISOString()
+    ? new Date(now.getTime() + AUTOMATIC_REVIEW_RETRY_DELAY_MS).toISOString()
     : null;
-  database.connection.prepare(`
+  const result = database.connection.prepare(`
     UPDATE review_queue SET status='agent_failed', claim_owner=NULL, claimed_at=NULL,
       manual_requested_at=CASE
         WHEN manual_requested_at IS NULL OR manual_requested_at<=claimed_at THEN NULL
@@ -459,7 +468,18 @@ function failClaim(database: BarbarianDatabase, config: BarbarianConfig, claim: 
         WHEN manual_requested_at IS NULL OR manual_requested_at<=claimed_at THEN NULL
         ELSE manual_provider END,
       retry_after=?, last_agent_error=?, updated_at=? WHERE id=? AND claim_owner=?
-  `).run(retryAfter, message.slice(0, 4000), new Date().toISOString(), claim.reviewId, claim.owner);
+  `).run(retryAfter, storedMessage, now.toISOString(), claim.reviewId, claim.owner);
+  if (!result.changes) return false;
+  recordActivity(database, 'agent_review_failed', `AI review failed: ${storedMessage}`, claim.reviewId, {
+    error: storedMessage,
+    retryAfter,
+    attempt: claim.attemptCount,
+    trigger: claim.trigger,
+    owner: claim.owner,
+    headSha: claim.headSha,
+    discussionWatermark: claim.discussionWatermark,
+  });
+  return true;
 }
 
 export async function runReviewAgent(
@@ -480,6 +500,7 @@ export async function runReviewAgent(
     headSha: claim.headSha,
     discussionWatermark: claim.discussionWatermark,
     requestedAgentId: claim.agentId || null,
+    owner: claim.owner,
   });
   const attempted = new Set<string>();
   const attemptedProviders: string[] = [];
@@ -613,11 +634,12 @@ ${JSON.stringify(bundle)}`;
         trigger: claim.trigger,
         headSha: claim.headSha,
         discussionWatermark: claim.discussionWatermark,
+        owner: claim.owner,
       },
     );
     try { await refreshContextAfterReview(database, claim.reviewId); } catch {}
   } catch (error) {
-    if (!signal?.aborted) failClaim(database, config, claim, error);
+    if (!signal?.aborted) failReviewClaim(database, config, claim, error);
     throw error;
   }
 }

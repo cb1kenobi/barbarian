@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { BarbarianDatabase } from './database.js';
 import type { BarbarianConfig } from './types.js';
 import type { ReviewClaim } from './agents.js';
-import { runReviewAgent } from './agents.js';
+import { AUTOMATIC_REVIEW_RETRY_DELAY_MS, failReviewClaim, runReviewAgent } from './agents.js';
 import type { AgentRuntime } from './agent-runtime.js';
 import { authenticatedGithubLogin } from './github-identity.js';
 
@@ -129,7 +129,7 @@ export class ReviewDispatcher {
       `);
       for (const row of claimed) {
         const retryAfter = row.attempt_count < config.agents.maxAutomaticAttempts
-          ? new Date(now.getTime() + config.agents.retryBaseMinutes * 60_000 * (2 ** Math.max(0, row.attempt_count - 1))).toISOString()
+          ? new Date(now.getTime() + AUTOMATIC_REVIEW_RETRY_DELAY_MS).toISOString()
           : null;
         release.run(retryAfter, now.toISOString(), row.id);
       }
@@ -322,6 +322,7 @@ export class ReviewDispatcher {
                 reason: error.message || 'code review was cancelled',
               }, 'code review cancelled');
             } else {
+              failReviewClaim(this.database, config, claim, error);
               const result = this.database.connection.prepare(`
                 SELECT status, last_agent_error, retry_after FROM review_queue WHERE id=?
               `).get(claim.reviewId) as {
