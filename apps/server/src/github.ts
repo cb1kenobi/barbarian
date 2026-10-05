@@ -1,3 +1,4 @@
+import { newReviewComments } from './review-comments.js';
 import type {
   BarbarianConfig,
   DiscoveryResult,
@@ -399,15 +400,74 @@ export async function postPullRequestReview(
   summary: string,
   comments: ReviewCommentDraft[],
   reviewName = '',
-): Promise<void> {
+  saveAsDraft = false,
+): Promise<PendingReview | void> {
+  // Never submit an existing pending review, even after the setting is disabled.
+  const pending = await fetchPendingReview(repository, number);
+  if (pending) {
+    const pages = JSON.parse(await gh([
+      'api', `repos/${repository}/pulls/${number}/reviews/${pending.databaseId}/comments?per_page=100`,
+      '--paginate', '--slurp',
+    ])) as unknown[][];
+    const existing = pages.flat();
+    const fresh = newReviewComments({ inlineComments: existing }, comments);
+    const signed = reviewPublicationPayload(headSha, summary, fresh, reviewName).comments;
+    for (const comment of signed) {
+      // This mutation accepts only a pending review; a concurrent human submission fails closed.
+      await githubReviewRequest('graphql', {
+        query: `mutation($input:AddPullRequestReviewThreadInput!) {
+          addPullRequestReviewThread(input:$input) { thread { id } }
+        }`,
+        variables: { input: { pullRequestReviewId: pending.id, ...comment } },
+      });
+    }
+    return { ...pending, comments: existing.length + signed.length };
+  }
+  // Clean results stay local in draft mode; there is nothing for a human to submit.
+  if (saveAsDraft && !comments.length) return;
   const publication = reviewPublication(repository, number, headSha, summary, comments, reviewName);
-  const result = await runProcess('gh', [
-    'api', '--method', 'POST', publication.endpoint, '--input', '-',
-  ], {
-    input: JSON.stringify(publication.payload),
-    timeoutMs: 120_000,
+  if (saveAsDraft) delete publication.payload.event;
+  const created = await githubReviewRequest(publication.endpoint, publication.payload) as {
+    id: number; node_id: string; state: string;
+  };
+  if (saveAsDraft) {
+    if (created.state !== 'PENDING') throw new Error('GitHub did not create a pending review');
+    return { id: created.node_id, databaseId: created.id, comments: comments.length };
+  }
+}
+
+export interface PendingReview {
+  id: string;
+  databaseId: number;
+  comments: number;
+}
+
+async function githubReviewRequest(endpoint: string, payload: Record<string, unknown>): Promise<unknown> {
+  const result = await runProcess('gh', ['api', '--method', 'POST', endpoint, '--input', '-'], {
+    input: JSON.stringify(payload), timeoutMs: 120_000,
   });
-  if (result.exitCode !== 0) throw new Error(result.stderr.trim() || 'Could not publish the GitHub review result');
+  if (result.exitCode !== 0) throw new Error(result.stderr.trim() || 'Could not save the GitHub review result');
+  const response = JSON.parse(result.stdout);
+  if (response.errors?.length) throw new Error(response.errors.map((error: { message: string }) => error.message).join('; '));
+  return response;
+}
+
+export async function fetchPendingReview(repository: string, number: number): Promise<PendingReview | null> {
+  const [owner, repo] = splitRepository(repository);
+  const response = await githubReviewRequest('graphql', {
+    query: `query($owner:String!, $repo:String!, $number:Int!) {
+      repository(owner:$owner, name:$repo) { pullRequest(number:$number) {
+        reviews(first:100, states:[PENDING]) { nodes { id databaseId viewerDidAuthor comments { totalCount } } }
+      } }
+    }`,
+    variables: { owner, repo, number },
+  }) as { data: { repository: { pullRequest: { reviews: { nodes: Array<{
+    id: string; databaseId: number; viewerDidAuthor: boolean; comments: { totalCount: number };
+  }> } } | null } | null } };
+  const pr = response.data.repository?.pullRequest;
+  if (!pr) throw new Error(`${repository}#${number} was not found`);
+  const pending = pr.reviews.nodes.find((review) => review.viewerDidAuthor);
+  return pending ? { id: pending.id, databaseId: pending.databaseId, comments: pending.comments.totalCount } : null;
 }
 
 function withoutReviewAttribution(body: string): string {
@@ -824,6 +884,7 @@ export async function fetchPullRequestState(repository: string, number: number):
 }
 
 interface ReviewThreadCommentNode {
+  pullRequestReview?: { state: string } | null;
   databaseId: number;
   id: string;
   fullDatabaseId: string | null;
@@ -873,6 +934,7 @@ export interface GithubPullRequestReviewContext {
   otherApprovals: number;
   discussionWatermark: string;
   findings: GithubReviewFinding[];
+  pendingReview: PendingReview | null;
 }
 
 export function isAiReviewComment(author: string, body: string): boolean {
@@ -899,6 +961,7 @@ query($owner:String!, $repo:String!, $number:Int!, $cursor:String) {
   repository(owner:$owner, name:$repo) {
     pullRequest(number:$number) {
       state mergedAt reviewDecision headRefOid additions deletions author { login }
+      pendingReviews: reviews(first:100, states:[PENDING]) { nodes { id databaseId viewerDidAuthor comments { totalCount } } }
       commits { totalCount }
       latestReviews(first:100) { nodes { author { login } state commit { oid } } }
       comments(last:100) { nodes { id fullDatabaseId updatedAt author { login } authorAssociation } }
@@ -908,10 +971,10 @@ query($owner:String!, $repo:String!, $number:Int!, $cursor:String) {
         nodes {
           isResolved isOutdated
           comments(first:1) {
-            nodes { databaseId id fullDatabaseId url path line originalLine body createdAt updatedAt author { login __typename } authorAssociation }
+            nodes { databaseId id fullDatabaseId url path line originalLine body createdAt updatedAt author { login __typename } authorAssociation pullRequestReview { state } }
           }
           recentComments: comments(last:100) {
-            nodes { databaseId id fullDatabaseId url path line originalLine body createdAt updatedAt author { login __typename } authorAssociation }
+            nodes { databaseId id fullDatabaseId url path line originalLine body createdAt updatedAt author { login __typename } authorAssociation pullRequestReview { state } }
           }
         }
       }
@@ -938,6 +1001,7 @@ export async function fetchPullRequestReviewContext(
     reviews: { nodes: DiscussionEntry[] };
     latestReviews: { nodes: GithubLatestReviewNode[] };
   } | null = null;
+  let pendingReview: PendingReview | null = null;
   let viewerLogin = '';
   const threads: ReviewThreadNode[] = [];
   do {
@@ -963,6 +1027,7 @@ export async function fetchPullRequestReviewContext(
         comments: { nodes: DiscussionEntry[] };
         reviews: { nodes: DiscussionEntry[] };
         latestReviews: { nodes: GithubLatestReviewNode[] };
+        pendingReviews: { nodes: Array<{ id: string; databaseId: number; viewerDidAuthor: boolean; comments: { totalCount: number } }> };
         reviewThreads: {
           nodes: ReviewThreadNode[];
           pageInfo: { hasNextPage: boolean; endCursor: string | null };
@@ -972,6 +1037,8 @@ export async function fetchPullRequestReviewContext(
     const page = result.data.repository?.pullRequest;
     if (!page) throw new Error(`${repository}#${number} was not found`);
     pullRequest = page;
+    const pending = page.pendingReviews.nodes.find((review) => review.viewerDidAuthor);
+    pendingReview = pending ? { id: pending.id, databaseId: pending.databaseId, comments: pending.comments.totalCount } : null;
     viewerLogin = result.data.viewer.login;
     threads.push(...page.reviewThreads.nodes);
     cursor = page.reviewThreads.pageInfo.hasNextPage ? page.reviewThreads.pageInfo.endCursor : null;
@@ -979,7 +1046,7 @@ export async function fetchPullRequestReviewContext(
 
   const findings = threads.flatMap((thread) => {
     const comment = thread.comments.nodes[0];
-    if (!comment || !isAiReviewComment(comment.author?.login || '', comment.body)) return [];
+    if (!comment || comment.pullRequestReview?.state === 'PENDING' || !isAiReviewComment(comment.author?.login || '', comment.body)) return [];
     return [{
       remoteId: comment.databaseId,
       author: comment.author?.login || 'AI reviewer',
@@ -1000,7 +1067,7 @@ export async function fetchPullRequestReviewContext(
     author: pullRequest.author,
     comments: pullRequest.comments,
     reviews: pullRequest.reviews,
-    reviewThreads: { nodes: threads.map((thread) => ({ comments: { nodes: thread.recentComments.nodes } })) },
+    reviewThreads: { nodes: threads.map((thread) => ({ comments: { nodes: thread.recentComments.nodes.filter((comment) => comment.pullRequestReview?.state !== 'PENDING') } })) },
   };
   const self = viewerLogin.toLowerCase();
   const viewerReview = pullRequest.latestReviews.nodes.find(
@@ -1024,6 +1091,7 @@ export async function fetchPullRequestReviewContext(
     otherApprovals,
     discussionWatermark: discussionWatermark(discussionNode, viewerLogin),
     findings,
+    pendingReview,
   };
 }
 

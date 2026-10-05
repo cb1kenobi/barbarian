@@ -20,7 +20,7 @@ const config: BarbarianConfig = {
   appearance: { theme: 'dark', fontSize: 'small', weapon: 'double-axe' },
   monitor: { intervalMinutes: 20, runOnStartup: true },
   repositories: [{ name: 'Acme/storage', priority: 10, watchIssues: true, watchPullRequests: true, path: '', reviewSkill: 'cb1-code-review', feedbackSkill: '', labels: {} }],
-  review: { requestedReviewer: 'cb1kenobi', fallbackTeams: ['Developers'], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
+  review: { requestedReviewer: 'cb1kenobi', fallbackTeams: ['Developers'], workspaceRoot: '.barbarian/workspaces', autoCleanup: true, saveAsDraft: false },
   linear: { enabled: false, command: [] },
   agents: {
     autoReview: false, autoAddressFeedback: false, maxConcurrent: 2, maxAutomaticAttempts: 3,

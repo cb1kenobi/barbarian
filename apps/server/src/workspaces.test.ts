@@ -20,7 +20,7 @@ const config = {
   appearance: { theme: 'dark', fontSize: 'normal', weapon: 'double-axe' },
   monitor: { intervalMinutes: 20, runOnStartup: false },
   repositories: [],
-  review: { requestedReviewer: '', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
+  review: { requestedReviewer: '', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true, saveAsDraft: false },
   linear: { enabled: false, command: [] },
   agents: {
     codeReview: [], chat: { provider: 'codex', model: '', effort: '' }, autoReview: false,

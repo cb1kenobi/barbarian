@@ -15,7 +15,7 @@ const base = {
   profile: { name: 'Chris', timezone: 'America/Chicago', githubLogin: 'cb1kenobi' },
   monitor: { intervalMinutes: 20, runOnStartup: true },
   repositories: [],
-  review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
+  review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true, saveAsDraft: false },
   linear: { enabled: false, command: [] },
   agents: {
     default: 'codex', autoReview: true, maxConcurrent: 2, maxAutomaticAttempts: 3,
@@ -129,6 +129,7 @@ describe('Barbarian config', () => {
         requestedReviewer: initial.review.requestedReviewer,
         fallbackTeams: initial.review.fallbackTeams,
         autoCleanup: initial.review.autoCleanup,
+        saveAsDraft: true,
       },
       agents: {
         codeReview: [{ id: 'codex', provider: 'codex', model: 'gpt-review', effort: 'high' as const, priority: 0 }],
@@ -151,6 +152,7 @@ describe('Barbarian config', () => {
     shouldFail = false;
     await store.update(submitted, 'memory:1');
     expect(store.get().appearance).toEqual(submitted.appearance);
+    expect(store.get().review.saveAsDraft).toBe(true);
     expect(store.get().review.workspaceRoot).toBe(initial.review.workspaceRoot);
     expect(store.get().agents.codeReview[0]).toEqual({ id: 'codex', provider: 'codex', model: 'gpt-review', effort: 'high', priority: 0 });
     expect(store.get().agents.chat).toEqual({ provider: 'codex', model: 'gpt-chat', effort: 'medium' });
@@ -192,6 +194,7 @@ describe('Barbarian config', () => {
         requestedReviewer: initial.review.requestedReviewer,
         fallbackTeams: initial.review.fallbackTeams,
         autoCleanup: initial.review.autoCleanup,
+        saveAsDraft: true,
       },
       agents: {
         codeReview: [{ id: 'codex', provider: 'codex', model: 'gpt-review', effort: 'high' as const, priority: 0 }],
@@ -216,10 +219,17 @@ describe('Barbarian config', () => {
     expect(saved).toContain('chat:');
     expect(saved).toContain('model: gpt-chat');
     expect(saved).toContain('autoAddressFeedback: true');
+    expect(saved).toContain('saveAsDraft: true');
     expect(saved).not.toContain('default: codex');
     expect(readFileSync(`${filename}.bak`, 'utf8')).toContain('# keep this operator note');
     writeFileSync(filename, `${saved}\n# external edit\n`, { mode: 0o600 });
     await expect(store.update(submitted, store.revision)).rejects.toBeInstanceOf(ConfigConflictError);
     expect(readFileSync(filename, 'utf8')).toContain('# external edit');
   });
+});
+
+it('defaults legacy reviews to publication and validates the draft setting', () => {
+  const { saveAsDraft: _removed, ...legacyReview } = base.review;
+  expect(parseConfig({ ...base, review: legacyReview }).review.saveAsDraft).toBe(false);
+  expect(() => parseConfig({ ...base, review: { ...legacyReview, saveAsDraft: 'yes' } })).toThrow();
 });

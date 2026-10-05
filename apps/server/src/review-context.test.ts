@@ -49,3 +49,10 @@ describe('buildReviewAssessment', () => {
     expect(assessment.label).toBe('Approved');
   });
 });
+
+it('reports draft comments as pending human review even after approval', () => {
+  const assessment = buildReviewAssessment({ ...review, status: 'approved', pending_review_id: 'PRR_1', pending_review_comments: 2 }, []);
+  expect(assessment.label).toBe('Pending human review');
+  expect(assessment.message).toContain('2 draft review comments');
+  expect(assessment.message).toContain('submit or discard');
+});

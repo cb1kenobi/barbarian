@@ -291,6 +291,8 @@ export class BarbarianDatabase {
     this.connection.exec('UPDATE work_items SET remote_created_at=first_seen_at WHERE remote_created_at IS NULL');
     const reviewColumns = new Set((this.connection.prepare('PRAGMA table_info(review_queue)').all() as Array<{ name: string }>).map((column) => column.name));
     const reviewAdditions: Array<[string, string]> = [
+      ['pending_review_id', 'TEXT'],
+      ['pending_review_comments', 'INTEGER NOT NULL DEFAULT 0'],
       ['discussion_watermark', "TEXT NOT NULL DEFAULT ''"],
       ['last_reviewed_watermark', 'TEXT'],
       ['author_seen_watermark', 'TEXT'],

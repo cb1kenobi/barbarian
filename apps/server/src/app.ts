@@ -163,6 +163,7 @@ function settingsView(config: BarbarianConfig, activeServer: BarbarianConfig['se
         requestedReviewer: config.review.requestedReviewer,
         fallbackTeams: config.review.fallbackTeams,
         autoCleanup: config.review.autoCleanup,
+        saveAsDraft: config.review.saveAsDraft,
       },
       agents: {
         codeReview: config.agents.codeReview,
@@ -242,6 +243,7 @@ function rowToReview(
     viewer_review_state: row.viewer_review_state ? String(row.viewer_review_state) : null,
     viewer_review_sha: row.viewer_review_sha ? String(row.viewer_review_sha) : null,
     other_approvals: Number(row.other_approvals || 0),
+    pending_review_id: row.pending_review_id ? String(row.pending_review_id) : null,
   };
   return {
     ...review,

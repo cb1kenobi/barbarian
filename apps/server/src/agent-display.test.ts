@@ -11,7 +11,7 @@ function config(provider: BarbarianConfig['agents']['providers'][string]): Barba
     appearance: { theme: 'dark', fontSize: 'normal', weapon: 'double-axe' },
     monitor: { intervalMinutes: 20, runOnStartup: true },
     repositories: [],
-    review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '', autoCleanup: true },
+    review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '', autoCleanup: true, saveAsDraft: false },
     linear: { enabled: false, command: [] },
     agents: {
       autoReview: true, autoAddressFeedback: false, maxConcurrent: 2, maxAutomaticAttempts: 3,

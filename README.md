@@ -183,6 +183,8 @@ review:
   fallbackTeams: [Developers, Front End]
 ```
 
+Enable **Settings → Review behavior → Save reviews as drafts** (`review.saveAsDraft: true`) to hold AI findings in a pending GitHub review. Barbarian batches the initial comments, appends new findings to your existing draft without submitting it or overwriting your edits, and suppresses duplicate findings. Clean results stay in Barbarian without posting a review. Only you submit or discard the draft on GitHub; disabling the setting never submits an existing draft. PR cards show **Pending human review**, and the detail view reports the draft comment count. The next refresh clears the indicator after submission or deletion. Existing configurations default to automatic publication.
+
 `reviewName` is optional attribution for AI review comments. Set it to a name such as `CB1` to publish “CB1 reviewed `<sha>`”; leave it blank to publish “Reviewed `<sha>`” without naming the reviewer.
 
 Priority is additive: configured repository weight + configured label weights + milestone weight + standard severity-label weight + a repository-neutral data-integrity signal. Repository names never affect the score. The dashboard shows the reasons so the ordering is explainable.

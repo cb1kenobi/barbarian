@@ -7,6 +7,10 @@ const base = {
 };
 
 describe('review state presentation', () => {
+  it('keeps pending drafts visible after approval but not after closure', () => {
+    expect(displayReviewStatus({ ...base, status: 'approved', pending_review_id: 'draft' })).toBe('pending_review');
+    expect(displayReviewStatus({ ...base, status: 'closed', pending_review_id: 'draft' })).toBe('closed');
+  });
   it('distinguishes another reviewer approval from the viewer approval', () => {
     expect(displayReviewStatus({ ...base, other_approvals: 1 })).toBe('partially_reviewed');
     expect(displayReviewStatus({

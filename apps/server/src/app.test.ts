@@ -23,7 +23,7 @@ const config: BarbarianConfig = {
   appearance: { theme: 'dark', fontSize: 'small', weapon: 'double-axe' },
   monitor: { intervalMinutes: 20, runOnStartup: true },
   repositories: [{ name: 'Acme/storage', priority: 10, watchIssues: true, watchPullRequests: true, path: '', reviewSkill: 'cb1-code-review', feedbackSkill: '', labels: {} }],
-  review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
+  review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true, saveAsDraft: false },
   linear: { enabled: false, command: [] },
   agents: {
     autoReview: false, autoAddressFeedback: false, maxConcurrent: 2, maxAutomaticAttempts: 3,
@@ -1589,6 +1589,7 @@ describe('settings API', () => {
         ...editable,
         server: { bindAddress: '127.0.0.1', port: 5150, trustedHosts: [] },
         profile: { ...current.profile, name: 'Barbarian' },
+        review: { ...(editable.review as Record<string, unknown>), saveAsDraft: true },
         appearance: { theme: 'slayer', fontSize: 'normal', weapon: 'double-axe' },
         agents: {
           ...(editable.agents as Record<string, unknown>),
@@ -1626,6 +1627,8 @@ describe('settings API', () => {
       expect(persisted[0]!.agents.codeReview[0]).toEqual({ id: 'codex', provider: 'codex', model: 'gpt-review', effort: 'high', priority: 0 });
       expect(persisted[0]!.agents.chat).toEqual({ provider: 'codex', model: 'gpt-chat', effort: 'medium' });
       expect(persisted[0]!.agents.providers.codex).toEqual(current.agents.providers.codex);
+      expect(store.get().review.saveAsDraft).toBe(true);
+      expect(saved.json().config.review.saveAsDraft).toBe(true);
       expect(persisted[0]!.review.workspaceRoot).toBe(current.review.workspaceRoot);
       expect(store.get()).toMatchObject({ profile: { name: 'Barbarian' }, appearance: next.appearance });
       expect((await app.inject({ method: 'GET', url: '/api/dashboard' })).statusCode).toBe(200);

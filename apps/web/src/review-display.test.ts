@@ -56,9 +56,14 @@ describe('review display status', () => {
 
   it('documents every PR status shown by the dashboard', () => {
     expect(reviewStatusGuide.map(({ status }) => status)).toEqual([
-      'draft', 'unreviewed', 'agent_working', 'agent_failed', 'issues_found', 'awaiting_feedback',
+      'pending_review', 'draft', 'unreviewed', 'agent_working', 'agent_failed', 'issues_found', 'awaiting_feedback',
       'ready_to_merge', 'partially_reviewed', 'approved', 'merged', 'closed',
     ]);
     expect(reviewStatusGuide.every(({ status, description }) => statusLabel(status) && description.length > 10)).toBe(true);
   });
+  it('keeps pending human review visible alongside a running agent', () => {
+    expect(reviewCardStatuses({ status: 'agent_working', display_status: 'pending_review', pending_review_id: 'PRR_1' }))
+      .toEqual(['agent_working', 'pending_review']);
+  });
+
 });

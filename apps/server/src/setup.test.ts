@@ -9,7 +9,7 @@ const config = parseConfig({
   profile: { name: 'Developer', timezone: 'America/Chicago', githubLogin: 'old-login' },
   monitor: { intervalMinutes: 20, runOnStartup: true },
   repositories: [],
-  review: { requestedReviewer: 'old-login', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
+  review: { requestedReviewer: 'old-login', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true, saveAsDraft: false },
   linear: { enabled: false, command: [] },
   agents: {
     default: 'codex', autoReview: false, maxConcurrent: 2, maxAutomaticAttempts: 3,

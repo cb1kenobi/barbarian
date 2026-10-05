@@ -32,6 +32,7 @@ interface Review {
   id: string; repository: string; number: number; title: string; simple_summary: string;
   author: string; url: string; status: string; review_decision: string | null;
   additions: number; deletions: number;
+  pending_review_id: string | null; pending_review_comments: number;
   findings_count: number; review_skill: string; workspace_path: string | null; updated_at: string;
   pending_reason: string | null; display_status?: string; priority_score: number;
   remote_created_at: string; remote_updated_at: string; last_agent_review_at: string | null;
@@ -530,19 +531,20 @@ export function App() {
 
 function Empty({ message }: { message: string }) { return <div className="empty"><span>∅</span><p>{message}</p></div>; }
 
-function FeedbackBadges({ review, onAgentFailed }: { review: Pick<Review, 'approved' | 'has_new_feedback' | 'has_review_activity' | 'needs_input' | 'is_draft' | 'status' | 'display_status'>; onAgentFailed?: () => void }) {
+function FeedbackBadges({ review, onAgentFailed }: { review: Pick<Review, 'approved' | 'has_new_feedback' | 'has_review_activity' | 'needs_input' | 'is_draft' | 'status' | 'display_status' | 'pending_review_id'>; onAgentFailed?: () => void }) {
   const agentStatus = review.status;
   const showAgentStatus = ['agent_working', 'agent_failed'].includes(agentStatus)
     || review.is_draft && ['issues_found', 'ready_to_merge'].includes(agentStatus);
   return <span className="feedback-badges">
     {review.is_draft && <ReviewStatusBadge status="draft" />}
     {showAgentStatus && <ReviewStatusBadge status={agentStatus} {...(onAgentFailed ? { onAgentFailed } : {})} />}
+    {review.pending_review_id && <ReviewStatusBadge status="pending_review" />}
     <ReviewStatusBadge status={authoredReviewDisplayStatus(review)} />
   </span>;
 }
 
-function ReviewBadges({ review, onAgentFailed }: { review: Pick<Review, 'is_draft' | 'status' | 'display_status'>; onAgentFailed?: () => void }) {
-  const statuses = review.is_draft ? [review.status] : reviewCardStatuses(review);
+function ReviewBadges({ review, onAgentFailed }: { review: Pick<Review, 'is_draft' | 'status' | 'display_status' | 'pending_review_id'>; onAgentFailed?: () => void }) {
+  const statuses = reviewCardStatuses(review.is_draft ? { ...review, display_status: review.status } : review);
   return <span className="feedback-badges">
     {review.is_draft && <ReviewStatusBadge status="draft" />}
     {statuses.map((status) => (!review.is_draft || status !== 'unreviewed')
@@ -928,8 +930,9 @@ function ReviewDrawer({ id, timezone, now, onClose, onChanged, onAgentFailed }: 
 
   return <div className="drawer-backdrop" onMouseDown={onClose}><aside className="drawer" onMouseDown={(event) => event.stopPropagation()}><button className="drawer-close" onClick={onClose}>×</button>
     {!review ? <p>Loading review…</p> : <><div className="drawer-details"><div className="drawer-review-heading"><span className="section-label">{review.repository} · #{review.number} · BY {review.author.startsWith('@') ? review.author : `@${review.author}`}</span><div className="drawer-status">{review.is_authored ? <FeedbackBadges review={review} onAgentFailed={onAgentFailed} /> : <ReviewBadges review={review} onAgentFailed={onAgentFailed} />}{!review.is_authored && review.pending_reason && <span>Queued: {review.pending_reason.replaceAll('_', ' ')}</span>}</div></div><h2>{review.title}</h2><div className="drawer-description"><p className="plain-summary"><InlineCode text={review.simple_summary} /></p><FixedIssues review={review} /></div>
+      {review.pending_review_id && <p className="plain-summary">{review.pending_review_comments} draft review {review.pending_review_comments === 1 ? 'comment is' : 'comments are'} waiting for you to review and submit on GitHub.</p>}
       <div className="drawer-review-metadata"><ReviewMetadata review={review} timezone={timezone} now={now} /></div>
-      <div className="drawer-actions"><div className="review-combo"><button disabled={!!busy || !automaticReviewAvailable} onClick={() => void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: '{}' }))}>{busy === 'review' ? 'Starting…' : '▶ Agent review'}</button><ReviewAgentPicker reviewAgents={reviewAgents} busy={!!busy} onSelect={(agentId) => void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: JSON.stringify(agentId ? { agentId } : {}) }))} /></div><button disabled={!!busy} onClick={() => void action('workspace', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'POST', body: '{}' }))}>{busy === 'workspace' ? 'Cloning & building…' : review.workspace_path ? 'Rebuild workspace' : 'Prepare locally'}</button>{review.workspace_path && <button disabled={!!busy} onClick={() => void action('cleanup', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'DELETE' }))}>Clean up</button>}<a href={review.url} target="_blank">Open GitHub ↗</a><button className="danger-button" disabled={!!busy} onClick={() => void ignore()}>{busy === 'ignore' ? 'Ignoring…' : 'Ignore PR'}</button></div>
+      <div className="drawer-actions"><div className="review-combo"><button disabled={!!busy || !automaticReviewAvailable} onClick={() => void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: '{}' }))}>{busy === 'review' ? 'Starting…' : '▶ Agent review'}</button><ReviewAgentPicker reviewAgents={reviewAgents} busy={!!busy} onSelect={(agentId) => void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: JSON.stringify(agentId ? { agentId } : {}) }))} /></div><button disabled={!!busy} onClick={() => void action('workspace', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'POST', body: '{}' }))}>{busy === 'workspace' ? 'Cloning & building…' : review.workspace_path ? 'Rebuild workspace' : 'Prepare locally'}</button>{review.workspace_path && <button disabled={!!busy} onClick={() => void action('cleanup', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'DELETE' }))}>Clean up</button>}<a href={review.pending_review_id ? `${review.url}/files` : review.url} target="_blank">{review.pending_review_id ? 'Review draft on GitHub ↗' : 'Open GitHub ↗'}</a><button className="danger-button" disabled={!!busy} onClick={() => void ignore()}>{busy === 'ignore' ? 'Ignoring…' : 'Ignore PR'}</button></div>
       {review.workspace_path && <code className="workspace-path">{review.workspace_path}</code>}{error && <p className="inline-error">{error}</p>}</div>
       <div className="drawer-tabs" role="tablist" aria-label="Pull request details">
         <button type="button" role="tab" aria-selected={tab === 'review-room'} className={tab === 'review-room' ? 'active' : ''} onClick={() => setTab('review-room')}>Review Room</button>

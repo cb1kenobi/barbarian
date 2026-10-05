@@ -65,6 +65,7 @@ export interface BarbarianConfig {
     fallbackTeams: string[];
     workspaceRoot: string;
     autoCleanup: boolean;
+    saveAsDraft: boolean;
   };
   linear: { enabled: boolean; command: string[] };
   agents: {

@@ -19,7 +19,7 @@ const config: BarbarianConfig = {
   appearance: { theme: 'dark', fontSize: 'small', weapon: 'double-axe' },
   monitor: { intervalMinutes: 20, runOnStartup: true },
   repositories: [],
-  review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
+  review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true, saveAsDraft: false },
   linear: { enabled: false, command: [] },
   agents: {
     autoReview: true, autoAddressFeedback: true, maxConcurrent: 1, maxAutomaticAttempts: 3,

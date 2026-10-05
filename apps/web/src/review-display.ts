@@ -1,6 +1,7 @@
 export interface ReviewStatusSource {
   status?: unknown;
   display_status?: unknown;
+  pending_review_id?: unknown;
 }
 
 export interface AuthoredReviewStatusSource {
@@ -12,6 +13,7 @@ export interface AuthoredReviewStatusSource {
 
 const labels: Record<string, string> = {
   draft: 'Draft',
+  pending_review: 'Pending human review',
   unreviewed: 'Needs review',
   agent_working: 'Agent reviewing',
   agent_failed: 'Agent failed',
@@ -29,6 +31,7 @@ const labels: Record<string, string> = {
 };
 
 export const reviewStatusGuide = [
+  { status: 'pending_review', description: 'An unsubmitted GitHub review is waiting for you to inspect, submit, or discard it.' },
   { status: 'draft', description: 'Automatic reviews are paused until the pull request is ready; manual reviews remain available.' },
   { status: 'unreviewed', description: 'No completed review exists for the current PR head.' },
   { status: 'agent_working', description: 'A Barbarian agent is actively reviewing the PR.' },
@@ -50,9 +53,14 @@ export function reviewDisplayStatus(review: ReviewStatusSource): string {
 
 export function reviewCardStatuses(review: ReviewStatusSource): string[] {
   const displayStatus = reviewDisplayStatus(review);
-  return review.status === 'agent_failed' && displayStatus !== 'agent_failed'
-    ? ['agent_failed', displayStatus]
-    : [displayStatus];
+  const statuses = [displayStatus];
+  if (['agent_failed', 'agent_working'].includes(String(review.status)) && review.status !== displayStatus) {
+    statuses.unshift(String(review.status));
+  }
+  if (review.pending_review_id && !statuses.includes('pending_review') && !['closed', 'merged'].includes(displayStatus)) {
+    statuses.push('pending_review');
+  }
+  return statuses;
 }
 
 export function authoredReviewDisplayStatus(review: AuthoredReviewStatusSource): string {
@@ -73,7 +81,7 @@ export function statusLabel(status: unknown): string {
 
 export function statusTone(status: unknown): string {
   if (status === 'agent_working') return 'working';
-  if (status === 'issues_found' || status === 'awaiting_feedback' || status === 'agent_failed'
+  if (status === 'pending_review' || status === 'issues_found' || status === 'awaiting_feedback' || status === 'agent_failed'
     || status === 'needs_input' || status === 'new_feedback') return 'feedback';
   if (status === 'partially_reviewed') return 'partial';
   if (status === 'ready_to_merge' || status === 'approved') return 'ready';

@@ -4,6 +4,7 @@ export interface ReviewStateInput {
   viewer_review_state: string | null;
   viewer_review_sha: string | null;
   other_approvals: number;
+  pending_review_id?: string | null;
 }
 
 export function viewerApprovedCurrentHead(review: Pick<ReviewStateInput,
@@ -18,6 +19,7 @@ export function viewerRequestedChangesCurrentHead(review: Pick<ReviewStateInput,
 
 export function displayReviewStatus(review: ReviewStateInput): string {
   if (review.status === 'merged' || review.status === 'closed') return review.status;
+  if (review.pending_review_id) return 'pending_review';
   if (viewerApprovedCurrentHead(review) || review.status === 'approved') return 'approved';
   if (['agent_working', 'agent_failed', 'issues_found', 'awaiting_feedback'].includes(review.status)) {
     return review.status;
@@ -46,6 +48,7 @@ export function newCommitsSinceReview(review: {
 export function reviewPriorityScore(review: ReviewStateInput, repositoryPriority: number): number {
   const state = displayReviewStatus(review);
   const stateWeight = ({
+    pending_review: 6_200,
     ready_to_merge: 6_000,
     unreviewed: 5_800,
     partially_reviewed: 5_600,

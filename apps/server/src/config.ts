@@ -104,6 +104,7 @@ export const configSchema = z.object({
     fallbackTeams: z.array(z.string()).default([]),
     workspaceRoot: z.string().default('.barbarian/workspaces'),
     autoCleanup: z.boolean().default(true),
+    saveAsDraft: z.boolean().default(false),
   }),
   linear: z.object({ enabled: z.boolean().default(false), command: z.array(z.string()).default([]) }),
   agents: agentsSchema.superRefine((agents, context) => {
@@ -130,7 +131,7 @@ export const writableConfigSchema = z.object({
   appearance: configSchema.shape.appearance.unwrap().strict(),
   monitor: configSchema.shape.monitor.strict(),
   repositories: configSchema.shape.repositories,
-  review: configSchema.shape.review.pick({ requestedReviewer: true, fallbackTeams: true, autoCleanup: true }).strict(),
+  review: configSchema.shape.review.pick({ requestedReviewer: true, fallbackTeams: true, autoCleanup: true, saveAsDraft: true }).strict(),
   agents: agentsSchema.pick({
     codeReview: true,
     chat: true,
@@ -285,6 +286,7 @@ function safeUpdate(current: BarbarianConfig, submitted: WritableConfig): Barbar
       requestedReviewer: submitted.review.requestedReviewer,
       fallbackTeams: submitted.review.fallbackTeams,
       autoCleanup: submitted.review.autoCleanup,
+      saveAsDraft: submitted.review.saveAsDraft,
     },
     agents: {
       ...current.agents,
@@ -313,6 +315,7 @@ const writablePaths: Array<{ path: Array<string>; value: (config: BarbarianConfi
   { path: ['repositories'], value: (config) => config.repositories },
   { path: ['review', 'requestedReviewer'], value: (config) => config.review.requestedReviewer },
   { path: ['review', 'fallbackTeams'], value: (config) => config.review.fallbackTeams },
+  { path: ['review', 'saveAsDraft'], value: (config) => config.review.saveAsDraft },
   { path: ['review', 'autoCleanup'], value: (config) => config.review.autoCleanup },
   { path: ['agents', 'codeReview'], value: (config) => config.agents.codeReview },
   { path: ['agents', 'chat'], value: (config) => config.agents.chat },

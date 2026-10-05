@@ -20,7 +20,7 @@ const config: BarbarianConfig = {
     { name: 'Acme/secondary', priority: 10, watchIssues: true, watchPullRequests: true, path: '', reviewSkill: 'cb1-code-review', feedbackSkill: '', labels: {} },
     { name: 'Acme/primary', priority: 100, watchIssues: true, watchPullRequests: true, path: '', reviewSkill: 'cb1-code-review', feedbackSkill: '', labels: {} },
   ],
-  review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
+  review: { requestedReviewer: 'cb1kenobi', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true, saveAsDraft: false },
   linear: { enabled: false, command: [] },
   agents: {
     autoReview: false, autoAddressFeedback: false, maxConcurrent: 2, maxAutomaticAttempts: 3,

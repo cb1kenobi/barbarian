@@ -35,6 +35,8 @@ export interface ReviewAssessmentInput {
   last_reviewed_sha: string | null;
   discussion_watermark?: string;
   last_reviewed_watermark?: string | null;
+  pending_review_id?: string | null;
+  pending_review_comments?: number;
 }
 
 export function buildReviewAssessment(review: ReviewAssessmentInput, findings: StoredReviewFinding[]) {
@@ -54,6 +56,7 @@ export function buildReviewAssessment(review: ReviewAssessmentInput, findings: S
   let tone = 'attention';
   if (review.remote_state === 'MERGED' || displayStatus === 'merged') { label = 'Merged'; tone = 'done'; }
   else if (review.remote_state === 'CLOSED' || displayStatus === 'closed') { label = 'Closed'; tone = 'quiet'; }
+  else if (review.pending_review_id) { label = 'Pending human review'; tone = 'attention'; }
   else if (review.status === 'agent_working') { label = 'AI Reviewing'; tone = 'working'; }
   else if (review.status === 'agent_failed') { label = 'Agent Failed'; tone = 'attention'; }
   else if (open > 0 || review.status === 'issues_found' || displayStatus === 'awaiting_feedback') { label = 'Needs Fixes'; tone = 'attention'; }
@@ -73,6 +76,11 @@ export function buildReviewAssessment(review: ReviewAssessmentInput, findings: S
   } else if (total > 0) message = `All ${total} AI review ${total === 1 ? 'comment is' : 'comments are'} resolved.`;
   else if (review.last_reviewed_sha) message = 'The latest AI review found no issues that still need attention.';
 
+  if (review.pending_review_id && review.remote_state === 'OPEN') {
+    const count = review.pending_review_comments || 0;
+    message = `${count} draft review ${count === 1 ? 'comment is' : 'comments are'} waiting for you. Review and submit or discard the draft on GitHub.`;
+    if (stale) message += ' The PR has changed since the last AI review.';
+  }
   return { label, tone, message, counts: { total, open, resolved, outdated }, stale };
 }
 
@@ -165,7 +173,8 @@ export async function refreshReviewContext(database: BarbarianDatabase, reviewId
       );
     }
     database.connection.prepare(`
-      UPDATE review_queue SET status=?, findings_count=?, review_decision=?, remote_state=?,
+      UPDATE review_queue SET pending_review_id=?, pending_review_comments=?,
+        status=?, findings_count=?, review_decision=?, remote_state=?,
         additions=?, deletions=?, commit_count=?, approval_carryover=?,
         viewer_review_state=?, viewer_review_sha=?, other_approvals=?, merged_at=?, review_paused=CASE
           WHEN head_sha<>? OR ?>discussion_watermark THEN 0 ELSE review_paused END,
@@ -174,6 +183,7 @@ export async function refreshReviewContext(database: BarbarianDatabase, reviewId
         head_sha=?, discussion_watermark=?,
         last_reviewed_watermark=COALESCE(last_reviewed_watermark, ?), updated_at=? WHERE id=?
     `).run(
+      remote.pendingReview?.id || null, remote.pendingReview?.comments || 0,
       status, openFindings, remote.reviewDecision, remote.state, remote.additions, remote.deletions,
       remote.commitCount, approvalCarryover ? 1 : 0,
       remote.viewerReviewState, remote.viewerReviewSha, remote.otherApprovals, remote.mergedAt,

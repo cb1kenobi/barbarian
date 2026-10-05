@@ -57,7 +57,7 @@ describe('local branch agent review', () => {
       appearance: { theme: 'dark', fontSize: 'normal', weapon: 'double-axe' },
       monitor: { intervalMinutes: 20, runOnStartup: false },
       repositories: [{ name: 'Acme/storage', priority: 1, watchIssues: false, watchPullRequests: true, path: '', reviewSkill: 'cb1-code-review', feedbackSkill: '', labels: {} }],
-      review: { requestedReviewer: '', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true },
+      review: { requestedReviewer: '', fallbackTeams: [], workspaceRoot: '.barbarian/workspaces', autoCleanup: true, saveAsDraft: false },
       linear: { enabled: false, command: [] },
       agents: {
         autoReview: false, autoAddressFeedback: false, maxConcurrent: 1, maxAutomaticAttempts: 1,
