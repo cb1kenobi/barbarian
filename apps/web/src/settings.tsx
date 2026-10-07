@@ -420,7 +420,6 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
           </fieldset>
 
           <fieldset className="settings-section"><legend>Review behavior</legend><div className="settings-description-list">
-            <p>Agent reviews save results in Barbarian’s Findings list. They do not write comments or reviews to GitHub.</p>
             <div className="settings-description-row">
               <label><span>Reviewer Name</span><input aria-describedby="reviewer-name-description" placeholder="Optional" value={draft.profile.reviewName} onChange={(event) => setDraft({ ...draft, profile: { ...draft.profile, reviewName: event.target.value } })} /></label>
               <p id="reviewer-name-description">Optional name shown beside local findings. Leave blank to use the reviewing agent’s provider name.</p>
