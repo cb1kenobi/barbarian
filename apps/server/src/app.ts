@@ -22,6 +22,7 @@ import { recordActivity } from './activity.js';
 import { buildReviewAssessment, refreshReviewContext, storedReviewFindings } from './review-context.js';
 import { completedReviewStatus, displayReviewStatus, newCommitsSinceReview, reviewPriorityScore } from './review-state.js';
 import { reviewCardMetadata, type ReviewCardMetadata } from './review-card-metadata.js';
+import { storedReviewRounds } from './review-rounds.js';
 import { fixedIssueReferences } from './fixed-issues.js';
 import { configuredAgentEffort, configuredAgentModel } from './agent-display.js';
 import { agentSelectionForTask } from './agent-config.js';
@@ -275,6 +276,7 @@ function reviewContextPayload(database: BarbarianDatabase, config: BarbarianConf
   return {
     review,
     findings,
+    rounds: storedReviewRounds(database, String(row.id)),
     assessment: buildReviewAssessment(review as unknown as Parameters<typeof buildReviewAssessment>[0], findings),
   };
 }

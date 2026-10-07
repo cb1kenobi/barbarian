@@ -65,7 +65,7 @@ export interface BarbarianConfig {
     fallbackTeams: string[];
     workspaceRoot: string;
     autoCleanup: boolean;
-    /** Legacy setting, accepted for compatibility. Agent reviews now save findings locally only. */
+    /** Queue comments in an unsubmitted GitHub review for a human to submit. */
     saveAsDraft: boolean;
   };
   linear: { enabled: boolean; command: string[] };

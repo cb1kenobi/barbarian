@@ -641,3 +641,8 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
 .review-findings .markdown h1, .review-findings .markdown h2, .review-findings .markdown h3,
 .review-findings .markdown h4, .review-findings .markdown h5, .review-findings .markdown h6 { font-size: 1em; }
 .review-findings .markdown li { display: list-item; padding: 0; border: 0; color: inherit; font-size: inherit; line-height: inherit; }
+.review-findings .round-finding { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.review-findings .round-finding > summary { cursor: pointer; font-weight: 600; }
+.review-findings .round-finding > p { font-size: .8125rem; }
+.review-findings .round-finding > p a { color: var(--acid); overflow-wrap: anywhere; }
+.findings-section-label { margin: 20px 0 0; font-size: .875rem; }

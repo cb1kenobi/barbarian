@@ -43,6 +43,7 @@ review:
   fallbackTeams: []
   workspaceRoot: .barbarian/workspaces
   autoCleanup: true
+  saveAsDraft: false # Queue comments in a pending GitHub review for a human to submit.
 
 linear:
   enabled: false

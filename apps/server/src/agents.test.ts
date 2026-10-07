@@ -1,5 +1,6 @@
 import * as github from './github.js';
 import { localReviewFindings, replaceLocalReviewFindings } from './local-review-findings.js';
+import { storedReviewRounds } from './review-rounds.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -15,8 +16,8 @@ import { AgentRuntime } from './agent-runtime.js';
 import { ignoreReview } from './review-ignore.js';
 
 const directories: string[] = [];
-beforeEach(() => { vi.spyOn(github, 'postPullRequestReview').mockRejectedValue(new Error('Unexpected GitHub write')); });
-afterEach(() => { expect(github.postPullRequestReview).not.toHaveBeenCalled(); vi.restoreAllMocks(); });
+beforeEach(() => { vi.spyOn(github, 'postPullRequestReview').mockResolvedValue(undefined); });
+afterEach(() => { vi.restoreAllMocks(); });
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
 function setup(command: string): { database: BarbarianDatabase; config: BarbarianConfig; claim: ReviewClaim } {
@@ -222,7 +223,8 @@ describe('runReviewAgent', () => {
     expect(database.connection.prepare('SELECT COUNT(*) AS total FROM agent_runs').get()).toEqual({ total: 0 });
     releaseBundle();
     await running;
-    expect(localReviewFindings(database, claim.reviewId)).toHaveLength(1);
+    expect(storedReviewRounds(database, claim.reviewId)[0]?.comments).toHaveLength(1);
+    expect(github.postPullRequestReview).toHaveBeenCalledOnce();
     expect(database.connection.prepare(`
       SELECT provider, status, runtime_key FROM agent_runs ORDER BY id
     `).all()).toEqual([
@@ -302,7 +304,8 @@ describe('runReviewAgent', () => {
       ...dependencies,
       fetchBundle: async () => ({ ...bundle, inlineComments: [finding] }),
     });
-    expect(localReviewFindings(database, claim.reviewId)).toHaveLength(1);
+    expect(storedReviewRounds(database, claim.reviewId)[0]?.comments).toHaveLength(1);
+    expect(github.postPullRequestReview).not.toHaveBeenCalled();
     expect(database.connection.prepare('SELECT status, findings_count FROM review_queue WHERE id=?')
       .get(claim.reviewId)).toEqual({ status: 'issues_found', findings_count: 1 });
     database.close();
@@ -317,6 +320,8 @@ describe('runReviewAgent', () => {
       ...dependencies,
     });
     expect(localReviewFindings(database, claim.reviewId)).toEqual([]);
+    expect(github.postPullRequestReview).not.toHaveBeenCalled();
+    expect(storedReviewRounds(database, claim.reviewId)[0]).toMatchObject({ findings: 0, summary: 'Clear.' });
     const completion = database.connection.prepare(`
       SELECT payload_json FROM activity_events
       WHERE subject_id=? AND kind='agent_review_completed' ORDER BY id DESC LIMIT 1
@@ -367,7 +372,7 @@ describe('runReviewAgent', () => {
     database.close();
   });
 
-  it('attributes local findings to the configured review name', async () => {
+  it('passes the configured attribution to GitHub delivery', async () => {
     const result = JSON.stringify({
       findings: 1, verdict: 'issues', summary: 'One issue.',
       comments: [{ path: 'file.ts', line: 1, side: 'RIGHT', body: '**High: broken invariant**\n\nFailure mode and fix.' }],
@@ -377,7 +382,7 @@ describe('runReviewAgent', () => {
     await runReviewAgent(database, config, claim, undefined, {
       ...dependencies,
     });
-    expect(localReviewFindings(database, claim.reviewId)[0]?.author).toBe('CB1');
+    expect(vi.mocked(github.postPullRequestReview).mock.calls[0]?.[5]).toBe('CB1');
     database.close();
   });
 
@@ -397,7 +402,8 @@ describe('runReviewAgent', () => {
         }],
       }),
     });
-    expect(localReviewFindings(database, claim.reviewId)).toHaveLength(1);
+    expect(storedReviewRounds(database, claim.reviewId)[0]?.comments).toHaveLength(1);
+    expect(github.postPullRequestReview).not.toHaveBeenCalled();
     database.close();
   });
 
@@ -589,12 +595,12 @@ describe('executeAgent', () => {
 });
 
 
-describe('local-only review policy', () => {
+describe('review delivery and retained results', () => {
   it('rolls back a failed finding save without erasing the previous review or advancing its checkpoint', async () => {
     const result = { findings: 1, verdict: 'issues', summary: 'New result', comments: [{ path: 'file.ts', line: 1, side: 'RIGHT', body: 'New issue' }] };
     const { database, config, claim } = setup(`console.log('BARBARIAN_RESULT: ${JSON.stringify(result)}')`);
     replaceLocalReviewFindings(database, claim.reviewId, claim.headSha, [{ path: 'file.ts', line: 1, side: 'RIGHT', body: 'Previous issue' }], 'reviewer', '');
-    database.connection.exec(`CREATE TRIGGER reject_finding BEFORE INSERT ON local_review_findings BEGIN SELECT RAISE(ABORT, 'disk unavailable'); END`);
+    database.connection.exec(`CREATE TRIGGER reject_finding BEFORE DELETE ON local_review_findings BEGIN SELECT RAISE(ABORT, 'disk unavailable'); END`);
     await expect(runReviewAgent(database, config, claim, undefined, dependencies)).rejects.toThrow('disk unavailable');
     expect(localReviewFindings(database, claim.reviewId)[0]?.body).toBe('Previous issue');
     expect(database.connection.prepare('SELECT status, last_reviewed_sha FROM review_queue WHERE id=?').get(claim.reviewId))
@@ -602,16 +608,44 @@ describe('local-only review policy', () => {
     database.close();
   });
 
-  it.each([true, false])('saves findings locally regardless of the legacy draft setting (%s)', async (saveAsDraft) => {
+  it.each([true, false])('retains findings and routes GitHub delivery using saveAsDraft=%s', async (saveAsDraft) => {
     const result = { findings: 1, verdict: 'issues', summary: 'A bug.', comments: [{ path: 'file.ts', line: 1, side: 'RIGHT', body: 'A bug.' }] };
     const { database, config, claim } = setup(`console.log('BARBARIAN_RESULT: ${JSON.stringify(result)}')`);
     config.review.saveAsDraft = saveAsDraft;
+    if (saveAsDraft) vi.mocked(github.postPullRequestReview).mockResolvedValue({ id: 'draft', databaseId: 1, comments: 1 });
     await runReviewAgent(database, config, claim, undefined, {
       ...dependencies, refreshContext: async () => { throw new Error('Offline'); },
     });
-    expect(localReviewFindings(database, claim.reviewId)).toMatchObject([{ body: 'A bug.', source: 'local', outdated: false }]);
+    expect(github.postPullRequestReview).toHaveBeenCalledWith('Acme/repo', 1, claim.headSha, 'A bug.', result.comments, '', saveAsDraft);
+    expect(storedReviewRounds(database, claim.reviewId)[0]).toMatchObject({ findings: 1, comments: [{ body: 'A bug.' }] });
+    expect(localReviewFindings(database, claim.reviewId)).toEqual([]);
     expect(database.connection.prepare('SELECT findings_count, last_reviewed_sha, status FROM review_queue WHERE id=?').get(claim.reviewId))
-      .toMatchObject({ findings_count: 1, last_reviewed_sha: claim.headSha, status: 'issues_found' });
+      .toMatchObject({ findings_count: saveAsDraft ? 0 : 1, last_reviewed_sha: claim.headSha, status: saveAsDraft ? 'ready_to_merge' : 'issues_found' });
+    if (saveAsDraft) expect(database.connection.prepare('SELECT pending_review_id FROM review_queue').get()).toEqual({ pending_review_id: 'draft' });
+    database.close();
+  });
+
+  it.each([[false, true], [true, false]])('keeps delivery pending if drafts are enabled at start (%s) or finish (%s)', async (initial, current) => {
+    const result = { findings: 1, verdict: 'issues', summary: 'A bug.', comments: [{ path: 'file.ts', line: 1, side: 'RIGHT', body: 'A bug.' }] };
+    const { database, config, claim } = setup(`console.log('BARBARIAN_RESULT: ${JSON.stringify(result)}')`);
+    config.review.saveAsDraft = initial;
+    await runReviewAgent(database, config, claim, undefined, {
+      ...dependencies, currentConfig: () => ({ ...config, review: { ...config.review, saveAsDraft: current } }),
+    });
+    expect(github.postPullRequestReview).toHaveBeenCalledWith('Acme/repo', 1, claim.headSha, 'A bug.', result.comments, '', true);
+    database.close();
+  });
+
+  it('keeps the round result when GitHub delivery fails and refreshes partial drafts', async () => {
+    const result = { findings: 1, verdict: 'issues', summary: 'A bug.', comments: [{ path: 'file.ts', line: 1, side: 'RIGHT', body: 'A bug.' }] };
+    const { database, config, claim } = setup(`console.log('BARBARIAN_RESULT: ${JSON.stringify(result)}')`);
+    vi.mocked(github.postPullRequestReview).mockRejectedValue(new Error('GitHub unavailable'));
+    const refreshContext = vi.fn(async () => undefined);
+    await expect(runReviewAgent(database, config, claim, undefined, { ...dependencies, refreshContext })).rejects.toThrow('GitHub unavailable');
+    expect(storedReviewRounds(database, claim.reviewId)[0]).toMatchObject({ findings: 1, summary: 'A bug.' });
+    expect(refreshContext).toHaveBeenCalled();
+    expect(database.connection.prepare('SELECT status, last_reviewed_sha FROM review_queue').get())
+      .toMatchObject({ status: 'agent_failed', last_reviewed_sha: null });
     database.close();
   });
 });

@@ -616,6 +616,9 @@ describe('dashboard reviews', () => {
         method: 'GET', url: '/api/reviews/github%3AAcme%2Fstorage%231',
       });
       expect(reviewDetail.statusCode).toBe(200);
+      expect(reviewDetail.json().rounds).toEqual(expect.arrayContaining([
+        expect.objectContaining({ provider: 'cursor', summary: 'Second review output', status: 'complete' }),
+      ]));
       expect(reviewDetail.json().timeline).toEqual([
         expect.objectContaining({
           kind: 'review_discovered', label: 'Barbarian discovered this PR',

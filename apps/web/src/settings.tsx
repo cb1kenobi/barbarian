@@ -421,8 +421,12 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
 
           <fieldset className="settings-section"><legend>Review behavior</legend><div className="settings-description-list">
             <div className="settings-description-row">
+              <label className="check-field"><input type="checkbox" aria-describedby="review-draft-description" checked={draft.review.saveAsDraft} onChange={(event) => setDraft({ ...draft, review: { ...draft.review, saveAsDraft: event.target.checked } })} /><span>Save review comments as pending</span></label>
+              <p id="review-draft-description">When enabled, batch issues into a pending GitHub review for you to submit. When disabled, publish new issues to the PR. Existing pending reviews always require your submission.</p>
+            </div>
+            <div className="settings-description-row">
               <label><span>Reviewer Name</span><input aria-describedby="reviewer-name-description" placeholder="Optional" value={draft.profile.reviewName} onChange={(event) => setDraft({ ...draft, profile: { ...draft.profile, reviewName: event.target.value } })} /></label>
-              <p id="reviewer-name-description">Optional name shown beside local findings. Leave blank to use the reviewing agent’s provider name.</p>
+              <p id="reviewer-name-description">Optional attribution on GitHub review comments. Leave blank to use “Reviewed” without a name.</p>
             </div>
             <div className="settings-description-row">
               <label><span>Requested reviewer</span><input aria-describedby="requested-reviewer-description" value={draft.review.requestedReviewer} onChange={(event) => setDraft({ ...draft, review: { ...draft.review, requestedReviewer: event.target.value } })} /></label>

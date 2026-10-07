@@ -67,6 +67,13 @@ interface FixedIssueReference {
 
 interface ChatMessage { id: number; role: string; author: string; content: string; created_at: string }
 
+interface ReviewRound {
+  id: number; provider: string; model: string; effort: string; completed_at: string;
+  head_sha: string | null; outdated: boolean; status: string; summary: string;
+  error: string | null; delivery: string; findings: number | null;
+  comments: Array<{ path: string; line: number; body: string; summary: string; url: string }>;
+}
+
 interface ReviewTimelineEvent {
   id: string; kind: string; label: string; created_at: string;
   agents: Array<{
@@ -891,6 +898,7 @@ function ReviewDrawer({ id, revision, timezone, now, onClose, onChanged, onAgent
   const [timeline, setTimeline] = useState<ReviewTimelineEvent[]>([]);
   const [tab, setTab] = useState<'review-room' | 'timeline' | 'findings'>('findings');
   const [findings, setFindings] = useState<ReviewFinding[]>([]);
+  const [rounds, setRounds] = useState<ReviewRound[]>([]);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -903,7 +911,7 @@ function ReviewDrawer({ id, revision, timezone, now, onClose, onChanged, onAgent
   );
   const automaticReviewAvailable = Boolean(reviewAgents?.agents.some((agent) => agent.available));
   useCloseOnEscape(onClose);
-  const load = useCallback(async () => { const detail = await api<{ review: Review; findings: ReviewFinding[]; messages: ChatMessage[]; timeline?: ReviewTimelineEvent[]; agentWorkspace?: ReviewAgentWorkspace | null }>(`/api/reviews/${encodeURIComponent(id)}`); setReview(detail.review); setFindings(detail.findings || []); setMessages(detail.messages); setTimeline(detail.timeline || []); setAgentWorkspace(detail.agentWorkspace || null); }, [id, revision]);
+  const load = useCallback(async () => { const detail = await api<{ review: Review; findings: ReviewFinding[]; rounds?: ReviewRound[]; messages: ChatMessage[]; timeline?: ReviewTimelineEvent[]; agentWorkspace?: ReviewAgentWorkspace | null }>(`/api/reviews/${encodeURIComponent(id)}`); setReview(detail.review); setFindings(detail.findings || []); setRounds(detail.rounds || []); setMessages(detail.messages); setTimeline(detail.timeline || []); setAgentWorkspace(detail.agentWorkspace || null); }, [id, revision]);
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
     const controller = new AbortController();
@@ -941,16 +949,30 @@ function ReviewDrawer({ id, revision, timezone, now, onClose, onChanged, onAgent
       <div className="drawer-actions"><div className="review-combo"><button disabled={!!busy || !automaticReviewAvailable} onClick={() => void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: '{}' }))}>{busy === 'review' ? 'Starting…' : '▶ Agent review'}</button><ReviewAgentPicker reviewAgents={reviewAgents} busy={!!busy} onSelect={(agentId) => void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: JSON.stringify(agentId ? { agentId } : {}) }))} /></div><button disabled={!!busy} onClick={() => void action('workspace', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'POST', body: '{}' }))}>{busy === 'workspace' ? 'Cloning & building…' : review.workspace_path ? 'Rebuild workspace' : 'Prepare locally'}</button>{review.workspace_path && <button disabled={!!busy} onClick={() => void action('cleanup', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'DELETE' }))}>Clean up</button>}<a href={review.pending_review_id ? `${review.url}/files` : review.url} target="_blank">{review.pending_review_id ? 'Review draft on GitHub ↗' : 'Open GitHub ↗'}</a><button className="danger-button" disabled={!!busy} onClick={() => void ignore()}>{busy === 'ignore' ? 'Ignoring…' : 'Ignore PR'}</button></div>
       {review.workspace_path && <code className="workspace-path">{review.workspace_path}</code>}{error && <p className="inline-error">{error}</p>}</div>
       <div className="drawer-tabs" role="tablist" aria-label="Pull request details">
-        <button type="button" role="tab" aria-selected={tab === 'findings'} className={tab === 'findings' ? 'active' : ''} onClick={() => setTab('findings')}>Findings ({findings.length})</button>
+        <button type="button" role="tab" aria-selected={tab === 'findings'} className={tab === 'findings' ? 'active' : ''} onClick={() => setTab('findings')}>Findings</button>
         <button type="button" role="tab" aria-selected={tab === 'review-room'} className={tab === 'review-room' ? 'active' : ''} onClick={() => setTab('review-room')}>Review Room</button>
         <button type="button" role="tab" aria-selected={tab === 'timeline'} className={tab === 'timeline' ? 'active' : ''} onClick={() => setTab('timeline')}>Timeline</button>
       </div>
       {tab === 'findings' ? <section className="review-timeline review-findings" role="tabpanel">
+        {rounds.map((round, index) => <details className="review-round" key={round.id} open={index === 0}>
+          <summary>Round {rounds.length - index} · {round.findings === null ? (round.status === 'complete' ? 'Completed' : round.status) : round.findings === 0 ? 'No issues found' : `${round.findings} ${round.findings === 1 ? 'issue' : 'issues'} found`}{round.outdated ? ' · Earlier commit' : ''}</summary>
+          <p>{formatTimelineTime(round.completed_at, timezone)} · {round.provider}{round.model ? ` · ${round.model}` : ''}{round.effort ? ` · ${round.effort}` : ''}{round.head_sha ? ` · ${round.head_sha.slice(0, 8)}` : ''}</p>
+          {round.delivery && <p>{round.delivery}</p>}
+          {round.summary && <div className="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(round.summary) }} />}
+          {round.error && <p className="settings-error">{round.error}</p>}
+          {round.findings === null && round.status === 'complete' && !round.summary && <p>No result was retained for this older round.</p>}
+          {round.comments.map((comment, ordinal) => <details className="round-finding" key={ordinal} open>
+            <summary>{comment.summary}</summary>
+            <p><a href={comment.url} target="_blank" rel="noreferrer">{comment.path}:{comment.line}</a></p>
+            <div className="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(comment.body) }} />
+          </details>)}
+        </details>)}
+        {!!rounds.length && !!findings.length && <h3 className="findings-section-label">Current PR comments</h3>}
         {findings.length ? findings.map((finding) => <details key={finding.id} open={!finding.resolved && !finding.outdated}>
           <summary>{finding.summary}{finding.outdated ? ' · Outdated' : finding.resolved ? ' · Resolved' : ''}</summary>
           <p>{finding.source === 'local' ? 'Saved in Barbarian · ' : ''}<a href={finding.url} target="_blank" rel="noreferrer">{finding.path || 'GitHub'}{finding.line ? `:${finding.line}` : ''}</a></p>
           <div className="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(finding.body) }} />
-        </details>) : <p className="timeline-empty">No findings for this pull request.</p>}
+        </details>) : !rounds.length && <p className="timeline-empty">No review results for this pull request.</p>}
       </section> : tab === 'review-room' ? <section className="review-room" role="tabpanel"><div className="chat-log" ref={chatViewportRef} onScroll={onChatScroll}>{!messages.length && <p className="chat-empty">Ask what changed, why it matters, what could break, or how to test it.</p>}{messages.map((entry) => <div className={`message ${entry.role}`} key={entry.id}><span>{entry.author}</span><div className="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(entry.content) }} /></div>)}{chatPending && <div className="message assistant chat-pending" role="status" aria-live="polite"><span>agent</span><p className="chat-pending-state"><span className="chat-pending-spinner" aria-hidden="true" /><span>Agent is working…</span></p></div>}</div>
       <form className="chat-form" onSubmit={(event) => void send(event)}>{agentWorkspace && <label className="chat-workspace"><input type="checkbox" checked={workspaceWrite} onChange={(event) => setWorkspaceWrite(event.target.checked)} /><span>Work in local branch <strong>{agentWorkspace.branchName}</strong><small>{agentWorkspace.path}</small></span></label>}<textarea value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={submitOnEnter} placeholder={review.needs_input ? "Answer Barbarian’s question to resume the feedback fix…" : "Ask about this pull request…"} /></form></section>
       : <section className="review-timeline" role="tabpanel">{timeline.length ? <ol>{timeline.map((event) => <li key={event.id}>

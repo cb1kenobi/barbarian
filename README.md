@@ -183,9 +183,9 @@ review:
   fallbackTeams: [Developers, Front End]
 ```
 
-Automatic reviews and **Agent review** save their findings only in Barbarian. They never create comments, draft reviews, or submitted reviews on GitHub. Findings include the full explanation and code location; a new successful review replaces the previous local findings, and new commits mark older findings outdated. GitHub refreshes preserve local findings. Existing GitHub comments and pending drafts remain visible and are never submitted or deleted automatically. The legacy `review.saveAsDraft` setting is accepted for compatibility but no longer changes this behavior.
+Automatic reviews and **Agent review** retain every review round in **Findings**, including clean results, summaries, and issues with code locations. Earlier rounds remain visible after later reviews and new commits. Under **Settings → Review behavior**, **Save review comments as pending** (`review.saveAsDraft`) controls GitHub delivery: enabled batches new issues into an unsubmitted review; disabled publishes them to the PR. Only a human submits or discards pending reviews, even after disabling the setting. Clean results and already-posted issues do not create GitHub comments. Existing GitHub comments remain visible alongside review history.
 
-`reviewName` is the optional name shown beside local findings. Leave it blank to use the reviewing agent’s provider name.
+`reviewName` is the optional attribution on GitHub review comments. Leave it blank to use “Reviewed” without a name.
 
 Priority is additive: configured repository weight + configured label weights + milestone weight + standard severity-label weight + a repository-neutral data-integrity signal. Repository names never affect the score. The dashboard shows the reasons so the ordering is explainable.
 
