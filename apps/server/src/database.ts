@@ -132,6 +132,20 @@ export class BarbarianDatabase {
         UNIQUE(review_id, remote_id)
       );
 
+      CREATE TABLE IF NOT EXISTS local_review_findings (
+        review_id TEXT NOT NULL REFERENCES review_queue(id) ON DELETE CASCADE,
+        ordinal INTEGER NOT NULL,
+        head_sha TEXT NOT NULL,
+        path TEXT NOT NULL,
+        line INTEGER NOT NULL,
+        side TEXT NOT NULL,
+        body TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        author TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(review_id, ordinal)
+      );
+
       CREATE TABLE IF NOT EXISTS local_branches (
         id TEXT PRIMARY KEY,
         repository TEXT NOT NULL,

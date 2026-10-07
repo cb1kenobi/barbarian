@@ -1,7 +1,9 @@
+import * as github from './github.js';
+import { localReviewFindings, replaceLocalReviewFindings } from './local-review-findings.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BarbarianDatabase } from './database.js';
 import type { BarbarianConfig } from './types.js';
 import {
@@ -13,6 +15,8 @@ import { AgentRuntime } from './agent-runtime.js';
 import { ignoreReview } from './review-ignore.js';
 
 const directories: string[] = [];
+beforeEach(() => { vi.spyOn(github, 'postPullRequestReview').mockRejectedValue(new Error('Unexpected GitHub write')); });
+afterEach(() => { expect(github.postPullRequestReview).not.toHaveBeenCalled(); vi.restoreAllMocks(); });
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
 function setup(command: string): { database: BarbarianDatabase; config: BarbarianConfig; claim: ReviewClaim } {
@@ -67,7 +71,6 @@ const bundle: ReviewBundle = {
 
 const dependencies = {
   fetchBundle: async () => bundle,
-  postReview: async () => undefined,
   refreshContext: async () => undefined,
 };
 
@@ -210,10 +213,8 @@ describe('runReviewAgent', () => {
     const bundleReady = new Promise<void>((resolve) => { releaseBundle = resolve; });
     let announceFetch!: () => void;
     const fetchStarted = new Promise<void>((resolve) => { announceFetch = resolve; });
-    const published: ReviewCommentDraft[][] = [];
     const running = runReviewAgent(database, config, claim, undefined, {
       fetchBundle: async () => { announceFetch(); await bundleReady; return bundle; },
-      postReview: async (_repository, _number, _headSha, _summary, comments) => { published.push(comments); },
       refreshContext: async () => undefined,
       schedule: (task, key) => runtime.run(task, key),
     });
@@ -221,8 +222,7 @@ describe('runReviewAgent', () => {
     expect(database.connection.prepare('SELECT COUNT(*) AS total FROM agent_runs').get()).toEqual({ total: 0 });
     releaseBundle();
     await running;
-    expect(published).toHaveLength(1);
-    expect(published[0]).toHaveLength(1);
+    expect(localReviewFindings(database, claim.reviewId)).toHaveLength(1);
     expect(database.connection.prepare(`
       SELECT provider, status, runtime_key FROM agent_runs ORDER BY id
     `).all()).toEqual([
@@ -238,12 +238,11 @@ describe('runReviewAgent', () => {
     const { database, config, claim } = setup("console.error('first failed'); process.exit(2)");
     config.agents.providers.second = { command: process.execPath, args: ['-e', `console.log(${JSON.stringify(issue)})`] };
     config.agents.codeReview.push({ id: 'second', provider: 'second', model: '', effort: '', priority: 0 });
-    let publishedSummary = '';
     await runReviewAgent(database, config, claim, undefined, {
       ...dependencies,
-      postReview: async (_repository, _number, _headSha, summary) => { publishedSummary = summary; },
     });
-    expect(publishedSummary).toBe('Adds validation but leaves one unsafe fallback.');
+    expect(database.connection.prepare('SELECT plain_summary FROM review_queue WHERE id=?').get(claim.reviewId))
+      .toMatchObject({ plain_summary: 'Adds validation but leaves one unsafe fallback.' });
     expect(database.connection.prepare('SELECT provider, status FROM agent_runs ORDER BY id').all()).toEqual([
       { provider: 'fake', status: 'failed' },
       { provider: 'second', status: 'complete' },
@@ -299,37 +298,31 @@ describe('runReviewAgent', () => {
       findings: 1, verdict: 'issues', summary: 'One issue remains.', comments: [finding],
     })}`;
     const { database, config, claim } = setup(`console.log(${JSON.stringify(output)})`);
-    let posted = false;
     await runReviewAgent(database, config, claim, undefined, {
       ...dependencies,
       fetchBundle: async () => ({ ...bundle, inlineComments: [finding] }),
-      postReview: async () => { posted = true; },
     });
-    expect(posted).toBe(true);
+    expect(localReviewFindings(database, claim.reviewId)).toHaveLength(1);
     expect(database.connection.prepare('SELECT status, findings_count FROM review_queue WHERE id=?')
       .get(claim.reviewId)).toEqual({ status: 'issues_found', findings_count: 1 });
     database.close();
   });
 
-  it('publishes a visible GitHub review for a clean result', async () => {
+  it('keeps a clean result in Barbarian without a GitHub write', async () => {
     const script = "console.log('BARBARIAN_RESULT: {\\\"findings\\\":0,\\\"verdict\\\":\\\"ready\\\",\\\"summary\\\":\\\"Clear.\\\"}')";
     const { database, config, claim } = setup(script);
     config.agents.codeReview[0]!.model = 'test-model';
     config.agents.codeReview[0]!.effort = 'high';
-    let publication: { summary: string; comments: ReviewCommentDraft[] } | undefined;
     await runReviewAgent(database, config, claim, undefined, {
       ...dependencies,
-      postReview: async (_repository, _number, _headSha, summary, comments) => {
-        publication = { summary, comments };
-      },
     });
-    expect(publication).toEqual({ summary: 'Clear.', comments: [] });
+    expect(localReviewFindings(database, claim.reviewId)).toEqual([]);
     const completion = database.connection.prepare(`
       SELECT payload_json FROM activity_events
       WHERE subject_id=? AND kind='agent_review_completed' ORDER BY id DESC LIMIT 1
     `).get(claim.reviewId) as { payload_json: string };
     expect(JSON.parse(completion.payload_json)).toMatchObject({
-      publishedReview: true, publishedFindings: 0,
+      publishedReview: false, publishedFindings: 0, savedLocally: true,
       model: 'test-model', effort: 'high',
     });
     const roomNote = database.connection.prepare(`
@@ -374,31 +367,26 @@ describe('runReviewAgent', () => {
     database.close();
   });
 
-  it('passes the configured review name to GitHub publication', async () => {
+  it('attributes local findings to the configured review name', async () => {
     const result = JSON.stringify({
       findings: 1, verdict: 'issues', summary: 'One issue.',
       comments: [{ path: 'file.ts', line: 1, side: 'RIGHT', body: '**High: broken invariant**\n\nFailure mode and fix.' }],
     });
     const { database, config, claim } = setup(`console.log(${JSON.stringify(`BARBARIAN_RESULT: ${result}`)})`);
     config.profile.reviewName = 'CB1';
-    let publishedReviewName: string | undefined;
     await runReviewAgent(database, config, claim, undefined, {
       ...dependencies,
-      postReview: async (_repository, _number, _headSha, _summary, _comments, reviewName) => {
-        publishedReviewName = reviewName;
-      },
     });
-    expect(publishedReviewName).toBe('CB1');
+    expect(localReviewFindings(database, claim.reviewId)[0]?.author).toBe('CB1');
     database.close();
   });
 
-  it('does not republish an inline finding already in the PR discussion', async () => {
+  it('stores a confirmed finding locally even when already discussed on GitHub', async () => {
     const result = JSON.stringify({
       findings: 1, verdict: 'issues', summary: 'One issue.',
       comments: [{ path: 'file.ts', line: 1, side: 'RIGHT', body: '**High: broken invariant**\n\nFailure mode and fix.' }],
     });
     const { database, config, claim } = setup(`console.log(${JSON.stringify(`BARBARIAN_RESULT: ${result}`)})`);
-    let postedComments: ReviewCommentDraft[] | undefined;
     await runReviewAgent(database, config, claim, undefined, {
       ...dependencies,
       fetchBundle: async () => ({
@@ -408,9 +396,8 @@ describe('runReviewAgent', () => {
           body: '**High: broken invariant**\n\nPreviously reported.\n\n—\n_Generated by Barber AI_',
         }],
       }),
-      postReview: async (_repository, _number, _headSha, _summary, comments) => { postedComments = comments; },
     });
-    expect(postedComments).toEqual([]);
+    expect(localReviewFindings(database, claim.reviewId)).toHaveLength(1);
     database.close();
   });
 
@@ -553,13 +540,11 @@ describe('runReviewAgent', () => {
 
   it('does not publish a review when the captured head changed', async () => {
     const { database, config, claim } = setup("console.log('should not run')");
-    let posted = false;
     await expect(runReviewAgent(database, config, claim, undefined, {
       ...dependencies,
       fetchBundle: async () => ({ ...bundle, metadata: { headRefOid: 'new-head' } }),
-      postReview: async () => { posted = true; },
     })).rejects.toThrow('head changed');
-    expect(posted).toBe(false);
+    expect(localReviewFindings(database, claim.reviewId)).toHaveLength(0);
     database.close();
   });
 });
@@ -603,41 +588,30 @@ describe('executeAgent', () => {
   });
 });
 
-describe('draft review policy', () => {
-  it('refreshes pending comments after an append partially succeeds and then fails', async () => {
-    const { database, config, claim } = setup(`console.log('BARBARIAN_RESULT: {"findings":0,"verdict":"ready","summary":"Clear."}')`);
-    config.review.saveAsDraft = true;
-    await expect(runReviewAgent(database, config, claim, undefined, {
-      ...dependencies,
-      postReview: async () => { throw new Error('Second draft comment failed'); },
-      refreshContext: async (db, id) => {
-        db.connection.prepare('UPDATE review_queue SET pending_review_id=?, pending_review_comments=1 WHERE id=?').run('PRR_partial', id);
-      },
-    })).rejects.toThrow('Second draft comment failed');
-    expect(database.connection.prepare('SELECT status, pending_review_id, last_reviewed_sha FROM review_queue WHERE id=?').get(claim.reviewId))
-      .toMatchObject({ status: 'agent_failed', pending_review_id: 'PRR_partial', last_reviewed_sha: null });
+
+describe('local-only review policy', () => {
+  it('rolls back a failed finding save without erasing the previous review or advancing its checkpoint', async () => {
+    const result = { findings: 1, verdict: 'issues', summary: 'New result', comments: [{ path: 'file.ts', line: 1, side: 'RIGHT', body: 'New issue' }] };
+    const { database, config, claim } = setup(`console.log('BARBARIAN_RESULT: ${JSON.stringify(result)}')`);
+    replaceLocalReviewFindings(database, claim.reviewId, claim.headSha, [{ path: 'file.ts', line: 1, side: 'RIGHT', body: 'Previous issue' }], 'reviewer', '');
+    database.connection.exec(`CREATE TRIGGER reject_finding BEFORE INSERT ON local_review_findings BEGIN SELECT RAISE(ABORT, 'disk unavailable'); END`);
+    await expect(runReviewAgent(database, config, claim, undefined, dependencies)).rejects.toThrow('disk unavailable');
+    expect(localReviewFindings(database, claim.reviewId)[0]?.body).toBe('Previous issue');
+    expect(database.connection.prepare('SELECT status, last_reviewed_sha FROM review_queue WHERE id=?').get(claim.reviewId))
+      .toMatchObject({ status: 'agent_failed', last_reviewed_sha: null });
     database.close();
   });
 
-  it.each([true, false])('honors draft mode from the run or current settings (initial=%s)', async (initial) => {
+  it.each([true, false])('saves findings locally regardless of the legacy draft setting (%s)', async (saveAsDraft) => {
     const result = { findings: 1, verdict: 'issues', summary: 'A bug.', comments: [{ path: 'file.ts', line: 1, side: 'RIGHT', body: 'A bug.' }] };
     const { database, config, claim } = setup(`console.log('BARBARIAN_RESULT: ${JSON.stringify(result)}')`);
-    config.review.saveAsDraft = initial;
-    const current = structuredClone(config);
-    current.review.saveAsDraft = !initial;
-    let draftMode: boolean | undefined;
+    config.review.saveAsDraft = saveAsDraft;
     await runReviewAgent(database, config, claim, undefined, {
-      ...dependencies,
-      currentConfig: () => current,
-      postReview: async (_repo, _number, _head, _summary, _comments, _name, saveAsDraft) => {
-        draftMode = saveAsDraft;
-        return { id: 'PRR_draft', databaseId: 42, comments: 1 };
-      },
-      refreshContext: async () => { throw new Error('Offline'); },
+      ...dependencies, refreshContext: async () => { throw new Error('Offline'); },
     });
-    expect(draftMode).toBe(true);
-    expect(database.connection.prepare('SELECT pending_review_id, pending_review_comments, findings_count, last_reviewed_sha, status FROM review_queue WHERE id=?').get(claim.reviewId))
-      .toMatchObject({ pending_review_id: 'PRR_draft', pending_review_comments: 1, findings_count: 0, last_reviewed_sha: claim.headSha, status: 'ready_to_merge' });
+    expect(localReviewFindings(database, claim.reviewId)).toMatchObject([{ body: 'A bug.', source: 'local', outdated: false }]);
+    expect(database.connection.prepare('SELECT findings_count, last_reviewed_sha, status FROM review_queue WHERE id=?').get(claim.reviewId))
+      .toMatchObject({ findings_count: 1, last_reviewed_sha: claim.headSha, status: 'issues_found' });
     database.close();
   });
 });

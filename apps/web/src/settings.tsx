@@ -420,13 +420,10 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
           </fieldset>
 
           <fieldset className="settings-section"><legend>Review behavior</legend><div className="settings-description-list">
-            <div className="settings-description-row">
-              <label className="check-field"><input type="checkbox" aria-describedby="review-draft-description" checked={draft.review.saveAsDraft} onChange={(event) => setDraft({ ...draft, review: { ...draft.review, saveAsDraft: event.target.checked } })} /><span>Save reviews as drafts</span></label>
-              <p id="review-draft-description">Batch AI comments into an unsubmitted GitHub review. Only you submit or discard it on GitHub. PRs show when a review is pending your review.</p>
-            </div>
+            <p>Agent reviews save results in Barbarian’s Findings list. They do not write comments or reviews to GitHub.</p>
             <div className="settings-description-row">
               <label><span>Reviewer Name</span><input aria-describedby="reviewer-name-description" placeholder="Optional" value={draft.profile.reviewName} onChange={(event) => setDraft({ ...draft, profile: { ...draft.profile, reviewName: event.target.value } })} /></label>
-              <p id="reviewer-name-description">Optional attribution for AI review comments, such as “CB1 reviewed a1b2c3d4.” Leave blank to use “Reviewed” without a name.</p>
+              <p id="reviewer-name-description">Optional name shown beside local findings. Leave blank to use the reviewing agent’s provider name.</p>
             </div>
             <div className="settings-description-row">
               <label><span>Requested reviewer</span><input aria-describedby="requested-reviewer-description" value={draft.review.requestedReviewer} onChange={(event) => setDraft({ ...draft, review: { ...draft.review, requestedReviewer: event.target.value } })} /></label>

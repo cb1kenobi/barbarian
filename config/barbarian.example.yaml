@@ -43,7 +43,6 @@ review:
   fallbackTeams: []
   workspaceRoot: .barbarian/workspaces
   autoCleanup: true
-  saveAsDraft: false # Keep AI review comments pending until you submit them on GitHub.
 
 linear:
   enabled: false

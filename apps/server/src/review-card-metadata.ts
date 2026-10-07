@@ -53,6 +53,7 @@ export function reviewCardMetadata(database: BarbarianDatabase): Map<string, Rev
     WHERE subject_id IS NOT NULL AND kind='agent_review_completed' AND (
       COALESCE(json_extract(payload_json, '$.publishedReview'), 0) = 1
       OR COALESCE(json_extract(payload_json, '$.publishedFindings'), 0) > 0
+      OR COALESCE(json_extract(payload_json, '$.savedLocally'), 0) = 1
     )
     GROUP BY subject_id
   `).all() as Array<{ review_id: string; total: number }>;
@@ -60,6 +61,9 @@ export function reviewCardMetadata(database: BarbarianDatabase): Map<string, Rev
 
   const findings = database.connection.prepare(`
     SELECT review_id, body FROM review_findings WHERE resolved=0 AND outdated=0
+    UNION ALL
+    SELECT f.review_id, f.body FROM local_review_findings f
+      JOIN review_queue q ON q.id=f.review_id WHERE f.head_sha=q.head_sha
   `).all() as Array<{ review_id: string; body: string }>;
   for (const finding of findings) {
     const counts = ensure(finding.review_id).issue_counts;

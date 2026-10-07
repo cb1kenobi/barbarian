@@ -28,6 +28,11 @@ interface WorkItem {
   creator: string | null; remote_created_at: string; updated_at: string;
 }
 
+interface ReviewFinding {
+  id: string; summary: string; body: string; path: string | null; line: number | null;
+  url: string; source?: 'local'; resolved: boolean; outdated: boolean;
+}
+
 interface Review {
   id: string; repository: string; number: number; title: string; simple_summary: string;
   author: string; url: string; status: string; review_decision: string | null;
@@ -519,7 +524,7 @@ export function App() {
         </section>
       </main>
 
-      {selectedReview && <ReviewDrawer id={selectedReview} timezone={dashboard?.profile.timezone} now={now} onClose={() => setSelectedReview(null)} onChanged={load} onAgentFailed={() => setFailedReview(selectedReview)} />}
+      {selectedReview && <ReviewDrawer id={selectedReview} revision={[...(dashboard?.reviews || []), ...(dashboard?.feedback || [])].find((review) => review.id === selectedReview)?.updated_at} timezone={dashboard?.profile.timezone} now={now} onClose={() => setSelectedReview(null)} onChanged={load} onAgentFailed={() => setFailedReview(selectedReview)} />}
       {failedReview && <AgentFailureDialog id={failedReview} timezone={timezone} now={now} onClose={() => setFailedReview(null)} />}
       {agentDrawer.view === 'history' && <AgentHistoryDrawer now={now} timezone={timezone} onClose={() => setAgentDrawer(closeAgentDrawer())} onSelect={(id) => setAgentDrawer(openAgentRun(id, true))} />}
       {agentDrawer.view === 'run' && <AgentRunDrawer id={agentDrawer.runId} now={now} onClose={() => setAgentDrawer(closeAgentDrawer())} onStopped={load} {...(agentDrawer.returnToHistory ? { onBack: () => setAgentDrawer(backFromAgentRun(agentDrawer)) } : {})} />}
@@ -880,11 +885,12 @@ function ReviewAgentPicker({ reviewAgents, busy, onSelect }: { reviewAgents: Rev
   return <><button ref={triggerRef} className="review-agent-trigger" type="button" aria-label="Choose review agent" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((current) => !current)}>▾</button>{open && createPortal(<div ref={menuRef} className="review-agent-menu" role="menu" style={{ ...menuStyle, visibility: menuStyle ? 'visible' : 'hidden' }}><button type="button" role="menuitem" disabled={busy || !automaticAvailable} onClick={() => select()}><strong>Automatic</strong><span>{reviewAgents?.algorithm.replace('_', ' ') || 'configured routing'}</span></button>{reviewAgents?.agents.map((agent) => <button type="button" role="menuitem" key={agent.id} disabled={busy || !agent.available} title={agent.usageError} onClick={() => select(agent.id)}><strong>{agent.provider}</strong><span>{agent.model || 'CLI default'} · {agent.effort || 'default effort'}{agent.usedPercent === null ? ' · usage unknown' : ` · ${agent.usedPercent}% used`}</span>{agent.usageError && <span className="usage-error">{agent.usageError}</span>}</button>)}{reviewAgents && !reviewAgents.agents.length && <p>No review agents configured.</p>}</div>, document.body)}</>;
 }
 
-function ReviewDrawer({ id, timezone, now, onClose, onChanged, onAgentFailed }: { id: string; timezone: string | undefined; now: number; onClose: () => void; onChanged: () => Promise<void>; onAgentFailed: () => void }) {
+function ReviewDrawer({ id, revision, timezone, now, onClose, onChanged, onAgentFailed }: { id: string; revision: string | undefined; timezone: string | undefined; now: number; onClose: () => void; onChanged: () => Promise<void>; onAgentFailed: () => void }) {
   const [review, setReview] = useState<Review | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [timeline, setTimeline] = useState<ReviewTimelineEvent[]>([]);
-  const [tab, setTab] = useState<'review-room' | 'timeline'>('review-room');
+  const [tab, setTab] = useState<'review-room' | 'timeline' | 'findings'>('findings');
+  const [findings, setFindings] = useState<ReviewFinding[]>([]);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -897,7 +903,7 @@ function ReviewDrawer({ id, timezone, now, onClose, onChanged, onAgentFailed }: 
   );
   const automaticReviewAvailable = Boolean(reviewAgents?.agents.some((agent) => agent.available));
   useCloseOnEscape(onClose);
-  const load = useCallback(async () => { const detail = await api<{ review: Review; messages: ChatMessage[]; timeline?: ReviewTimelineEvent[]; agentWorkspace?: ReviewAgentWorkspace | null }>(`/api/reviews/${encodeURIComponent(id)}`); setReview(detail.review); setMessages(detail.messages); setTimeline(detail.timeline || []); setAgentWorkspace(detail.agentWorkspace || null); }, [id]);
+  const load = useCallback(async () => { const detail = await api<{ review: Review; findings: ReviewFinding[]; messages: ChatMessage[]; timeline?: ReviewTimelineEvent[]; agentWorkspace?: ReviewAgentWorkspace | null }>(`/api/reviews/${encodeURIComponent(id)}`); setReview(detail.review); setFindings(detail.findings || []); setMessages(detail.messages); setTimeline(detail.timeline || []); setAgentWorkspace(detail.agentWorkspace || null); }, [id, revision]);
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
     const controller = new AbortController();
@@ -935,10 +941,17 @@ function ReviewDrawer({ id, timezone, now, onClose, onChanged, onAgentFailed }: 
       <div className="drawer-actions"><div className="review-combo"><button disabled={!!busy || !automaticReviewAvailable} onClick={() => void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: '{}' }))}>{busy === 'review' ? 'Starting…' : '▶ Agent review'}</button><ReviewAgentPicker reviewAgents={reviewAgents} busy={!!busy} onSelect={(agentId) => void action('review', () => api(`/api/reviews/${encodeURIComponent(id)}/run-review`, { method: 'POST', body: JSON.stringify(agentId ? { agentId } : {}) }))} /></div><button disabled={!!busy} onClick={() => void action('workspace', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'POST', body: '{}' }))}>{busy === 'workspace' ? 'Cloning & building…' : review.workspace_path ? 'Rebuild workspace' : 'Prepare locally'}</button>{review.workspace_path && <button disabled={!!busy} onClick={() => void action('cleanup', () => api(`/api/reviews/${encodeURIComponent(id)}/workspace`, { method: 'DELETE' }))}>Clean up</button>}<a href={review.pending_review_id ? `${review.url}/files` : review.url} target="_blank">{review.pending_review_id ? 'Review draft on GitHub ↗' : 'Open GitHub ↗'}</a><button className="danger-button" disabled={!!busy} onClick={() => void ignore()}>{busy === 'ignore' ? 'Ignoring…' : 'Ignore PR'}</button></div>
       {review.workspace_path && <code className="workspace-path">{review.workspace_path}</code>}{error && <p className="inline-error">{error}</p>}</div>
       <div className="drawer-tabs" role="tablist" aria-label="Pull request details">
+        <button type="button" role="tab" aria-selected={tab === 'findings'} className={tab === 'findings' ? 'active' : ''} onClick={() => setTab('findings')}>Findings ({findings.length})</button>
         <button type="button" role="tab" aria-selected={tab === 'review-room'} className={tab === 'review-room' ? 'active' : ''} onClick={() => setTab('review-room')}>Review Room</button>
         <button type="button" role="tab" aria-selected={tab === 'timeline'} className={tab === 'timeline' ? 'active' : ''} onClick={() => setTab('timeline')}>Timeline</button>
       </div>
-      {tab === 'review-room' ? <section className="review-room" role="tabpanel"><div className="chat-log" ref={chatViewportRef} onScroll={onChatScroll}>{!messages.length && <p className="chat-empty">Ask what changed, why it matters, what could break, or how to test it.</p>}{messages.map((entry) => <div className={`message ${entry.role}`} key={entry.id}><span>{entry.author}</span><div className="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(entry.content) }} /></div>)}{chatPending && <div className="message assistant chat-pending" role="status" aria-live="polite"><span>agent</span><p className="chat-pending-state"><span className="chat-pending-spinner" aria-hidden="true" /><span>Agent is working…</span></p></div>}</div>
+      {tab === 'findings' ? <section className="review-timeline review-findings" role="tabpanel">
+        {findings.length ? findings.map((finding) => <details key={finding.id} open={!finding.resolved && !finding.outdated}>
+          <summary>{finding.summary}{finding.outdated ? ' · Outdated' : finding.resolved ? ' · Resolved' : ''}</summary>
+          <p>{finding.source === 'local' ? 'Saved in Barbarian · ' : ''}<a href={finding.url} target="_blank" rel="noreferrer">{finding.path || 'GitHub'}{finding.line ? `:${finding.line}` : ''}</a></p>
+          <div className="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(finding.body) }} />
+        </details>) : <p className="timeline-empty">No findings for this pull request.</p>}
+      </section> : tab === 'review-room' ? <section className="review-room" role="tabpanel"><div className="chat-log" ref={chatViewportRef} onScroll={onChatScroll}>{!messages.length && <p className="chat-empty">Ask what changed, why it matters, what could break, or how to test it.</p>}{messages.map((entry) => <div className={`message ${entry.role}`} key={entry.id}><span>{entry.author}</span><div className="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(entry.content) }} /></div>)}{chatPending && <div className="message assistant chat-pending" role="status" aria-live="polite"><span>agent</span><p className="chat-pending-state"><span className="chat-pending-spinner" aria-hidden="true" /><span>Agent is working…</span></p></div>}</div>
       <form className="chat-form" onSubmit={(event) => void send(event)}>{agentWorkspace && <label className="chat-workspace"><input type="checkbox" checked={workspaceWrite} onChange={(event) => setWorkspaceWrite(event.target.checked)} /><span>Work in local branch <strong>{agentWorkspace.branchName}</strong><small>{agentWorkspace.path}</small></span></label>}<textarea value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={submitOnEnter} placeholder={review.needs_input ? "Answer Barbarian’s question to resume the feedback fix…" : "Ask about this pull request…"} /></form></section>
       : <section className="review-timeline" role="tabpanel">{timeline.length ? <ol>{timeline.map((event) => <li key={event.id}>
         <time title={formatSyncTimestamp(event.created_at, timezone)}>{formatTimelineTime(event.created_at, timezone)}</time>

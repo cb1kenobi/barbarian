@@ -20,7 +20,7 @@ describe('buildReviewAssessment', () => {
     const assessment = buildReviewAssessment(review, [finding(true), finding(false)]);
     expect(assessment.label).toBe('Needs Fixes');
     expect(assessment.counts).toMatchObject({ total: 2, open: 1, resolved: 1 });
-    expect(assessment.message).toBe('1 of 2 AI review comments are still open.');
+    expect(assessment.message).toBe('1 of 2 review findings are still open.');
   });
 
   it('puts merged state ahead of review findings', () => {

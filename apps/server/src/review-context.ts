@@ -1,3 +1,4 @@
+import { currentLocalFindingCount, localReviewFindings } from './local-review-findings.js';
 import type { BarbarianDatabase } from './database.js';
 import { fetchPullRequestReviewContext } from './github.js';
 import {
@@ -9,7 +10,8 @@ import {
 export interface StoredReviewFinding {
   id: string;
   review_id: string;
-  remote_id: number;
+  remote_id: number | null;
+  source?: 'local';
   author: string;
   body: string;
   summary: string;
@@ -70,10 +72,10 @@ export function buildReviewAssessment(review: ReviewAssessmentInput, findings: S
   else if (review.status === 'agent_failed') message = 'The AI reviewer failed. Barbarian will retry in 60 seconds or you can start it manually.';
   else if (stale) message = 'New commits were pushed after the last AI review. It needs another pass.';
   else if (displayStatus === 'partially_reviewed') message = 'Another reviewer approved this pull request, but your approval is still pending.';
-  else if (open > 0) message = `${open} of ${total} AI review ${total === 1 ? 'comment is' : 'comments are'} still open.`;
+  else if (open > 0) message = `${open} of ${total} review ${total === 1 ? 'finding is' : 'findings are'} still open.`;
   else if (total > 0 && outdated > 0) {
-    message = `No AI review comments still need action. ${resolved} resolved; ${outdated} became outdated.`;
-  } else if (total > 0) message = `All ${total} AI review ${total === 1 ? 'comment is' : 'comments are'} resolved.`;
+    message = `No review findings still need action. ${resolved} resolved; ${outdated} became outdated.`;
+  } else if (total > 0) message = `All ${total} review ${total === 1 ? 'finding is' : 'findings are'} resolved.`;
   else if (review.last_reviewed_sha) message = 'The latest AI review found no issues that still need attention.';
 
   if (review.pending_review_id && review.remote_state === 'OPEN') {
@@ -85,9 +87,10 @@ export function buildReviewAssessment(review: ReviewAssessmentInput, findings: S
 }
 
 export function storedReviewFindings(database: BarbarianDatabase, reviewId: string): StoredReviewFinding[] {
-  return database.connection.prepare(`
+  const remote = database.connection.prepare(`
     SELECT * FROM review_findings WHERE review_id=? ORDER BY resolved ASC, outdated ASC, created_at ASC
   `).all(reviewId) as unknown as StoredReviewFinding[];
+  return [...localReviewFindings(database, reviewId), ...remote];
 }
 
 export async function refreshReviewContext(database: BarbarianDatabase, reviewId: string): Promise<void> {
@@ -118,7 +121,8 @@ export async function refreshReviewContext(database: BarbarianDatabase, reviewId
   } | undefined;
   if (!review) throw new Error('Review not found');
   const remote = await fetchPullRequestReviewContext(review.repository, review.number);
-  const openFindings = remote.findings.filter((finding) => !finding.resolved && !finding.outdated).length;
+  const localCount = currentLocalFindingCount(database, reviewId, remote.headSha);
+  const openFindings = localCount + remote.findings.filter((finding) => !finding.resolved && !finding.outdated).length;
   const watermark = remote.discussionWatermark > review.discussion_watermark
     ? remote.discussionWatermark
     : review.discussion_watermark;
@@ -151,7 +155,7 @@ export async function refreshReviewContext(database: BarbarianDatabase, reviewId
   else if (status !== 'agent_working' && !failedOnCurrentInput) {
     if (stale) status = 'unreviewed';
     else if (openFindings > 0) status = 'issues_found';
-    else if (remote.findings.length > 0) status = 'ready_to_merge';
+    else if (remote.findings.length > 0 || review.last_reviewed_sha === remote.headSha) status = 'ready_to_merge';
   }
 
   const now = new Date().toISOString();

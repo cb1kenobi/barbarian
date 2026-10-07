@@ -65,6 +65,7 @@ export interface BarbarianConfig {
     fallbackTeams: string[];
     workspaceRoot: string;
     autoCleanup: boolean;
+    /** Legacy setting, accepted for compatibility. Agent reviews now save findings locally only. */
     saveAsDraft: boolean;
   };
   linear: { enabled: boolean; command: string[] };

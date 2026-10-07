@@ -104,10 +104,11 @@ function renderFindings(findings) {
   const hidden = findings.length - visible.length;
   if (!visible.length) return hidden
     ? `<p class="empty">${hidden} resolved ${hidden === 1 ? 'finding is' : 'findings are'} hidden.</p>`
-    : '<p class="empty">No linked AI review comments yet.</p>';
+    : '<p class="empty">No review findings yet.</p>';
   return `<div class="findings">${visible.map((finding) => {
     const state = findingState(finding);
     const location = finding.path ? `${finding.path}${finding.line ? `:${finding.line}` : ''}` : 'Conversation';
+    if (finding.source === 'local') return `<article class="finding ${state.className}"><details open><summary>${escapeHtml(finding.summary)}</summary><div class="markdown">${renderMarkdown(finding.body)}</div></details><p class="finding-meta">Saved in Barbarian · ${escapeHtml(state.label)} · <a href="${escapeHtml(finding.url)}" data-github-url>${escapeHtml(location)}</a></p></article>`;
     return `<article class="finding ${state.className}"><div class="finding-top"><span class="state" title="${state.label}">${state.symbol}</span><a class="finding-summary" href="${escapeHtml(finding.url)}" data-github-url>${escapeHtml(finding.summary || 'Open review comment')}</a></div><p class="finding-meta">${escapeHtml(state.label)} · ${escapeHtml(location)} · ${escapeHtml(finding.author)}</p></article>`;
   }).join('')}</div>`;
 }
