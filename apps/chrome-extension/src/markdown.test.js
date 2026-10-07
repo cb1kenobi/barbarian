@@ -31,4 +31,23 @@ describe('chat markdown rendering', () => {
     expect(html).toContain('<code>delete_audit_logs_before</code>');
     expect(html).toContain('<code>ResourceBridge.ts</code>');
   });
+  it('renders the review priority badge as an image, including linked badges', () => {
+    const badge = '![medium](https://www.gstatic.com/codereviewagent/medium-priority.svg)';
+    const html = renderMarkdown(badge);
+    expect(html).toContain('<img src="https://www.gstatic.com/codereviewagent/medium-priority.svg" alt="medium"');
+    expect(html).not.toContain('!<a');
+    expect(html).toContain('referrerpolicy="no-referrer"');
+    const linked = renderMarkdown(`[${badge}](https://example.com/review)`);
+    expect(linked).toContain('rel="noreferrer"><img');
+    expect(linked).not.toMatch(/[\uE000\uE001]/);
+  });
+
+  it('escapes image attributes, rejects unsafe image sources, and preserves code', () => {
+    expect(renderMarkdown('![image](javascript:alert)')).not.toContain('<img');
+    expect(renderMarkdown('![image](mailto:person@example.com)')).not.toContain('<img');
+    expect(renderMarkdown('![" onerror="bad](https://example.com/image.png)'))
+      .toContain('alt="&quot; onerror=&quot;bad"');
+    expect(renderMarkdown('`![medium](https://example.com/badge.svg)`')).not.toContain('<img');
+  });
+
 });

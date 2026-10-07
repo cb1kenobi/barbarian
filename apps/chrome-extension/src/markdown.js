@@ -30,6 +30,12 @@ function renderInline(value) {
   };
   let source = String(value);
   source = source.replace(/`([^`\n]+)`/g, (_match, code) => stash(`<code>${escapeMarkdownHtml(code)}</code>`));
+  source = source.replace(/!\[([^\]]*)]\(([^\s)]+)(?:\s+"[^"]*")?\)/g, (_match, alt, url) => {
+    const src = safeUrl(url);
+    return stash(src && /^https?:\/\//i.test(src)
+      ? `<img src="${escapeMarkdownHtml(src)}" alt="${escapeMarkdownHtml(alt)}" loading="lazy" referrerpolicy="no-referrer">`
+      : escapeMarkdownHtml(alt));
+  });
   source = source.replace(/\[([^\]]+)]\(([^\s)]+)(?:\s+"[^"]*")?\)/g, (_match, label, url) => {
     const href = safeUrl(url);
     return stash(href
@@ -49,7 +55,9 @@ function renderInline(value) {
     .replace(/(^|[\s(])\*([^*\n]+)\*(?=$|[\s).,!?:;])/g, '$1<em>$2</em>')
     .replace(/(^|[\s(])_([^_\n]+)_(?=$|[\s).,!?:;])/g, '$1<em>$2</em>')
     .replaceAll('\n', '<br>');
-  tokens.forEach((token, index) => { html = html.replaceAll(`\uE000${index}\uE001`, token); });
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    html = html.replaceAll(`\uE000${index}\uE001`, tokens[index]);
+  }
   return html;
 }
 
