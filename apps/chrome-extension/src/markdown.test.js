@@ -50,4 +50,26 @@ describe('chat markdown rendering', () => {
     expect(renderMarkdown('`![medium](https://example.com/badge.svg)`')).not.toContain('<img');
   });
 
+  it('renders collapsible references and markdown inside them', () => {
+    const html = renderMarkdown('Finding\n<details>\n<summary>References</summary>\n\n1. Guard `afterEach` cleanup.\n</details>\nFollowing paragraph');
+    expect(html).toBe('<p>Finding</p><details><summary>References</summary><ol><li>Guard <code>afterEach</code> cleanup.</li></ol></details><p>Following paragraph</p>');
+  });
+
+  it('balances nested and unclosed details without closing an outside container', () => {
+    expect(renderMarkdown('<details open>\n<summary>Outer</summary>\n<details>\n<summary>Inner</summary>\nText\n</details>'))
+      .toBe('<details open><summary>Outer</summary><details><summary>Inner</summary><p>Text</p></details></details>');
+    expect(renderMarkdown('</details>')).toBe('<p>&lt;/details&gt;</p>');
+  });
+
+  it('keeps HTML in code literal and rejects attributes and scripts in disclosures', () => {
+    expect(renderMarkdown('```html\n<details>\n<summary>References</summary>\n</details>\n```'))
+      .not.toContain('<details>');
+    expect(renderMarkdown('`<details>`')).toBe('<p><code>&lt;details&gt;</code></p>');
+    expect(renderMarkdown('<details ontoggle="alert(1)">')).not.toContain('<details');
+    const html = renderMarkdown('<details>\n<summary><img src=x onerror=alert(1)></summary>\n<script>alert(1)</script>\n</details>');
+    expect(html).toContain('<summary>&lt;img');
+    expect(html).not.toContain('<img');
+    expect(html).not.toContain('<script>');
+  });
+
 });

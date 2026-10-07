@@ -391,6 +391,9 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
 .markdown > :first-child { margin-top: 0; }
 .markdown > :last-child { margin-bottom: 0; }
 .markdown img { max-width: 100%; height: auto; vertical-align: middle; }
+.markdown details { margin: 10px 0; padding: 0; }
+.markdown summary { cursor: pointer; font-weight: 600; }
+.markdown details[open] > summary { margin-bottom: 8px; }
 .markdown p { margin: 0 0 10px; }
 .markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 { margin: 14px 0 7px; color: var(--ink); font-size: .9375rem; line-height: 1.35; letter-spacing: 0; text-transform: none; }
 .markdown ul, .markdown ol { margin: 8px 0; padding-left: 22px; }
@@ -628,13 +631,13 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
   .settings-footer > span { display: none; }
 }
 
-.review-findings details { padding: 14px 0; border-bottom: 1px solid var(--line); }
-.review-findings { font-size: 1.0625rem; line-height: 1.6; }
-.review-findings summary { cursor: pointer; font-size: 1.0625rem; font-weight: 600; line-height: 1.45; }
-.review-findings details > p { color: var(--muted-strong); font-size: .9375rem; }
-.review-findings details > p a { color: var(--acid); text-underline-offset: 3px; overflow-wrap: anywhere; }
+.review-findings > details { padding: 14px 0; border-bottom: 1px solid var(--line); }
+.review-findings { font-size: .875rem; line-height: 1.5; }
+.review-findings > details > summary { cursor: pointer; font-size: inherit; font-weight: 600; line-height: 1.45; }
+.review-findings > details > p { color: var(--muted-strong); font-size: .8125rem; }
+.review-findings > details > p a { color: var(--acid); text-underline-offset: 3px; overflow-wrap: anywhere; }
 .review-findings .markdown { overflow-wrap: anywhere; }
-.review-findings .markdown code, .review-findings .markdown table { font-size: .9375rem; }
+.review-findings .markdown code, .review-findings .markdown table { font-size: .8125rem; }
 .review-findings .markdown h1, .review-findings .markdown h2, .review-findings .markdown h3,
-.review-findings .markdown h4, .review-findings .markdown h5, .review-findings .markdown h6 { font-size: 1.0625rem; }
+.review-findings .markdown h4, .review-findings .markdown h5, .review-findings .markdown h6 { font-size: 1em; }
 .review-findings .markdown li { display: list-item; padding: 0; border: 0; color: inherit; font-size: inherit; line-height: inherit; }

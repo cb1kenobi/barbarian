@@ -95,12 +95,14 @@ function isBlockStart(lines, index) {
   const line = lines[index] || '';
   const next = lines[index + 1] || '';
   return /^\s*$|^\s*```|^\s{0,3}#{1,6}\s+|^\s*>\s?|^\s*[-+*]\s+|^\s*\d+[.)]\s+|^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)
+    || /^\s*(?:<details(?:\s+open)?>|<\/details>|<summary>.*<\/summary>)\s*$/i.test(line)
     || (line.includes('|') && /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/.test(next));
 }
 
 export function renderMarkdown(value = '') {
   const lines = String(value).replaceAll('\r\n', '\n').split('\n');
   const output = [];
+  let detailsDepth = 0;
   for (let index = 0; index < lines.length;) {
     const line = lines[index] || '';
     if (!line.trim()) { index += 1; continue; }
@@ -113,6 +115,27 @@ export function renderMarkdown(value = '') {
       while (index < lines.length && !/^\s*```\s*$/.test(lines[index] || '')) code.push(lines[index++]);
       if (index < lines.length) index += 1;
       output.push(`<pre class="md-code"><code class="language-${language}">${highlightCode(code.join('\n'))}</code></pre>`);
+      continue;
+    }
+
+    // Support GitHub's collapsible reference blocks without accepting arbitrary HTML.
+    const details = /^\s*<details(\s+open)?>\s*$/i.exec(line);
+    if (details) {
+      output.push(details[1] ? '<details open>' : '<details>');
+      detailsDepth += 1;
+      index += 1;
+      continue;
+    }
+    if (detailsDepth > 0 && /^\s*<\/details>\s*$/i.test(line)) {
+      output.push('</details>');
+      detailsDepth -= 1;
+      index += 1;
+      continue;
+    }
+    const summary = detailsDepth > 0 && /^\s*<summary>(.*)<\/summary>\s*$/i.exec(line);
+    if (summary) {
+      output.push(`<summary>${renderInline(summary[1])}</summary>`);
+      index += 1;
       continue;
     }
 
@@ -167,5 +190,5 @@ export function renderMarkdown(value = '') {
     while (index < lines.length && (lines[index] || '').trim() && !isBlockStart(lines, index)) paragraph.push(lines[index++] || '');
     output.push(`<p>${renderInline(paragraph.join('\n'))}</p>`);
   }
-  return output.join('');
+  return output.join('') + '</details>'.repeat(detailsDepth);
 }

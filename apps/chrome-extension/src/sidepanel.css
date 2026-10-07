@@ -204,6 +204,9 @@ button:disabled { cursor: wait; opacity: .55; }
 .markdown > :first-child { margin-top: 0; }
 .markdown > :last-child { margin-bottom: 0; }
 .markdown img { max-width: 100%; height: auto; vertical-align: middle; }
+.markdown details { margin: 10px 0; padding: 0; }
+.markdown summary { cursor: pointer; font-weight: 600; }
+.markdown details[open] > summary { margin-bottom: 8px; }
 .markdown p { margin: 0 0 10px; }
 .markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 { margin: 14px 0 7px; color: var(--ink); font-size: .9375rem; line-height: 1.35; letter-spacing: 0; text-transform: none; }
 .markdown ul, .markdown ol { margin: 8px 0; padding-left: 22px; }
