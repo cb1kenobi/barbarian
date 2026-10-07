@@ -5,3 +5,5 @@ allowBuilds:
   electron-winstaller: false
   esbuild: false
   keytar: false
+minimumReleaseAgeExclude:
+  - electron@44.7.0

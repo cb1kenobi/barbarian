@@ -6,7 +6,7 @@
   "description": "A local command center for developer work, reviews, and AI agents.",
   "type": "module",
   "main": "dist/desktop/main.cjs",
-  "packageManager": "pnpm@12.5.1",
+  "packageManager": "pnpm@12.10.1",
   "scripts": {
     "build": "pnpm build:server && pnpm build:web && pnpm build:extensions && pnpm build:desktop",
     "build:desktop": "esbuild apps/desktop/src/main.ts --bundle --platform=node --external:electron --outfile=dist/desktop/main.cjs && esbuild apps/desktop/src/preload.ts --bundle --platform=node --external:electron --outfile=dist/desktop/preload.cjs && node scripts/create-macos-icon.mjs",
@@ -33,27 +33,27 @@
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",
-    "@fastify/static": "^10.1.4",
-    "dotenv": "^18.0.1",
+    "@fastify/static": "^10.1.5",
+    "dotenv": "^18.0.6",
     "fastify": "^5.12.5",
     "yaml": "^2.9.1",
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/node": "^26.6.2",
+    "@types/node": "^26.6.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.1.1",
+    "@vitejs/plugin-react": "^6.1.2",
     "concurrently": "^10.0.5",
-    "electron": "^44.4.3",
+    "electron": "^44.7.0",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vite": "^8.3.0",
-    "vitest": "^5.0.1"
+    "vite": "^8.3.3",
+    "vitest": "^5.0.3"
   },
   "build": {
     "appId": "local.barbarian.desktop",
