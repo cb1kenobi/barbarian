@@ -3,22 +3,24 @@ import type { BarbarianDatabase } from './database.js';
 import { parseReviewResult } from './agents.js';
 import { newReviewComments } from './review-comments.js';
 import { summarizeReviewComment } from './github.js';
+import { reviewRoundFilterSql, reviewRoundKeySql } from './review-round-query.js';
 
 /** Read durable agent output so earlier rounds (including clean rounds) remain visible. */
 export function storedReviewRounds(database: BarbarianDatabase, reviewId: string) {
   const runs = database.connection.prepare(`
-    SELECT id, owner, provider, model, effort, status, finished_at, reviewed_head_sha, output, error
-    FROM agent_runs WHERE review_id=? AND task LIKE 'code_review:%' AND status IN ('complete', 'failed', 'cancelled')
+    SELECT id, owner, provider, model, effort, status, finished_at, reviewed_head_sha, output, error,
+      ${reviewRoundKeySql} AS round_key
+    FROM agent_runs WHERE review_id=? AND ${reviewRoundFilterSql}
     ORDER BY id ASC
   `).all(reviewId) as Array<{
-    id: number; owner: string | null; provider: string; model: string; effort: string;
+    id: number; owner: string | null; round_key: string; provider: string; model: string; effort: string;
     status: string; finished_at: string; reviewed_head_sha: string | null; output: string; error: string | null;
   }>;
   const review = database.connection.prepare('SELECT url, head_sha FROM review_queue WHERE id=?').get(reviewId) as
     { url: string; head_sha: string } | undefined;
   const grouped = new Map<string, typeof runs>();
   for (const run of runs) {
-    const key = run.owner || `run:${run.id}`;
+    const key = run.round_key;
     const group = grouped.get(key) || [];
     group.push(run);
     grouped.set(key, group);

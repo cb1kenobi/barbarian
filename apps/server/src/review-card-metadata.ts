@@ -1,4 +1,5 @@
 import type { BarbarianDatabase } from './database.js';
+import { reviewRoundFilterSql, reviewRoundKeySql } from './review-round-query.js';
 
 export type FindingSeverity = 'high' | 'medium' | 'low';
 
@@ -49,13 +50,9 @@ export function reviewCardMetadata(database: BarbarianDatabase): Map<string, Rev
   for (const run of runs) ensure(run.review_id).last_agent_review_at = run.finished_at;
 
   const rounds = database.connection.prepare(`
-    SELECT subject_id AS review_id, COUNT(*) AS total FROM activity_events
-    WHERE subject_id IS NOT NULL AND kind='agent_review_completed' AND (
-      COALESCE(json_extract(payload_json, '$.publishedReview'), 0) = 1
-      OR COALESCE(json_extract(payload_json, '$.publishedFindings'), 0) > 0
-      OR COALESCE(json_extract(payload_json, '$.savedLocally'), 0) = 1
-    )
-    GROUP BY subject_id
+    SELECT review_id, COUNT(DISTINCT ${reviewRoundKeySql}) AS total FROM agent_runs
+    WHERE review_id IS NOT NULL AND ${reviewRoundFilterSql}
+    GROUP BY review_id
   `).all() as Array<{ review_id: string; total: number }>;
   for (const round of rounds) ensure(round.review_id).review_round_count = Number(round.total);
 

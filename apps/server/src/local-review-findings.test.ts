@@ -77,6 +77,8 @@ describe('local PR findings', () => {
   });
 
   it('counts local reviews as completed review rounds', () => {
+    database.connection.exec(`INSERT INTO agent_runs(review_id, provider, task, status, started_at, finished_at)
+      VALUES ('review', 'test', 'code_review:manual', 'complete', '', '')`);
     database.connection.exec(`INSERT INTO activity_events(kind, summary, subject_id, payload_json, created_at)
       VALUES ('agent_review_completed', 'done', 'review', '{"savedLocally":true,"publishedReview":false}', '')`);
     expect(reviewCardMetadata(database).get('review')?.review_round_count).toBe(1);

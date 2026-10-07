@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BarbarianDatabase } from './database.js';
 import { countFindingSeverities, findingSeverity, reviewCardMetadata } from './review-card-metadata.js';
+import { storedReviewRounds } from './review-rounds.js';
 
 const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
@@ -39,21 +40,39 @@ describe('countFindingSeverities', () => {
 });
 
 describe('reviewCardMetadata', () => {
-  it('counts only completed rounds that published a review through Barbarian', () => {
+  it('counts clean draft-mode reviews without requiring publication events', () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'barbarian-review-card-test-'));
     directories.push(directory);
     const database = new BarbarianDatabase(path.join(directory, 'test.db'));
+    database.connection.exec(`INSERT INTO review_queue (
+      id, repository, number, title, url, author, head_sha, head_ref_name, base_ref_name,
+      status, first_seen_at, updated_at, last_seen_at
+    ) VALUES ('github:Acme/repo#1', 'Acme/repo', 1, 'Title', 'https://github.com/Acme/repo/pull/1',
+      'author', 'head', 'feature', 'main', 'ready_to_merge', '', '', '')`);
     const insert = database.connection.prepare(`
-      INSERT INTO activity_events(kind, subject_id, summary, payload_json, created_at)
-      VALUES (?, 'github:Acme/repo#1', 'Review event', ?, ?)
+      INSERT INTO agent_runs(review_id, provider, task, status, owner, started_at, finished_at, output)
+      VALUES ('github:Acme/repo#1', 'test', ?, ?, ?, '', '', ?)
     `);
-    const now = new Date().toISOString();
-    insert.run('review_started', '{}', now);
-    insert.run('agent_review_completed', '{"publishedFindings":0}', now);
-    insert.run('agent_review_completed', '{"publishedFindings":2}', now);
-    insert.run('agent_review_completed', '{"publishedReview":true,"publishedFindings":0}', now);
+    const output = 'BARBARIAN_RESULT: {"findings":0,"verdict":"ready","summary":"Clear.","comments":[]}';
+    insert.run('code_review:new_pr', 'complete', 'first', output);
+    insert.run('code_review:feedback', 'complete', 'second', output);
+    database.connection.exec(`INSERT INTO activity_events(kind, subject_id, summary, payload_json, created_at)
+      VALUES ('agent_review_completed', 'github:Acme/repo#1', 'Done',
+        '{"publishedReview":false,"savedAsDraft":true,"publishedFindings":0}', '')`);
 
     expect(reviewCardMetadata(database).get('github:Acme/repo#1')?.review_round_count).toBe(2);
+    expect(storedReviewRounds(database, 'github:Acme/repo#1')).toHaveLength(2);
+
+    // Multiple agents/fallback attempts share a round; legacy runs without owners do not.
+    insert.run('code_review:new_pr', 'failed', 'first', '');
+    insert.run('code_review:manual', 'complete', null, output);
+    insert.run('code_review:manual', 'complete', '', output);
+    insert.run('code_review:manual', 'failed', 'failed-round', '');
+    insert.run('code_review:manual', 'cancelled', 'cancelled-round', '');
+    insert.run('code_review:manual', 'running', 'active-round', '');
+    insert.run('review_chat', 'complete', 'chat', '');
+    expect(reviewCardMetadata(database).get('github:Acme/repo#1')?.review_round_count).toBe(6);
+    expect(storedReviewRounds(database, 'github:Acme/repo#1')).toHaveLength(6);
     database.close();
   });
 });

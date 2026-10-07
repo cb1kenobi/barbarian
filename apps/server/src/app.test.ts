@@ -619,6 +619,7 @@ describe('dashboard reviews', () => {
       expect(reviewDetail.json().rounds).toEqual(expect.arrayContaining([
         expect.objectContaining({ provider: 'cursor', summary: 'Second review output', status: 'complete' }),
       ]));
+      expect(reviewDetail.json().review.review_round_count).toBe(reviewDetail.json().rounds.length);
       expect(reviewDetail.json().timeline).toEqual([
         expect.objectContaining({
           kind: 'review_discovered', label: 'Barbarian discovered this PR',
