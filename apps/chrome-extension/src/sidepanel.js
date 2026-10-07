@@ -4,6 +4,7 @@ import {
 import { pullRequestSummary, reviewRoundCount } from './review-content.js';
 import { renderMarkdown } from './markdown.js';
 import { shouldSubmitQuestion } from './chat-input.js';
+import { chatDraftKey, createChatDrafts } from './chat-drafts.js';
 import { selectionLabel, selectionPayload } from './selection-context.js';
 import {
   rememberSuppressResolved, restoreSuppressResolved, suppressResolvedStorageKey, visibleFindings,
@@ -22,7 +23,39 @@ let chatPending = false;
 let lastSelection;
 let suppressResolvedFindings = false;
 let activeReviewTab = 'review-room';
-let reviewRoomDraft = '';
+let currentDraftKey = '';
+let refreshVersion = 0;
+let refreshRequested = false;
+const chatDrafts = createChatDrafts(chrome.storage.local);
+
+function draftSaveError(key) {
+  if (key !== currentDraftKey) return;
+  const error = document.querySelector('.error');
+  if (error) error.textContent = 'Could not save the draft locally. Keep this panel open until it is sent.';
+}
+
+function rememberInput(input) {
+  const key = input?.dataset.draftKey;
+  if (key) void chatDrafts.set(key, input.value).then((saved) => { if (!saved) draftSaveError(key); });
+}
+
+function wireChatInput(kind, previous) {
+  const input = document.querySelector('textarea');
+  if (!input) return;
+  input.dataset.draftKey = currentDraftKey;
+  input.value = chatDrafts.snapshot(currentDraftKey).value;
+  input.addEventListener('input', () => rememberInput(input));
+  input.addEventListener('keydown', (event) => {
+    if (!shouldSubmitQuestion(event.key, event.shiftKey, event.isComposing)) return;
+    event.preventDefault();
+    void sendQuestion(kind);
+  });
+  if (previous?.key === currentDraftKey && previous.focused) {
+    input.focus({ preventScroll: true });
+    input.setSelectionRange(previous.start, previous.end, previous.direction);
+    input.scrollTop = previous.scrollTop;
+  }
+}
 
 const escapeHtml = (value = '') => String(value).replace(/[&<>"']/g, (character) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;',
@@ -59,11 +92,6 @@ function renderIssueContext(context) {
     <section><h2>Summary</h2><div class="summary markdown">${renderMarkdown(issue.simple_summary || issue.title)}</div></section>
     <section><h2>Issue context</h2><dl class="issue-context"><div><dt>Assigned to</dt><dd>${escapeHtml(assignees)}</dd></div><div><dt>Priority</dt><dd>${Number(issue.priority) || 0} · ${escapeHtml(reasons)}</dd></div>${issue.milestone ? `<div><dt>Milestone</dt><dd>${escapeHtml(issue.milestone)}</dd></div>` : ''}${issue.duplicate_of ? `<div><dt>Duplicate of</dt><dd>${escapeHtml(issue.duplicate_of)}</dd></div>` : ''}${issue.in_progress_pr ? `<div><dt>Pull request</dt><dd><a href="${escapeHtml(issue.in_progress_pr)}" data-github-url>In progress</a></dd></div>` : ''}${issue.fixed_by ? `<div><dt>Fixed by</dt><dd><a href="${escapeHtml(issue.fixed_by)}" data-github-url>Merged pull request</a></dd></div>` : ''}</dl></section>
     <section class="review-room"><h2>Issue Room</h2><div class="conversation">${renderMessages(messages, chatPending)}</div><textarea placeholder="Ask about the problem, likely causes, scope, or how to verify a fix…"></textarea><p class="error"></p></section>`;
-  document.querySelector('textarea')?.addEventListener('keydown', (event) => {
-    if (!shouldSubmitQuestion(event.key, event.shiftKey, event.isComposing)) return;
-    event.preventDefault();
-    void sendQuestion('issue');
-  });
   wireGitHubLinks();
 }
 
@@ -248,10 +276,17 @@ function updateSelectionPreview() {
 function renderContext(context) {
   const sameConversation = currentContext?.id === context.id && currentContext?.kind === context.kind;
   const scrollSnapshot = sameConversation ? conversationScrollSnapshot() : undefined;
+  const input = document.querySelector('textarea');
+  rememberInput(input);
+  const previousInput = input && {
+    key: input.dataset.draftKey, focused: document.activeElement === input,
+    start: input.selectionStart, end: input.selectionEnd, direction: input.selectionDirection, scrollTop: input.scrollTop,
+  };
   setAppearance(context.appearance);
   currentContext = context;
   if (context.kind === 'issue') {
     renderIssueContext(context);
+    wireChatInput('issue', previousInput);
     restoreConversationScroll(scrollSnapshot);
     if (busy) document.querySelectorAll('button').forEach((button) => { button.disabled = true; });
     return;
@@ -274,19 +309,14 @@ function renderContext(context) {
     <section class="findings-panel"><div class="findings-heading"><h2>Findings</h2><label class="finding-filter"><input type="checkbox" ${suppressResolvedFindings ? 'checked' : ''}> Hide resolved</label></div><div class="assessment"><p class="assessment-message">${escapeHtml(assessment?.message || 'Waiting for an AI review.')}</p>${assessment?.stale ? '<p class="stale">⚠ This assessment is older than the latest commit.</p>' : ''}<div class="counts"><div class="count"><strong>${Number(counts.open) || 0}</strong><span>Open</span></div><div class="count"><strong>${Number(counts.resolved) || 0}</strong><span>Resolved</span></div><div class="count"><strong>${Number(counts.outdated) || 0}</strong><span>Outdated</span></div><div class="count"><strong>${Number(counts.total) || 0}</strong><span>Total</span></div></div></div><div class="findings-content">${renderFindings(findings)}</div></section>
     <div class="review-tabs" role="tablist" aria-label="Pull request details"><button type="button" role="tab" aria-selected="${activeReviewTab === 'review-room'}" class="${activeReviewTab === 'review-room' ? 'active' : ''}" data-review-tab="review-room">Review Room</button><button type="button" role="tab" aria-selected="${activeReviewTab === 'timeline'}" class="${activeReviewTab === 'timeline' ? 'active' : ''}" data-review-tab="timeline">Timeline</button></div>
     ${activeReviewTab === 'review-room'
-      ? `<section class="review-room" role="tabpanel"><div class="conversation">${renderMessages(messages, chatPending)}</div><p class="selection"></p><textarea placeholder="Ask what changed, why it works, what could break, or how to test it…">${escapeHtml(reviewRoomDraft)}</textarea><div class="actions"><button class="secondary ask-selection" disabled>Ask about selection</button></div><p class="error"></p></section>`
+      ? `<section class="review-room" role="tabpanel"><div class="conversation">${renderMessages(messages, chatPending)}</div><p class="selection"></p><textarea placeholder="Ask what changed, why it works, what could break, or how to test it…"></textarea><div class="actions"><button class="secondary ask-selection" disabled>Ask about selection</button></div><p class="error"></p></section>`
       : `<section class="review-timeline" role="tabpanel">${renderTimeline(timeline)}</section>`}`;
   document.querySelectorAll('[data-review-tab]').forEach((button) => button.addEventListener('click', () => {
     activeReviewTab = button.dataset.reviewTab;
     renderContext(currentContext);
   }));
   document.querySelector('.ask-selection')?.addEventListener('click', () => void sendQuestion('selection'));
-  document.querySelector('textarea')?.addEventListener('input', (event) => { reviewRoomDraft = event.currentTarget.value; });
-  document.querySelector('textarea')?.addEventListener('keydown', (event) => {
-    if (!shouldSubmitQuestion(event.key, event.shiftKey, event.isComposing)) return;
-    event.preventDefault();
-    void sendQuestion('pr');
-  });
+  wireChatInput('pr', previousInput);
   document.querySelector('.agent-review')?.addEventListener('click', () => void runReviewAction('review'));
   document.querySelector('.test-locally')?.addEventListener('click', () => void runReviewAction('workspace'));
   document.querySelector('.finding-filter input')?.addEventListener('change', (event) => {
@@ -414,14 +444,17 @@ async function sendQuestion(kind) {
   if (busy || (!currentContext?.review && !currentContext?.issue)) return;
   const input = document.querySelector('textarea');
   const error = document.querySelector('.error');
+  const context = currentContext;
+  const draftKey = currentDraftKey;
+  rememberInput(input);
+  const sentDraft = chatDrafts.snapshot(draftKey);
   const question = input?.value.trim() || '';
   if (kind === 'selection') await captureSelection();
+  if (draftKey !== currentDraftKey || context !== currentContext || busy) return;
   if ((kind === 'pr' || kind === 'issue') && !question) { error.textContent = 'Write a question first.'; input?.focus(); return; }
   if (kind === 'selection' && !lastSelection) { error.textContent = 'Select lines on the GitHub page first.'; return; }
   const message = question || 'Explain this selected code and how it relates to the pull request.';
   const selection = kind === 'selection' ? selectionPayload(lastSelection) : undefined;
-  if (input) input.value = '';
-  if (!currentContext.issue) reviewRoomDraft = '';
   appendConversationMessage({ role: 'user', author: 'GitHub extension', content: message });
   busy = true;
   chatPending = true;
@@ -429,12 +462,16 @@ async function sendQuestion(kind) {
   error.textContent = '';
   document.querySelectorAll('button').forEach((button) => { button.disabled = true; });
   try {
-    const chatPath = currentContext.issue
-      ? `/api/issues/${encodeURIComponent(currentContext.id)}/chat`
-      : `/api/reviews/${encodeURIComponent(currentContext.review.id)}/chat`;
+    const chatPath = context.issue
+      ? `/api/issues/${encodeURIComponent(context.id)}/chat`
+      : `/api/reviews/${encodeURIComponent(context.review.id)}/chat`;
     const result = await api(chatPath, {
       method: 'POST', body: JSON.stringify({ message, selection, askAgent: true, author: 'GitHub extension' }),
     });
+    const cleared = chatDrafts.clearIfUnchanged(draftKey, sentDraft);
+    const currentInput = document.querySelector('textarea');
+    if (currentInput?.dataset.draftKey === draftKey) currentInput.value = chatDrafts.snapshot(draftKey).value;
+    void cleared.then((saved) => { if (!saved && !chatDrafts.snapshot(draftKey).value) draftSaveError(draftKey); });
     chatPending = false;
     finishPendingConversation(result.message || {
       role: 'assistant', author: 'Agent', content: 'The response was saved in Barbarian.',
@@ -444,7 +481,6 @@ async function sendQuestion(kind) {
   } catch (caught) {
     chatPending = false;
     finishPendingConversation();
-    if (!currentContext.issue) reviewRoomDraft = question;
     const currentError = document.querySelector('.error');
     if (currentError) currentError.textContent = caught.message;
   }
@@ -453,17 +489,23 @@ async function sendQuestion(kind) {
     busy = false;
     document.querySelectorAll('button').forEach((button) => { button.disabled = false; });
     updateSelectionPreview();
+    if (refreshRequested) void refresh({ quiet: true });
   }
 }
 
 async function refresh({ quiet = false, remote = false } = {}) {
-  if (busy) return;
+  if (busy) { refreshRequested = true; return; }
+  refreshRequested = false;
+  const version = ++refreshVersion;
   const tab = await activeTab();
+  if (version !== refreshVersion || busy) return;
   const page = parseGitHubPage(tab?.url);
   currentTab = tab;
+  rememberInput(document.querySelector('textarea'));
   if (!page) {
     currentPageKey = '';
     currentPageKind = '';
+    currentDraftKey = '';
     currentContext = undefined;
     document.querySelector('.pr-key').textContent = 'GitHub';
     document.querySelector('main').innerHTML = '<p class="empty">Open a GitHub pull request or issue to use Barbarian.</p>';
@@ -475,14 +517,25 @@ async function refresh({ quiet = false, remote = false } = {}) {
     currentContext = undefined;
     lastSelection = undefined;
     activeReviewTab = 'review-room';
-    reviewRoomDraft = '';
   }
   document.querySelector('.pr-key').textContent = page.key;
+  currentDraftKey = chatDraftKey(page.kind, page.key);
+  try {
+    await chatDrafts.load(currentDraftKey);
+  } catch {
+    if (version !== refreshVersion || busy) return;
+    document.querySelector('main').innerHTML = '<p class="offline">Could not load the saved chat draft. This panel will retry automatically.</p>';
+    return;
+  }
+  if (version !== refreshVersion || busy) return;
   try {
     const refreshQuery = remote ? '&refresh=1' : '';
     const endpoint = page.kind === 'issue' ? '/api/browser/issue-context' : '/api/browser/context';
-    renderContext(await api(`${endpoint}?url=${encodeURIComponent(tab.url)}${refreshQuery}`));
+    const context = await api(`${endpoint}?url=${encodeURIComponent(tab.url)}${refreshQuery}`);
+    if (version !== refreshVersion || busy) return;
+    renderContext(context);
   } catch (caught) {
+    if (version !== refreshVersion || busy) return;
     if (quiet && currentContext) return;
     document.querySelector('main').innerHTML = `<p class="offline"><strong>Barbarian is offline.</strong>${escapeHtml(caught.message)}</p><p class="empty">Start the local server and this panel will reconnect automatically.</p>`;
   }
@@ -498,7 +551,11 @@ chrome.tabs.onUpdated.addListener((tabId, change) => {
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === 'barbarian-context-updated' && message.key === currentPageKey
     && message.kind === currentPageKind && message.context) {
-    renderContext(message.context);
+    const draftKey = currentDraftKey;
+    const version = refreshVersion;
+    void chatDrafts.load(draftKey).then(() => {
+      if (draftKey === currentDraftKey && version === refreshVersion) renderContext(message.context);
+    }).catch(() => draftSaveError(draftKey));
   } else if (message?.type === 'barbarian-selection-changed' && parseGitHubPage(message.url)?.key === currentPageKey) {
     lastSelection = message.selection?.text ? message.selection : undefined;
     updateSelectionPreview();
