@@ -105,7 +105,24 @@ describe('side panel chat drafts', () => {
     expect(reopened.input().value).toBe('issue draft');
   });
 
-  it('keeps a failed message available to retry and clears it only on success', async () => {
+  it.each(['pull/1', 'issues/2'])('clears %s immediately and stays clear through refreshes while waiting', async (page) => {
+    const p = await panel();
+    await p.navigate(`https://github.com/owner/repo/${page}`);
+    await p.type('question');
+    const key = p.input().dataset.draftKey;
+    let finish;
+    p.chrome.runtime.sendMessage.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    await p.send();
+    expect(p.input().value).toBe('');
+    expect(p.data[key]).toBeUndefined();
+    await p.update();
+    expect(p.input().value).toBe('');
+    finish({ ok: true, body: {} });
+    await settle();
+    expect(p.input().value).toBe('');
+  });
+
+  it('restores a failed message for retry', async () => {
     const p = await panel();
     await p.type('please keep this');
     p.chrome.runtime.sendMessage.mockResolvedValueOnce({ ok: false, error: 'Connection lost' });
@@ -129,6 +146,22 @@ describe('side panel chat drafts', () => {
     await settle();
     expect(p.input().value).toBe('next question');
     expect(p.data[chatDraftKey('pullRequest', 'owner/repo#1')]).toBe('next question');
+  });
+
+  it('does not overwrite new typing when an earlier submission fails', async () => {
+    const p = await panel();
+    await p.type('first question');
+    let finish;
+    p.chrome.runtime.sendMessage.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    await p.send();
+    expect(p.input().value).toBe('');
+    await p.type('next question');
+    await p.update();
+    finish({ ok: false, error: 'Connection lost' });
+    await settle();
+    expect(p.input().value).toBe('next question');
+    expect(p.data[chatDraftKey('pullRequest', 'owner/repo#1')]).toBe('next question');
+    expect(p.nodes['.error'].textContent).toBe('Connection lost');
   });
 
   it('ignores an old context response after navigating to a different conversation', async () => {

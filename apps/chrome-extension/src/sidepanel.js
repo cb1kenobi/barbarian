@@ -446,15 +446,19 @@ async function sendQuestion(kind) {
   const error = document.querySelector('.error');
   const context = currentContext;
   const draftKey = currentDraftKey;
+  if (kind === 'selection') await captureSelection();
+  if (draftKey !== currentDraftKey || context !== currentContext || busy) return;
   rememberInput(input);
   const sentDraft = chatDrafts.snapshot(draftKey);
   const question = input?.value.trim() || '';
-  if (kind === 'selection') await captureSelection();
-  if (draftKey !== currentDraftKey || context !== currentContext || busy) return;
   if ((kind === 'pr' || kind === 'issue') && !question) { error.textContent = 'Write a question first.'; input?.focus(); return; }
   if (kind === 'selection' && !lastSelection) { error.textContent = 'Select lines on the GitHub page first.'; return; }
   const message = question || 'Explain this selected code and how it relates to the pull request.';
   const selection = kind === 'selection' ? selectionPayload(lastSelection) : undefined;
+  const cleared = chatDrafts.clearIfUnchanged(draftKey, sentDraft);
+  const clearedDraft = chatDrafts.snapshot(draftKey);
+  if (input) input.value = '';
+  void cleared.then((saved) => { if (!saved) draftSaveError(draftKey); });
   appendConversationMessage({ role: 'user', author: 'GitHub extension', content: message });
   busy = true;
   chatPending = true;
@@ -468,10 +472,6 @@ async function sendQuestion(kind) {
     const result = await api(chatPath, {
       method: 'POST', body: JSON.stringify({ message, selection, askAgent: true, author: 'GitHub extension' }),
     });
-    const cleared = chatDrafts.clearIfUnchanged(draftKey, sentDraft);
-    const currentInput = document.querySelector('textarea');
-    if (currentInput?.dataset.draftKey === draftKey) currentInput.value = chatDrafts.snapshot(draftKey).value;
-    void cleared.then((saved) => { if (!saved && !chatDrafts.snapshot(draftKey).value) draftSaveError(draftKey); });
     chatPending = false;
     finishPendingConversation(result.message || {
       role: 'assistant', author: 'Agent', content: 'The response was saved in Barbarian.',
@@ -479,6 +479,12 @@ async function sendQuestion(kind) {
     const currentError = document.querySelector('.error');
     if (currentError) currentError.textContent = '';
   } catch (caught) {
+    // Restore a failed submission only if the composer has not been edited since.
+    if (chatDrafts.snapshot(draftKey) === clearedDraft) {
+      void chatDrafts.set(draftKey, sentDraft.value).then((saved) => { if (!saved) draftSaveError(draftKey); });
+      const currentInput = document.querySelector('textarea');
+      if (currentInput?.dataset.draftKey === draftKey) currentInput.value = sentDraft.value;
+    }
     chatPending = false;
     finishPendingConversation();
     const currentError = document.querySelector('.error');

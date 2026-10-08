@@ -330,7 +330,7 @@ This is a browser-wide Chrome preference, so it controls Barbarian and every oth
 
 Use **Ask about PR** to discuss the entire pull request. To ask about particular code, select lines on the GitHub page, optionally type a question, and click **Ask about selection**. Both interactions go through the local Barbarian server. The recent conversation appears in the sidebar, and the complete chat history remains saved in the review room.
 
-Unsent chat drafts are saved in Chrome’s local extension storage separately for each PR and issue. Refreshing the panel, switching tabs, or reopening Chrome restores the draft. A successful send clears the submitted draft; failed sends and text edited while waiting for a response are preserved.
+Unsent chat drafts are saved in Chrome’s local extension storage separately for each PR and issue. Refreshing the panel, switching tabs, or reopening Chrome restores the draft. Submitting clears the input immediately. If the request fails, the submitted text is restored unless you have edited the draft while waiting for a response.
 
 Use **▶ Agent review** to start the configured AI review workflow for the active PR. While it is running, the button becomes **■ Stop agent review**. Stopping cancels every in-flight agent process associated with that PR, clears queued manual review work, and pauses automatic review for that version. Starting it again resumes review; new commits or feedback also clear the pause. Use **Test locally** to ask the Barbarian server to clone or update the repository, create a detached PR worktree, install dependencies, and run its build script. The panel reports the prepared workspace path when it finishes.
 
