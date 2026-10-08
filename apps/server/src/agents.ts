@@ -13,6 +13,7 @@ import type { AgentSelectionConfig } from './types.js';
 import {
   fetchPullRequestReviewBundle,
   postPullRequestReview,
+  pruneStalePendingReview,
   validateReviewCommentLocations,
   type ReviewBundle,
   type ReviewCommentDraft,
@@ -342,6 +343,7 @@ export function parseReviewResult(output: string): ParsedReviewResult {
 export interface ReviewAgentDependencies {
   fetchBundle?: (repository: string, number: number) => Promise<ReviewBundle>;
   postReview?: typeof postPullRequestReview;
+  pruneDraft?: typeof pruneStalePendingReview;
   refreshContext?: typeof refreshReviewContext;
   schedule?: <T>(task: (signal: AbortSignal) => Promise<T>, key: string) => Promise<T>;
   currentConfig?: () => BarbarianConfig;
@@ -441,6 +443,7 @@ export async function runReviewAgent(
   const review = getReview(database, claim.reviewId);
   const fetchBundle = dependencies.fetchBundle || fetchPullRequestReviewBundle;
   const postReview = dependencies.postReview || postPullRequestReview;
+  const pruneDraft = dependencies.pruneDraft || pruneStalePendingReview;
   const refreshContextAfterReview = dependencies.refreshContext || refreshReviewContext;
   const currentConfig = dependencies.currentConfig || (() => config);
   const task = `code_review:${claim.trigger}`;
@@ -454,9 +457,20 @@ export async function runReviewAgent(
   const attempted = new Set<string>();
   const attemptedProviders: string[] = [];
   let publicationAttempted = false;
+  let draftCleanupAttempted = false;
   try {
     const criteria = criteriaForReviewAgent(config, claim.agentId);
     if (config.agents.codeReview.length === 0) throw new Error('No code review agents are configured');
+    if (signal?.aborted) throw signal.reason || new Error('Review stopped');
+    if (!database.connection.prepare('SELECT 1 FROM review_queue WHERE id=? AND claim_owner=?')
+      .get(claim.reviewId, claim.owner)) throw new Error('Review claim was cancelled before draft cleanup');
+    draftCleanupAttempted = true;
+    const cleaned = await pruneDraft(review.repository, review.number, claim.headSha, signal);
+    database.connection.prepare('UPDATE review_queue SET pending_review_id=?, pending_review_comments=? WHERE id=?')
+      .run(cleaned.pendingReview?.id || null, cleaned.pendingReview?.comments || 0, claim.reviewId);
+    if (cleaned.removedCommentIds.length) recordActivity(database, 'pending_review_cleaned',
+      `Removed ${cleaned.removedCommentIds.length} outdated draft comments from ${review.repository}#${review.number}`,
+      claim.reviewId, { commentIds: cleaned.removedCommentIds, headSha: claim.headSha });
     const bundle = await fetchBundle(review.repository, review.number);
     if (bundle.metadata.headRefOid !== claim.headSha) {
       throw new Error('Pull request head changed before the review bundle was captured');
@@ -605,7 +619,7 @@ ${JSON.stringify(bundle)}`;
     try { await refreshContextAfterReview(database, claim.reviewId); } catch {}
   } catch (error) {
     if (!signal?.aborted) failReviewClaim(database, config, claim, error);
-    if (publicationAttempted) {
+    if (publicationAttempted || draftCleanupAttempted) {
       try { await refreshContextAfterReview(database, claim.reviewId); } catch {}
     }
     throw error;

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchPullRequestReviewContext, postPullRequestReview } from './github.js';
+import { fetchPullRequestReviewContext, postPullRequestReview, pruneStalePendingReview } from './github.js';
 import { runProcess } from './process.js';
 import { BarbarianDatabase } from './database.js';
 import { refreshReviewContext } from './review-context.js';
@@ -14,6 +14,93 @@ const success = (body: unknown) => ({ stdout: JSON.stringify(body), stderr: '', 
 const lookup = (nodes: unknown[] = []) => success({ data: { repository: { pullRequest: { reviews: { nodes } } } } });
 const payloads = () => run.mock.calls.flatMap(([, , options]) => options?.input ? [JSON.parse(options.input)] : []);
 beforeEach(() => run.mockReset());
+
+function draftPage(comments: unknown[], options: { cursor?: string; state?: string; head?: string } = {}) {
+  return success({ data: { node: {
+    state: options.state || 'PENDING', viewerDidAuthor: true, pullRequest: { headRefOid: options.head || 'newhead' },
+    comments: { nodes: comments, pageInfo: { hasNextPage: Boolean(options.cursor), endCursor: options.cursor || null } },
+  } } });
+}
+
+function draftComment(options: { outdated?: boolean; state?: string; head?: string } = {}) {
+  return success({ data: { node: {
+    outdated: options.outdated ?? true, state: options.state || 'PENDING',
+    pullRequest: { headRefOid: options.head || 'newhead' },
+    pullRequestReview: { id: pending.id, state: options.state === 'SUBMITTED' ? 'COMMENTED' : 'PENDING', viewerDidAuthor: true },
+  } } });
+}
+
+describe('stale pending review cleanup', () => {
+  it('removes only outdated pending comments across pages and returns the refreshed count', async () => {
+    run.mockResolvedValueOnce(lookup([pending]))
+      .mockResolvedValueOnce(draftPage([
+        { id: 'old', outdated: true, state: 'PENDING' },
+        { id: 'current', outdated: false, state: 'PENDING' },
+        { id: 'published', outdated: true, state: 'SUBMITTED' },
+      ], { cursor: 'next' }))
+      .mockResolvedValueOnce(draftPage([{ id: 'older', outdated: true, state: 'PENDING' }]))
+      .mockResolvedValueOnce(draftComment()).mockResolvedValueOnce(success({ data: { deletePullRequestReviewComment: {} } }))
+      .mockResolvedValueOnce(draftComment()).mockResolvedValueOnce(success({ data: { deletePullRequestReviewComment: {} } }))
+      .mockResolvedValueOnce(lookup([{ ...pending, comments: { totalCount: 1 } }]));
+    expect(await pruneStalePendingReview('Acme/repo', 1, 'newhead')).toEqual({
+      pendingReview: { id: pending.id, databaseId: 42, comments: 1 }, removedCommentIds: ['old', 'older'],
+    });
+    const deletions = payloads().filter((payload) => payload.query.includes('mutation'));
+    expect(deletions.map((payload) => payload.variables.input.id)).toEqual(['old', 'older']);
+    expect(JSON.stringify(payloads())).not.toContain('submitPullRequestReview');
+    expect(payloads()[2].variables.cursor).toBe('next');
+  });
+
+  it('preserves current comments even when they originated on an older commit', async () => {
+    run.mockResolvedValueOnce(lookup([pending]))
+      .mockResolvedValueOnce(draftPage([{ id: 'current', outdated: false, state: 'PENDING' }]))
+      .mockResolvedValueOnce(lookup([pending]));
+    expect((await pruneStalePendingReview('Acme/repo', 1, 'newhead')).removedCommentIds).toEqual([]);
+    expect(payloads().every((payload) => !payload.query.includes('mutation'))).toBe(true);
+  });
+
+  it('stops cleanup if the draft is submitted before a deletion', async () => {
+    run.mockResolvedValueOnce(lookup([pending]))
+      .mockResolvedValueOnce(draftPage([{ id: 'old', outdated: true, state: 'PENDING' }]))
+      .mockResolvedValueOnce(draftComment({ state: 'SUBMITTED' })).mockResolvedValueOnce(lookup());
+    expect(await pruneStalePendingReview('Acme/repo', 1, 'newhead'))
+      .toEqual({ pendingReview: null, removedCommentIds: [] });
+    expect(payloads().every((payload) => !payload.query.includes('mutation'))).toBe(true);
+  });
+
+  it('stops cleanup if the PR head changes', async () => {
+    run.mockResolvedValueOnce(lookup([pending]))
+      .mockResolvedValueOnce(draftPage([{ id: 'old', outdated: true, state: 'PENDING' }]))
+      .mockResolvedValueOnce(draftComment({ head: 'anotherhead' }));
+    await expect(pruneStalePendingReview('Acme/repo', 1, 'newhead')).rejects.toThrow('head changed');
+    expect(payloads().every((payload) => !payload.query.includes('mutation'))).toBe(true);
+  });
+
+  it('leaves comments that are no longer outdated alone', async () => {
+    run.mockResolvedValueOnce(lookup([pending]))
+      .mockResolvedValueOnce(draftPage([{ id: 'old', outdated: true, state: 'PENDING' }]))
+      .mockResolvedValueOnce(draftComment({ outdated: false })).mockResolvedValueOnce(lookup([pending]));
+    expect((await pruneStalePendingReview('Acme/repo', 1, 'newhead')).removedCommentIds).toEqual([]);
+    expect(payloads().every((payload) => !payload.query.includes('mutation'))).toBe(true);
+  });
+
+  it('propagates deletion failures so cleanup can be retried', async () => {
+    run.mockResolvedValueOnce(lookup([pending]))
+      .mockResolvedValueOnce(draftPage([{ id: 'old', outdated: true, state: 'PENDING' }]))
+      .mockResolvedValueOnce(draftComment())
+      .mockResolvedValueOnce(success({ errors: [{ message: 'GitHub unavailable' }] }));
+    await expect(pruneStalePendingReview('Acme/repo', 1, 'newhead')).rejects.toThrow('GitHub unavailable');
+  });
+
+  it('does nothing if there is no pending review or the operation is cancelled', async () => {
+    run.mockResolvedValueOnce(lookup());
+    expect(await pruneStalePendingReview('Acme/repo', 1, 'newhead'))
+      .toEqual({ pendingReview: null, removedCommentIds: [] });
+    await expect(pruneStalePendingReview('Acme/repo', 1, 'newhead', AbortSignal.abort()))
+      .rejects.toThrow();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('GitHub draft review publication', () => {
   it('batches findings into a pending review without an event or a submission request', async () => {

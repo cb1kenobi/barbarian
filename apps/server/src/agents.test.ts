@@ -16,7 +16,10 @@ import { AgentRuntime } from './agent-runtime.js';
 import { ignoreReview } from './review-ignore.js';
 
 const directories: string[] = [];
-beforeEach(() => { vi.spyOn(github, 'postPullRequestReview').mockResolvedValue(undefined); });
+beforeEach(() => {
+  vi.spyOn(github, 'postPullRequestReview').mockResolvedValue(undefined);
+  vi.spyOn(github, 'pruneStalePendingReview').mockResolvedValue({ pendingReview: null, removedCommentIds: [] });
+});
 afterEach(() => { vi.restoreAllMocks(); });
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
@@ -127,6 +130,44 @@ describe('newReviewComments', () => {
 });
 
 describe('runReviewAgent', () => {
+  it('cleans stale draft comments before capturing discussion even if the review is clean', async () => {
+    const { database, config, claim } = setup(`console.log('BARBARIAN_RESULT: {"findings":0,"verdict":"ready","summary":"Clear."}')`);
+    database.connection.prepare('UPDATE review_queue SET pending_review_id=?, pending_review_comments=3 WHERE id=?')
+      .run('draft', claim.reviewId);
+    const pruneDraft = vi.fn(async () => ({
+      pendingReview: { id: 'draft', databaseId: 42, comments: 1 }, removedCommentIds: ['old', 'older'],
+    }));
+    const fetchBundle = vi.fn(async () => {
+      expect(pruneDraft).toHaveBeenCalled();
+      return bundle;
+    });
+    await runReviewAgent(database, config, { ...claim, trigger: 'new_commits' }, undefined, {
+      ...dependencies, pruneDraft, fetchBundle,
+    });
+    expect(github.postPullRequestReview).not.toHaveBeenCalled();
+    expect(database.connection.prepare('SELECT pending_review_id, pending_review_comments FROM review_queue').get())
+      .toEqual({ pending_review_id: 'draft', pending_review_comments: 1 });
+    expect(database.connection.prepare("SELECT payload_json FROM activity_events WHERE kind='pending_review_cleaned'").get())
+      .toMatchObject({ payload_json: JSON.stringify({ commentIds: ['old', 'older'], headSha: claim.headSha }) });
+    database.close();
+  });
+
+  it('refreshes partial cleanup and retries instead of starting an agent after cleanup fails', async () => {
+    const { database, config, claim } = setup("console.log('unused')");
+    const fetchBundle = vi.fn(async () => bundle);
+    const refreshContext = vi.fn(async () => undefined);
+    await expect(runReviewAgent(database, config, claim, undefined, {
+      ...dependencies, fetchBundle, refreshContext,
+      pruneDraft: async () => { throw new Error('Cleanup failed'); },
+    })).rejects.toThrow('Cleanup failed');
+    expect(fetchBundle).not.toHaveBeenCalled();
+    expect(refreshContext).toHaveBeenCalled();
+    expect(database.connection.prepare('SELECT COUNT(*) AS total FROM agent_runs').get()).toEqual({ total: 0 });
+    expect(database.connection.prepare('SELECT status, last_reviewed_sha FROM review_queue').get())
+      .toEqual({ status: 'agent_failed', last_reviewed_sha: null });
+    database.close();
+  });
+
   it('does not launch a child agent when the review is ignored during agent selection', async () => {
     const { database, config, claim } = setup("console.log('unused')");
     const runtime = new AgentRuntime(2);

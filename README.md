@@ -185,6 +185,8 @@ review:
 
 Automatic reviews and **Agent review** retain every review round in **Findings**, including clean results, summaries, and issues with code locations. Earlier rounds remain visible after later reviews and new commits. Under **Settings → Review behavior**, **Save review comments as pending** (`review.saveAsDraft`) controls GitHub delivery: enabled batches new issues into an unsubmitted review; disabled publishes them to the PR. Only a human submits or discards pending reviews, even after disabling the setting. Clean results and already-posted issues do not create GitHub comments. Existing GitHub comments remain visible alongside review history.
 
+Before capturing each review’s discussion, Barbarian checks your pending review and removes comments GitHub marks outdated by newer changes. Current draft comments remain queued, and the pending-comment count is refreshed even when the new review finds no issues. Cleanup rechecks the PR head and pending state before each deletion; the complete review-round history remains in Findings.
+
 `reviewName` is the optional attribution on GitHub review comments. Leave it blank to use “Reviewed” without a name.
 
 Priority is additive: configured repository weight + configured label weights + milestone weight + standard severity-label weight + a repository-neutral data-integrity signal. Repository names never affect the score. The dashboard shows the reasons so the ordering is explainable.
