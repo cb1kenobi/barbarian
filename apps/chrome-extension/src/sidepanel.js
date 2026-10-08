@@ -14,6 +14,7 @@ import { captureChatScroll, restoredChatScrollTop, shouldKeepChatPinned } from '
 import { reconcileChatReply, renderChatPendingMessage } from './chat-pending.js';
 import { renderTimeline } from './timeline.js';
 import { renderReviewRounds } from './review-findings.js';
+import { createFindingExpansion } from './finding-expansion.js';
 
 let currentTab;
 let currentPageKey = '';
@@ -28,6 +29,24 @@ let currentDraftKey = '';
 let refreshVersion = 0;
 let refreshRequested = false;
 const chatDrafts = createChatDrafts(chrome.storage.local);
+const findingExpansion = createFindingExpansion(chrome.storage.local);
+
+function rememberFindingDetails(root = document) {
+  root.querySelectorAll('details[data-finding-detail]').forEach((detail) => {
+    if (detail.dataset.findingPr) void findingExpansion.remember(detail.dataset.findingPr, detail.dataset.findingDetail, detail.open);
+  });
+}
+
+function wireFindingDetails(root = document) {
+  const pr = currentPageKey;
+  root.querySelectorAll('details[data-finding-detail]').forEach((detail) => {
+    detail.dataset.findingPr = pr;
+    detail.open = findingExpansion.isOpen(pr, detail.dataset.findingDetail, detail.open);
+    detail.addEventListener('toggle', () => {
+      if (detail.isConnected) void findingExpansion.remember(pr, detail.dataset.findingDetail, detail.open);
+    });
+  });
+}
 
 function draftSaveError(key) {
   if (key !== currentDraftKey) return;
@@ -137,7 +156,7 @@ function renderFindings(findings) {
   return `<div class="findings">${visible.map((finding) => {
     const state = findingState(finding);
     const location = finding.path ? `${finding.path}${finding.line ? `:${finding.line}` : ''}` : 'Conversation';
-    return `<article class="finding ${state.className}"><details ${!finding.resolved && !finding.outdated ? 'open' : ''}><summary>${escapeHtml(finding.summary || 'Review comment')} · ${escapeHtml(state.label)}</summary><p class="finding-meta">${finding.source === 'local' ? 'Saved in Barbarian · ' : ''}<a href="${escapeHtml(finding.url)}" data-github-url>${escapeHtml(location)}</a> · ${escapeHtml(finding.author)}</p><div class="markdown">${renderMarkdown(finding.body)}</div></details></article>`;
+    return `<article class="finding ${state.className}"><details data-finding-detail="${escapeHtml(`finding:${finding.id}`)}" ${!finding.resolved && !finding.outdated ? 'open' : ''}><summary>${escapeHtml(finding.summary || 'Review comment')} · ${escapeHtml(state.label)}</summary><p class="finding-meta">${finding.source === 'local' ? 'Saved in Barbarian · ' : ''}<a href="${escapeHtml(finding.url)}" data-github-url>${escapeHtml(location)}</a> · ${escapeHtml(finding.author)}</p><div class="markdown">${renderMarkdown(finding.body)}</div></details></article>`;
   }).join('')}</div>`;
 }
 
@@ -274,6 +293,7 @@ function updateSelectionPreview() {
 }
 
 function renderContext(context) {
+  rememberFindingDetails();
   const sameConversation = currentContext?.id === context.id && currentContext?.kind === context.kind;
   const scrollSnapshot = sameConversation ? conversationScrollSnapshot() : undefined;
   const input = document.querySelector('textarea');
@@ -326,11 +346,14 @@ function renderContext(context) {
     void rememberSuppressResolved(suppressResolvedFindings, chrome.storage.local);
     const content = document.querySelector('.findings-content');
     if (content) {
+      rememberFindingDetails(content);
       content.innerHTML = renderFindings(findings);
       wireGitHubLinks(content);
+      wireFindingDetails(content);
     }
   });
   wireGitHubLinks();
+  wireFindingDetails();
   updateSelectionPreview();
   restoreConversationScroll(scrollSnapshot);
   if (busy) document.querySelectorAll('button').forEach((button) => { button.disabled = true; });
@@ -509,6 +532,7 @@ async function refresh({ quiet = false, remote = false } = {}) {
   if (version !== refreshVersion || busy) return;
   const page = parseGitHubPage(tab?.url);
   currentTab = tab;
+  rememberFindingDetails();
   rememberInput(document.querySelector('textarea'));
   if (!page) {
     currentPageKey = '';
@@ -529,7 +553,7 @@ async function refresh({ quiet = false, remote = false } = {}) {
   document.querySelector('.pr-key').textContent = page.key;
   currentDraftKey = chatDraftKey(page.kind, page.key);
   try {
-    await chatDrafts.load(currentDraftKey);
+    await Promise.all([chatDrafts.load(currentDraftKey), findingExpansion.load(page.key)]);
   } catch {
     if (version !== refreshVersion || busy) return;
     document.querySelector('main').innerHTML = '<p class="offline">Could not load the saved chat draft. This panel will retry automatically.</p>';
@@ -561,7 +585,7 @@ chrome.runtime.onMessage.addListener((message) => {
     && message.kind === currentPageKind && message.context) {
     const draftKey = currentDraftKey;
     const version = refreshVersion;
-    void chatDrafts.load(draftKey).then(() => {
+    void Promise.all([chatDrafts.load(draftKey), findingExpansion.load(currentPageKey)]).then(() => {
       if (draftKey === currentDraftKey && version === refreshVersion) renderContext(message.context);
     }).catch(() => draftSaveError(draftKey));
   } else if (message?.type === 'barbarian-selection-changed' && parseGitHubPage(message.url)?.key === currentPageKey) {
@@ -578,8 +602,10 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     if (checkbox) checkbox.checked = suppressResolvedFindings;
     const content = document.querySelector('.findings-content');
     if (content && currentContext?.findings) {
+      rememberFindingDetails(content);
       content.innerHTML = renderFindings(currentContext.findings);
       wireGitHubLinks(content);
+      wireFindingDetails(content);
     }
   }
   if (areaName === 'local' && serverUrlStorageKey in changes) {

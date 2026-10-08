@@ -21,10 +21,20 @@ async function panel(data = {}, reviewDetails = {}) {
   const document = {
     hidden: false, activeElement: null, documentElement: { dataset: {}, style: {} },
     querySelector: (selector) => nodes[selector] || null,
-    querySelectorAll: (selector) => selector === '[data-review-tab]' ? nodes.tabs || [] : [],
+    querySelectorAll: (selector) => selector === '[data-review-tab]' ? nodes.tabs || []
+      : selector === 'details[data-finding-detail]' ? nodes.details || [] : [],
   };
   nodes.main = { set innerHTML(html) {
     this.markup = html;
+    (nodes.details || []).forEach((detail) => { detail.isConnected = false; });
+    nodes.details = [...html.matchAll(/<details\s+([^>]+)>/g)].flatMap((match) => {
+      const key = match[1].match(/data-finding-detail="([^"]+)"/);
+      return key ? [{
+        dataset: { findingDetail: key[1] }, open: /\sopen(?:\s|$)/.test(match[1]),
+        isConnected: true, listeners: {},
+        addEventListener(name, callback) { this.listeners[name] = callback; },
+      }] : [];
+    });
     nodes.tabs = [...html.matchAll(/data-review-tab="([^"]+)"/g)].map((match) => ({
       dataset: { reviewTab: match[1] }, listeners: {},
       addEventListener(name, callback) { this.listeners[name] = callback; },
@@ -67,17 +77,60 @@ async function panel(data = {}, reviewDetails = {}) {
     async navigate(next) { url = next; chrome.tabs.onActivated.fire(); await settle(); },
     async update() {
       const next = context(url);
-      chrome.runtime.onMessage.fire({ type: 'barbarian-context-updated', key: next.id, kind: next.kind, context: next });
+      chrome.runtime.onMessage.fire({ type: 'barbarian-context-updated', key: next.id, kind: next.kind, context: { ...next, ...reviewDetails } });
       await settle();
     },
     async send() { nodes.textarea.listeners.keydown({ key: 'Enter', preventDefault() {} }); await settle(); },
     async selectTab(name) { nodes.tabs.find((tab) => tab.dataset.reviewTab === name).listeners.click(); await settle(); },
+    detail: (key) => nodes.details.find((detail) => detail.dataset.findingDetail === key),
   };
 }
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('side panel chat drafts', () => {
+  it('preserves collapsed findings and rounds through refreshes, tab switches, and reopening', async () => {
+    const reviewDetails = {
+      rounds: [{ id: 1, status: 'complete', findings: 1, provider: 'codex', comments: [{ summary: 'Round finding', body: 'Details' }] }],
+      findings: [{ id: 'comment:1', summary: 'PR finding', body: 'Details', resolved: false }],
+    };
+    const p = await panel({}, reviewDetails);
+    await p.selectTab('findings');
+    const keys = ['round:1', 'round:1:finding:0', 'finding:comment:1'];
+    keys.forEach((key) => {
+      expect(p.detail(key).open).toBe(true);
+      p.detail(key).open = false;
+    });
+    // Refresh can arrive before the browser dispatches its asynchronous toggle event.
+    await p.update();
+    keys.forEach((key) => expect(p.detail(key).open).toBe(false));
+    await p.selectTab('review-room');
+    await p.selectTab('findings');
+    keys.forEach((key) => expect(p.detail(key).open).toBe(false));
+    await p.navigate('https://github.com/owner/repo/pull/2');
+    await p.selectTab('findings');
+    keys.forEach((key) => expect(p.detail(key).open).toBe(true));
+    const reopened = await panel(p.data, reviewDetails);
+    await reopened.selectTab('findings');
+    keys.forEach((key) => expect(reopened.detail(key).open).toBe(false));
+  });
+
+  it('keeps an explicitly expanded older round open when a newer round arrives', async () => {
+    const reviewDetails = { rounds: [
+      { id: 2, status: 'complete', findings: 0, comments: [] },
+      { id: 1, status: 'complete', findings: 0, comments: [] },
+    ] };
+    const p = await panel({}, reviewDetails);
+    await p.selectTab('findings');
+    expect(p.detail('round:1').open).toBe(false);
+    p.detail('round:1').open = true;
+    p.detail('round:1').listeners.toggle();
+    reviewDetails.rounds.unshift({ id: 3, status: 'complete', findings: 0, comments: [] });
+    await p.update();
+    expect(p.detail('round:1').open).toBe(true);
+    expect(p.detail('round:3').open).toBe(true);
+  });
+
   it('shows review rounds and full findings in their own tab without losing the chat draft', async () => {
     const p = await panel({}, {
       rounds: [{ id: 1, status: 'complete', findings: 0, provider: 'codex', summary: 'Round result', comments: [] }],
