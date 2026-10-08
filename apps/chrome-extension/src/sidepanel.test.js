@@ -15,15 +15,20 @@ function context(url) {
     : { kind, id, review: { id, title: id }, messages: [] };
 }
 
-async function panel(data = {}) {
+async function panel(data = {}, reviewDetails = {}) {
   vi.resetModules();
   const nodes = { '.error': { textContent: '' }, '.pr-key': {}, '.dashboard': {} };
   const document = {
     hidden: false, activeElement: null, documentElement: { dataset: {}, style: {} },
     querySelector: (selector) => nodes[selector] || null,
-    querySelectorAll: () => [],
+    querySelectorAll: (selector) => selector === '[data-review-tab]' ? nodes.tabs || [] : [],
   };
   nodes.main = { set innerHTML(html) {
+    this.markup = html;
+    nodes.tabs = [...html.matchAll(/data-review-tab="([^"]+)"/g)].map((match) => ({
+      dataset: { reviewTab: match[1] }, listeners: {},
+      addEventListener(name, callback) { this.listeners[name] = callback; },
+    }));
     nodes['.error'] = { textContent: '' };
     nodes.textarea = null;
     if (!html.includes('<textarea')) return;
@@ -47,7 +52,7 @@ async function panel(data = {}) {
     runtime: { onMessage: event(), sendMessage: vi.fn(async (message) => {
       if (message.type !== 'barbarian-api') return null;
       if (message.path.includes('/chat')) return { ok: true, body: { message: { content: 'answer' } } };
-      return { ok: true, body: context(new URL(`http://localhost${message.path}`).searchParams.get('url')) };
+      return { ok: true, body: { ...context(new URL(`http://localhost${message.path}`).searchParams.get('url')), ...reviewDetails } };
     }) },
   };
   vi.stubGlobal('chrome', chrome);
@@ -66,12 +71,34 @@ async function panel(data = {}) {
       await settle();
     },
     async send() { nodes.textarea.listeners.keydown({ key: 'Enter', preventDefault() {} }); await settle(); },
+    async selectTab(name) { nodes.tabs.find((tab) => tab.dataset.reviewTab === name).listeners.click(); await settle(); },
   };
 }
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('side panel chat drafts', () => {
+  it('shows review rounds and full findings in their own tab without losing the chat draft', async () => {
+    const p = await panel({}, {
+      rounds: [{ id: 1, status: 'complete', findings: 0, provider: 'codex', summary: 'Round result', comments: [] }],
+      findings: [{ id: 1, summary: 'Finding title', body: 'Full finding details', author: 'Reviewer', url: 'https://github.com/owner/repo/pull/1', resolved: false }],
+    });
+    expect(p.nodes.tabs.map((tab) => tab.dataset.reviewTab)).toEqual(['findings', 'review-room', 'timeline']);
+    expect(p.nodes.main.markup).not.toContain('Full finding details');
+    await p.type('unfinished question');
+    await p.selectTab('findings');
+    expect(p.input()).toBeNull();
+    expect(p.nodes.main.markup).toContain('aria-label="Findings"');
+    expect(p.nodes.main.markup).toContain('Round 1 · No issues found');
+    expect(p.nodes.main.markup).toContain('Round result');
+    expect(p.nodes.main.markup).toContain('Full finding details');
+    expect(p.nodes.main.markup).toContain('Hide resolved');
+    await p.selectTab('timeline');
+    expect(p.nodes.main.markup).not.toContain('Full finding details');
+    await p.selectTab('review-room');
+    expect(p.input().value).toBe('unfinished question');
+  });
+
   it('keeps text, focus, and selection through background refreshes for PRs and issues', async () => {
     const p = await panel();
     for (const url of ['https://github.com/owner/repo/pull/1', 'https://github.com/owner/repo/issues/2']) {

@@ -13,6 +13,7 @@ import { serverUrlStorageKey } from './connection.js';
 import { captureChatScroll, restoredChatScrollTop, shouldKeepChatPinned } from './chat-scroll.js';
 import { reconcileChatReply, renderChatPendingMessage } from './chat-pending.js';
 import { renderTimeline } from './timeline.js';
+import { renderReviewRounds } from './review-findings.js';
 
 let currentTab;
 let currentPageKey = '';
@@ -136,8 +137,7 @@ function renderFindings(findings) {
   return `<div class="findings">${visible.map((finding) => {
     const state = findingState(finding);
     const location = finding.path ? `${finding.path}${finding.line ? `:${finding.line}` : ''}` : 'Conversation';
-    if (finding.source === 'local') return `<article class="finding ${state.className}"><details open><summary>${escapeHtml(finding.summary)}</summary><div class="markdown">${renderMarkdown(finding.body)}</div></details><p class="finding-meta">Saved in Barbarian · ${escapeHtml(state.label)} · <a href="${escapeHtml(finding.url)}" data-github-url>${escapeHtml(location)}</a></p></article>`;
-    return `<article class="finding ${state.className}"><div class="finding-top"><span class="state" title="${state.label}">${state.symbol}</span><a class="finding-summary" href="${escapeHtml(finding.url)}" data-github-url>${escapeHtml(finding.summary || 'Open review comment')}</a></div><p class="finding-meta">${escapeHtml(state.label)} · ${escapeHtml(location)} · ${escapeHtml(finding.author)}</p></article>`;
+    return `<article class="finding ${state.className}"><details ${!finding.resolved && !finding.outdated ? 'open' : ''}><summary>${escapeHtml(finding.summary || 'Review comment')} · ${escapeHtml(state.label)}</summary><p class="finding-meta">${finding.source === 'local' ? 'Saved in Barbarian · ' : ''}<a href="${escapeHtml(finding.url)}" data-github-url>${escapeHtml(location)}</a> · ${escapeHtml(finding.author)}</p><div class="markdown">${renderMarkdown(finding.body)}</div></details></article>`;
   }).join('')}</div>`;
 }
 
@@ -297,7 +297,7 @@ function renderContext(context) {
     document.querySelector('.track-review')?.addEventListener('click', () => void trackCurrentReview());
     return;
   }
-  const { review, assessment, findings = [], messages = [], timeline = [] } = context;
+  const { review, assessment, findings = [], rounds = [], messages = [], timeline = [] } = context;
   const summary = pullRequestSummary(review);
   const reviewRounds = reviewRoundCount(review);
   const counts = assessment?.counts || { open: review.findings_count || 0, resolved: 0, outdated: 0, total: review.findings_count || 0 };
@@ -306,9 +306,11 @@ function renderContext(context) {
     <div class="status ${escapeHtml(assessment?.tone || 'attention')}">${escapeHtml(assessment?.label || 'Needs Review')}</div>
     <section class="review-actions"><h2>Review actions</h2><div class="actions"><button class="agent-review${reviewRunning ? ' running' : ''}" data-running="${reviewRunning}"><span class="button-icon" aria-hidden="true">${reviewRunning ? '■' : '▶'}</span><span>${reviewRunning ? 'Stop agent review' : 'Agent review'}</span></button><button class="secondary test-locally">Test locally</button></div><p class="action-status"></p>${review.workspace_path ? `<code class="workspace-path">${escapeHtml(review.workspace_path)}</code>` : ''}</section>
     <section><h2>Summary</h2><div class="summary markdown">${renderMarkdown(summary)}</div>${renderFixedIssues(review)}<p class="review-rounds" aria-label="${reviewRounds} agent review ${reviewRounds === 1 ? 'round' : 'rounds'}">AI Review Rounds: <strong>${reviewRounds}</strong></p></section>
-    <section class="findings-panel"><div class="findings-heading"><h2>Findings</h2><label class="finding-filter"><input type="checkbox" ${suppressResolvedFindings ? 'checked' : ''}> Hide resolved</label></div><div class="assessment"><p class="assessment-message">${escapeHtml(assessment?.message || 'Waiting for an AI review.')}</p>${assessment?.stale ? '<p class="stale">⚠ This assessment is older than the latest commit.</p>' : ''}<div class="counts"><div class="count"><strong>${Number(counts.open) || 0}</strong><span>Open</span></div><div class="count"><strong>${Number(counts.resolved) || 0}</strong><span>Resolved</span></div><div class="count"><strong>${Number(counts.outdated) || 0}</strong><span>Outdated</span></div><div class="count"><strong>${Number(counts.total) || 0}</strong><span>Total</span></div></div></div><div class="findings-content">${renderFindings(findings)}</div></section>
-    <div class="review-tabs" role="tablist" aria-label="Pull request details"><button type="button" role="tab" aria-selected="${activeReviewTab === 'review-room'}" class="${activeReviewTab === 'review-room' ? 'active' : ''}" data-review-tab="review-room">Review Room</button><button type="button" role="tab" aria-selected="${activeReviewTab === 'timeline'}" class="${activeReviewTab === 'timeline' ? 'active' : ''}" data-review-tab="timeline">Timeline</button></div>
-    ${activeReviewTab === 'review-room'
+
+    <div class="review-tabs" role="tablist" aria-label="Pull request details"><button type="button" role="tab" aria-selected="${activeReviewTab === 'findings'}" class="${activeReviewTab === 'findings' ? 'active' : ''}" data-review-tab="findings">Findings</button><button type="button" role="tab" aria-selected="${activeReviewTab === 'review-room'}" class="${activeReviewTab === 'review-room' ? 'active' : ''}" data-review-tab="review-room">Review Room</button><button type="button" role="tab" aria-selected="${activeReviewTab === 'timeline'}" class="${activeReviewTab === 'timeline' ? 'active' : ''}" data-review-tab="timeline">Timeline</button></div>
+    ${activeReviewTab === 'findings'
+      ? `<section class="findings-panel" role="tabpanel" aria-label="Findings"><div class="assessment"><p class="assessment-message">${escapeHtml(assessment?.message || 'Waiting for an AI review.')}</p>${assessment?.stale ? '<p class="stale">⚠ This assessment is older than the latest commit.</p>' : ''}<div class="counts"><div class="count"><strong>${Number(counts.open) || 0}</strong><span>Open</span></div><div class="count"><strong>${Number(counts.resolved) || 0}</strong><span>Resolved</span></div><div class="count"><strong>${Number(counts.outdated) || 0}</strong><span>Outdated</span></div><div class="count"><strong>${Number(counts.total) || 0}</strong><span>Total</span></div></div></div>${renderReviewRounds(rounds)}<div class="findings-heading"><h2>${rounds.length ? 'Current PR comments' : 'Findings'}</h2><label class="finding-filter"><input type="checkbox" ${suppressResolvedFindings ? 'checked' : ''}> Hide resolved</label></div><div class="findings-content">${renderFindings(findings)}</div></section>`
+      : activeReviewTab === 'review-room'
       ? `<section class="review-room" role="tabpanel"><div class="conversation">${renderMessages(messages, chatPending)}</div><p class="selection"></p><textarea placeholder="Ask what changed, why it works, what could break, or how to test it…"></textarea><div class="actions"><button class="secondary ask-selection" disabled>Ask about selection</button></div><p class="error"></p></section>`
       : `<section class="review-timeline" role="tabpanel">${renderTimeline(timeline)}</section>`}`;
   document.querySelectorAll('[data-review-tab]').forEach((button) => button.addEventListener('click', () => {

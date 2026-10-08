@@ -130,14 +130,20 @@ p { margin: 0; }
 .issue-context dt { color: var(--muted); }
 .issue-context dd { margin: 0; color: var(--ink-soft); overflow-wrap: anywhere; }
 .issue-context a { color: var(--accent); text-underline-offset: 2px; }
-.findings-panel { display: flex; min-height: 0; max-height: min(380px, 38vh); flex: none; flex-direction: column; overflow: hidden; }
-.findings-panel > .findings-heading, .findings-panel > .assessment { flex: none; }
+.findings-panel { min-height: 240px; flex: 1 1 240px; overflow-y: auto; margin: 0; padding-top: 12px; overscroll-behavior: contain; scrollbar-color: var(--line) transparent; scrollbar-width: thin; }
+.findings-panel > .assessment, .review-round { margin-bottom: 14px; }
+.review-round, .round-finding { padding: 11px; border: 1px solid var(--line); background: var(--panel-soft); font-size: .8125rem; overflow-wrap: anywhere; }
+.round-finding { margin-top: 10px; }
+.review-round summary, .finding summary { cursor: pointer; font-weight: 700; font-size: .8125rem; }
+.round-meta { margin: 8px 0; color: var(--muted); font-size: .6875rem; }
+.round-meta a, .finding-meta a { color: var(--accent); text-underline-offset: 2px; }
+.round-error { margin: 8px 0; color: #ff987a; }
 .findings-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
 .findings-heading h2 { margin: 0; }
 .finding-filter { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: .6875rem; cursor: pointer; }
 .finding-filter input { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }
 .findings-content { display: contents; }
-.findings { display: grid; min-height: 0; max-height: min(240px, 24vh); flex: 1 1 auto; gap: 8px; overflow-y: auto; padding-right: 5px; overscroll-behavior: contain; scrollbar-color: var(--line) transparent; scrollbar-width: thin; }
+.findings { display: grid; gap: 8px; }
 .finding { padding: 11px; border: 1px solid var(--line); background: var(--panel-soft); }
 .finding.resolved, .finding.outdated { opacity: .66; }
 .finding.resolved .finding-summary { text-decoration: line-through; }
@@ -146,7 +152,8 @@ p { margin: 0; }
 .resolved .state { color: #9aeb78; }
 .outdated .state { color: #9ca297; }
 .finding a { color: var(--ink); font-size: .8125rem; font-weight: 700; line-height: 1.4; text-decoration: none; }
-.finding-meta { margin: 7px 0 0 21px; color: var(--muted); font-size: .6875rem; overflow-wrap: anywhere; }
+.finding-meta { margin: 8px 0; color: var(--muted); font-size: .6875rem; overflow-wrap: anywhere; }
+.finding .markdown { font-size: .8125rem; }
 .empty { padding: 13px; border: 1px dashed var(--line); color: var(--muted); }
 .offline { color: #ff9a7c; }
 .offline strong { display: block; margin-bottom: 7px; color: #ffb098; }
