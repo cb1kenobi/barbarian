@@ -231,20 +231,39 @@ describe('ReviewDispatcher', () => {
     db.close();
   });
 
-  it('does not automatically review pull requests authored by the configured user', async () => {
+  it('automatically reviews pull requests authored by the configured user', async () => {
     const db = database();
     const id = seedReview(db, 7);
     db.connection.prepare("UPDATE review_queue SET author='CB1Kenobi' WHERE id=?").run(id);
-    let claimed = false;
+    const claims: ReviewClaim[] = [];
+    const runtime = new AgentRuntime(1);
     const dispatcher = new ReviewDispatcher(
-      db, config(1), new AgentRuntime(1), { error: () => undefined },
-      async () => { claimed = true; },
+      db, config(1), runtime, { error: () => undefined },
+      async (runnerDb, _config, claim) => {
+        claims.push(claim);
+        runnerDb.connection.prepare(`
+          UPDATE review_queue SET status='ready_to_merge', last_reviewed_sha=head_sha,
+            last_reviewed_watermark=discussion_watermark, claim_owner=NULL WHERE id=?
+        `).run(claim.reviewId);
+      },
     );
     await dispatcher.pump();
-    expect(claimed).toBe(false);
+    await waitFor(() => claims.length === 1 && runtime.availableSlots === 1);
+    expect(claims[0]).toMatchObject({ reviewId: id, trigger: 'new_pr' });
     expect(db.connection.prepare('SELECT status, claim_owner FROM review_queue WHERE id=?').get(id))
-      .toEqual({ status: 'unreviewed', claim_owner: null });
+      .toEqual({ status: 'ready_to_merge', claim_owner: null });
+    await dispatcher.pump();
+    expect(claims).toHaveLength(1);
+    db.connection.prepare("UPDATE review_queue SET head_sha='new-head' WHERE id=?").run(id);
+    await dispatcher.pump();
+    await waitFor(() => claims.length === 2 && runtime.availableSlots === 1);
+    expect(claims[1]).toMatchObject({ reviewId: id, trigger: 'new_commits' });
+    db.connection.prepare("UPDATE review_queue SET discussion_watermark='new-feedback' WHERE id=?").run(id);
+    await dispatcher.pump();
+    await waitFor(() => claims.length === 3 && runtime.availableSlots === 1);
+    expect(claims[2]).toMatchObject({ reviewId: id, trigger: 'feedback' });
     dispatcher.stop();
+    await runtime.shutdown();
     db.close();
   });
 
@@ -258,16 +277,45 @@ describe('ReviewDispatcher', () => {
     const current = config(1);
     current.profile.githubLogin = '';
     current.review.requestedReviewer = '';
-    let claimed = false;
+    let claim: ReviewClaim | undefined;
+    const runtime = new AgentRuntime(1);
     const dispatcher = new ReviewDispatcher(
-      db, current, new AgentRuntime(1), { error: () => undefined },
-      async () => { claimed = true; },
+      db, current, runtime, { error: () => undefined },
+      async (_db, _config, nextClaim) => { claim = nextClaim; },
     );
     await dispatcher.pump();
-    expect(claimed).toBe(false);
+    await waitFor(() => Boolean(claim));
+    expect(claim).toMatchObject({ reviewId: id, trigger: 'new_pr' });
     expect(db.connection.prepare('SELECT status, claim_owner FROM review_queue WHERE id=?').get(id))
-      .toEqual({ status: 'unreviewed', claim_owner: null });
+      .toEqual({ status: 'agent_working', claim_owner: claim!.owner });
     dispatcher.stop();
+    await runtime.shutdown();
+    db.close();
+  });
+
+  it('reaches an authored PR after more than fifty unchanged reviewed PRs', async () => {
+    const db = database();
+    for (let number = 1; number <= 50; number += 1) {
+      const reviewedId = seedReview(db, number);
+      db.connection.prepare(`
+        UPDATE review_queue SET author='cb1kenobi', status='ready_to_merge',
+          last_reviewed_sha=head_sha, last_reviewed_watermark=discussion_watermark,
+          updated_at='2026-01-01T00:00:00Z' WHERE id=?
+      `).run(reviewedId);
+    }
+    const id = seedReview(db, 51);
+    db.connection.prepare("UPDATE review_queue SET author='cb1kenobi' WHERE id=?").run(id);
+    const runtime = new AgentRuntime(1);
+    let claim: ReviewClaim | undefined;
+    const dispatcher = new ReviewDispatcher(
+      db, config(1), runtime, { error: () => undefined },
+      async (_db, _config, nextClaim) => { claim = nextClaim; },
+    );
+    await dispatcher.pump();
+    await waitFor(() => Boolean(claim));
+    expect(claim).toMatchObject({ reviewId: id, trigger: 'new_pr' });
+    dispatcher.stop();
+    await runtime.shutdown();
     db.close();
   });
 

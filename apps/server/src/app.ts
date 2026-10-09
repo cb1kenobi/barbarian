@@ -692,7 +692,7 @@ export async function createApp(
       SELECT * FROM work_items WHERE remote_state='OPEN'
       ORDER BY priority DESC, updated_at DESC
     `).all().map((row) => workItemView(row as Record<string, unknown>, activeBranches));
-    const login = (config.profile.githubLogin || config.review.requestedReviewer).trim().toLowerCase();
+    const login = authenticatedGithubLogin(database, config.profile.githubLogin || config.review.requestedReviewer).toLowerCase();
     const openReviewRows = database.connection.prepare(`
       SELECT * FROM review_queue WHERE remote_state='OPEN' AND ignored_at IS NULL
       ORDER BY updated_at DESC
@@ -724,8 +724,8 @@ export async function createApp(
     const waiting = Number((database.connection.prepare(`
       SELECT COUNT(*) AS total FROM review_queue
       WHERE status IN ('issues_found','awaiting_feedback') AND remote_state='OPEN' AND is_draft=0
-        AND ignored_at IS NULL
-    `).get() as { total: number }).total);
+        AND ignored_at IS NULL AND lower(author)<>?
+    `).get(login) as { total: number }).total);
     const queuedIssues = workQueue.length;
     const reviewsNeedingApproval = reviews.filter((review) => !review.is_draft && review.display_status !== 'approved').length;
     const needsAttention = queuedIssues + reviewsNeedingApproval;

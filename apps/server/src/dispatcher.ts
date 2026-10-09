@@ -379,10 +379,9 @@ export class ReviewDispatcher {
         WHERE remote_state='OPEN' AND ignored_at IS NULL AND claim_owner IS NULL
           AND status NOT IN ('merged','closed')
           AND (manual_requested_at IS NOT NULL
-            OR (is_draft=0 AND ?=1 AND ?<>'' AND review_paused=0 AND lower(author)<>?))
+            OR (is_draft=0 AND ?=1 AND ?<>'' AND review_paused=0))
         ORDER BY manual_requested_at IS NULL, updated_at ASC
-        LIMIT 50
-      `).all(config.agents.autoReview ? 1 : 0, reviewer, reviewer) as unknown as CandidateRow[];
+      `).all(config.agents.autoReview ? 1 : 0, reviewer) as unknown as CandidateRow[];
       for (const row of rows) {
         const plan = this.reviewPlan(row, config, reviewer, now);
         if (!plan.run || !plan.trigger) continue;
@@ -433,9 +432,6 @@ export class ReviewDispatcher {
     if (!reviewer) return { trigger, run: false, reason: 'no GitHub reviewer is configured' };
     if (row.is_draft) return { trigger, run: false, reason: 'the pull request is a draft' };
     if (row.review_paused) return { trigger, run: false, reason: 'automatic code review is paused for this pull request' };
-    if (row.author.toLowerCase() === reviewer) {
-      return { trigger, run: false, reason: `the pull request was authored by ${reviewer}` };
-    }
     if (row.status === 'approved' && trigger !== 'new_commits') {
       return { trigger, run: false, reason: 'the current pull request head is already approved' };
     }

@@ -32,6 +32,7 @@ export function openAuthoredPullRequests(
         OR discussion_watermark>COALESCE(author_seen_watermark, '')
         THEN 1 ELSE 0 END AS has_new_feedback,
       CASE WHEN review_decision IN ('APPROVED', 'CHANGES_REQUESTED')
+        OR last_reviewed_sha IS NOT NULL
         OR discussion_watermark<>''
         OR COALESCE(last_feedback_handled_watermark, '')<>''
         OR EXISTS (

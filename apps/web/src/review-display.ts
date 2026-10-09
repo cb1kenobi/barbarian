@@ -4,7 +4,9 @@ export interface ReviewStatusSource {
   pending_review_id?: unknown;
 }
 
-export interface AuthoredReviewStatusSource {
+export interface AuthoredReviewStatusSource extends ReviewStatusSource {
+  head_sha?: string;
+  last_reviewed_sha?: string | null;
   approved?: boolean;
   has_new_feedback?: boolean;
   has_review_activity?: boolean;
@@ -15,11 +17,13 @@ const labels: Record<string, string> = {
   draft: 'Draft',
   pending_review: 'Pending human review',
   unreviewed: 'Needs review',
+  ai_unreviewed: 'AI not reviewed',
   agent_working: 'Agent reviewing',
   agent_failed: 'Agent failed',
   issues_found: 'Issues found',
   awaiting_feedback: 'Waiting on author',
   ready_to_merge: 'Ready to merge',
+  review_clean: 'AI review clean',
   partially_reviewed: 'Partially reviewed',
   approved: 'Approved',
   merged: 'Merged',
@@ -70,6 +74,19 @@ export function authoredReviewDisplayStatus(review: AuthoredReviewStatusSource):
   return review.has_review_activity ? 'awaiting_approval' : 'awaiting_review';
 }
 
+export function authoredReviewCardStatuses(review: AuthoredReviewStatusSource): string[] {
+  const statuses: string[] = [];
+  if (['unreviewed', 'agent_working', 'agent_failed', 'issues_found', 'ready_to_merge'].includes(String(review.status))) {
+    if (review.status !== 'ready_to_merge' || !review.pending_review_id) {
+      const currentReview = Boolean(review.last_reviewed_sha && review.last_reviewed_sha === review.head_sha);
+      if (review.status === 'ready_to_merge') statuses.push(currentReview ? 'review_clean' : 'ai_unreviewed');
+      else statuses.push(review.status === 'unreviewed' ? 'ai_unreviewed' : String(review.status));
+    }
+  }
+  if (review.pending_review_id) statuses.push('pending_review');
+  return statuses;
+}
+
 export function countReviewsNeedingApproval(reviews: ReviewStatusSource[]): number {
   return reviews.filter((review) => !['approved', 'draft'].includes(reviewDisplayStatus(review))).length;
 }
@@ -84,6 +101,6 @@ export function statusTone(status: unknown): string {
   if (status === 'pending_review' || status === 'issues_found' || status === 'awaiting_feedback' || status === 'agent_failed'
     || status === 'needs_input' || status === 'new_feedback') return 'feedback';
   if (status === 'partially_reviewed') return 'partial';
-  if (status === 'ready_to_merge' || status === 'approved') return 'ready';
+  if (status === 'ready_to_merge' || status === 'review_clean' || status === 'approved') return 'ready';
   return 'quiet';
 }

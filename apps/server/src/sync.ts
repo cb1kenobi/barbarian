@@ -6,7 +6,7 @@ import { explainPullRequest, simplify, summarizePullRequest } from './summary.js
 import { discoverLinear } from './linear.js';
 import { refreshReviewContext } from './review-context.js';
 import { viewerApprovedCurrentHead, viewerRequestedChangesCurrentHead } from './review-state.js';
-import { storeAuthenticatedGithubLogin } from './github-identity.js';
+import { authenticatedGithubLogin, storeAuthenticatedGithubLogin } from './github-identity.js';
 
 export function issueId(issue: DiscoveredIssue): string {
   return `${issue.provider}:${issue.repository}#${issue.number}`;
@@ -106,6 +106,7 @@ function shouldTrackReview(
 
 export function upsertReview(database: BarbarianDatabase, config: BarbarianConfig, pr: DiscoveredPullRequest, seenAt: string): void {
   const id = reviewId(pr);
+  const githubLogin = authenticatedGithubLogin(database, config.profile.githubLogin || config.review.requestedReviewer);
   const existing = database.connection.prepare(
     `SELECT head_sha, last_reviewed_sha, discussion_watermark, last_reviewed_watermark,
       attempt_head_sha, attempt_watermark, status, approval_carryover, is_draft
@@ -229,7 +230,8 @@ export function upsertReview(database: BarbarianDatabase, config: BarbarianConfi
     id, pr.repository, pr.number, pr.title, summarizePullRequest(pr.title, pr.body), explainPullRequest(pr.title, pr.body), pr.body,
     pr.url, pr.author, pr.additions, pr.deletions, pr.commitCount, pr.headSha, pr.headRefName, pr.baseRefName, status,
     pr.reviewDecision, JSON.stringify(pr.requestedReviewers), JSON.stringify(pr.requestedTeams),
-    JSON.stringify(pr.linkedIssues), configuredSkill(config, pr.repository), watermark, pr.isDraft ? 1 : 0,
+    JSON.stringify(pr.linkedIssues), pr.author.toLowerCase() === githubLogin.toLowerCase()
+      ? 'cb1-code-review' : configuredSkill(config, pr.repository), watermark, pr.isDraft ? 1 : 0,
     pr.updatedAt, seenAt, pr.updatedAt, seenAt, pr.mergedAt, approvalCarryover ? 1 : 0,
   );
   database.connection.prepare(`

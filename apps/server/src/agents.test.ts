@@ -649,9 +649,13 @@ describe('review delivery and retained results', () => {
     database.close();
   });
 
-  it.each([true, false])('retains findings and routes GitHub delivery using saveAsDraft=%s', async (saveAsDraft) => {
+  it.each([
+    { saveAsDraft: true, author: 'author' }, { saveAsDraft: false, author: 'author' },
+    { saveAsDraft: true, author: 'CB1Kenobi' }, { saveAsDraft: false, author: 'CB1Kenobi' },
+  ])('retains findings and routes GitHub delivery using $saveAsDraft for $author', async ({ saveAsDraft, author }) => {
     const result = { findings: 1, verdict: 'issues', summary: 'A bug.', comments: [{ path: 'file.ts', line: 1, side: 'RIGHT', body: 'A bug.' }] };
     const { database, config, claim } = setup(`console.log('BARBARIAN_RESULT: ${JSON.stringify(result)}')`);
+    database.connection.prepare('UPDATE review_queue SET author=? WHERE id=?').run(author, claim.reviewId);
     config.review.saveAsDraft = saveAsDraft;
     if (saveAsDraft) vi.mocked(github.postPullRequestReview).mockResolvedValue({ id: 'draft', databaseId: 1, comments: 1 });
     await runReviewAgent(database, config, claim, undefined, {

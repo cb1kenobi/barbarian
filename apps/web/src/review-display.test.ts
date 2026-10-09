@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  authoredReviewCardStatuses,
   authoredReviewDisplayStatus,
   countReviewsNeedingApproval,
   reviewCardStatuses,
@@ -10,6 +11,25 @@ import {
 } from './review-display';
 
 describe('review display status', () => {
+  it('shows authored PR review progress independently from external approval', () => {
+    expect(authoredReviewCardStatuses({ status: 'unreviewed' })).toEqual(['ai_unreviewed']);
+    expect(statusLabel('ai_unreviewed')).toBe('AI not reviewed');
+    expect(authoredReviewCardStatuses({ status: 'agent_working' })).toEqual(['agent_working']);
+    expect(authoredReviewCardStatuses({ status: 'agent_failed' })).toEqual(['agent_failed']);
+    expect(authoredReviewCardStatuses({ status: 'issues_found' })).toEqual(['issues_found']);
+    expect(authoredReviewCardStatuses({ status: 'ready_to_merge', display_status: 'partially_reviewed', head_sha: 'head', last_reviewed_sha: 'head' }))
+      .toEqual(['review_clean']);
+    expect(authoredReviewCardStatuses({ status: 'ready_to_merge' })).toEqual(['ai_unreviewed']);
+    expect(authoredReviewCardStatuses({ status: 'ready_to_merge', head_sha: 'head', last_reviewed_sha: 'old-head' }))
+      .toEqual(['ai_unreviewed']);
+    expect(authoredReviewDisplayStatus({ approved: false, has_review_activity: true })).toBe('awaiting_approval');
+    expect(statusLabel('review_clean')).toBe('AI review clean');
+    expect(statusTone('review_clean')).toBe('ready');
+    expect(authoredReviewCardStatuses({ status: 'agent_working', pending_review_id: 'draft' }))
+      .toEqual(['agent_working', 'pending_review']);
+    expect(authoredReviewCardStatuses({ status: 'ready_to_merge', pending_review_id: 'draft' }))
+      .toEqual(['pending_review']);
+  });
   it('distinguishes authored PRs awaiting their first review from those awaiting approval', () => {
     expect(authoredReviewDisplayStatus({})).toBe('awaiting_review');
     expect(authoredReviewDisplayStatus({ has_review_activity: true })).toBe('awaiting_approval');

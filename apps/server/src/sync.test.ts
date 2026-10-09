@@ -101,11 +101,19 @@ describe('applyDiscovery', () => {
         { ...base, number: 14, title: 'Authored by viewer', url: 'https://example/14', author: 'CB1Kenobi', requestedReviewers: ['someone-else'] },
       ],
     };
-    await applyDiscovery(db, config, discovery);
+    const reviewConfig = {
+      ...config, repositories: config.repositories.map((repository) => ({ ...repository, reviewSkill: 'repository-review' })),
+    };
+    await applyDiscovery(db, reviewConfig, discovery);
     expect(db.connection.prepare('SELECT number FROM review_queue ORDER BY number').all()).toEqual([
       { number: 10 },
       { number: 12 },
       { number: 14 },
+    ]);
+    expect(db.connection.prepare('SELECT number, review_skill FROM review_queue ORDER BY number').all()).toEqual([
+      { number: 10, review_skill: 'repository-review' },
+      { number: 12, review_skill: 'repository-review' },
+      { number: 14, review_skill: 'cb1-code-review' },
     ]);
     expect(db.connection.prepare('SELECT remote_updated_at, additions, deletions FROM review_queue WHERE number=10').get())
       .toEqual({ remote_updated_at: '2026-08-31T10:00:00Z', additions: 42, deletions: 7 });

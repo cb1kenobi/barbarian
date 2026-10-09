@@ -250,9 +250,6 @@ h1 { margin: 0; font-size: clamp(2rem, 3.2vw, 3rem); letter-spacing: -.045em; li
 .review-card > p { min-height: 65px; margin: -11px 0 18px; overflow: hidden; color: var(--muted); font-size: .875rem; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
 .review-card-footer { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 10px; margin-top: auto; padding-top: 11px; border-top: 1px solid var(--line); }
 .feedback-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
-.feedback-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; padding-top: 11px; border-top: 1px solid var(--line); }
-.feedback-updated { color: var(--muted-soft); font: .75rem/1.25 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
-.feedback-updated[title] { cursor: help; }
 .tag { display: inline-flex; align-items: center; gap: 4px; padding: 4px 6px; border: 1px solid; font: 600 .625rem ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .07em; text-transform: uppercase; }
 .tag-check { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .tag.working { color: #8bb6ff; border-color: #354c70; background: #1b2534; }

@@ -10,7 +10,7 @@ The server binds to `127.0.0.1` by default, stores state in SQLite, and talks to
 
 - A priority queue for assigned GitHub issues, with configurable repository/label weights and repository-neutral milestone, severity, and data-integrity signals.
 - Safety checks before work enters the actionable queue: duplicate labels/references, near-duplicate titles, linked open PRs, and linked merged fixes.
-- A review queue for PRs requesting you or a configured fallback team. Existing tracked reviews stay visible after the request is cleared.
+- A review queue for PRs requesting you or a configured fallback team, plus automatic reviews of your own monitored PRs. Existing tracked reviews stay visible after the request is cleared.
 - Durable review states: needs review, agent working, issues found, waiting on feedback, ready, approved, merged, or closed.
 - A 20-minute-or-greater background sweep. New review requests, new commits, and trusted author/collaborator feedback automatically enqueue another bounded review; merge/close removes the PR from the active queue.
 - Persisted PR chat and configurable local AI CLIs (Codex, Claude, Gemini, or another command).
@@ -184,6 +184,8 @@ review:
 ```
 
 Automatic reviews and **Agent review** retain every review round in **Findings**, including clean results, summaries, and issues with code locations. Earlier rounds remain visible after later reviews and new commits. Under **Settings → Review behavior**, **Save review comments as pending** (`review.saveAsDraft`) controls GitHub delivery: enabled batches new issues into an unsubmitted review; disabled publishes them to the PR. Only a human submits or discards pending reviews, even after disabling the setting. Clean results and already-posted issues do not create GitHub comments. Existing GitHub comments remain visible alongside review history.
+
+Your own monitored PRs receive automatic `cb1-code-review` reviews when automatic review is enabled, with the same draft exclusions, retry limits, and commit/discussion checkpoints. Their **Feedback** cards show AI review status, completion time, round count, severity counts, and new commits alongside feedback and approval status. A clean AI review is labeled **AI review clean**; approval still comes from GitHub reviewers. Findings use the same pending/published comment setting as other reviews.
 
 Before capturing each review’s discussion, Barbarian checks your pending review and removes comments GitHub marks outdated by newer changes. Current draft comments remain queued, and the pending-comment count is refreshed even when the new review finds no issues. Cleanup rechecks the PR head and pending state before each deletion; the complete review-round history remains in Findings.
 

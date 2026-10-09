@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { createPortal } from 'react-dom';
 import { formatLastSync, formatNextSync, formatSyncTimestamp, type SyncRun } from './sync-time';
 import { sortReviews, type ReviewSort } from './review-sort';
-import { authoredReviewDisplayStatus, countReviewsNeedingApproval, reviewCardStatuses, reviewDisplayStatus, reviewStatusGuide, statusLabel, statusTone } from './review-display';
+import { authoredReviewCardStatuses, authoredReviewDisplayStatus, countReviewsNeedingApproval, reviewCardStatuses, reviewDisplayStatus, reviewStatusGuide, statusLabel, statusTone } from './review-display';
 import { formatElapsed } from './elapsed-time';
 import { applyAppearance, SettingsModal, type AppearanceConfig } from './settings';
 import { copyStatusUpdate, editStatusText } from './status-editor';
@@ -39,6 +39,7 @@ interface Review {
   additions: number; deletions: number;
   pending_review_id: string | null; pending_review_comments: number;
   findings_count: number; review_skill: string; workspace_path: string | null; updated_at: string;
+  head_sha: string; last_reviewed_sha: string | null;
   pending_reason: string | null; display_status?: string; priority_score: number;
   remote_created_at: string; remote_updated_at: string; last_agent_review_at: string | null;
   new_commit_count: number; review_round_count: number;
@@ -477,16 +478,14 @@ export function App() {
         <section id="feedback" className="panel feedback-panel">
           <div className="panel-head"><div><span className="section-label">YOUR PULL REQUESTS</span><div className="review-heading"><h2>Feedback</h2><span className="review-count" aria-label={`${feedback.length} matching open pull requests authored by you`}>{feedback.length} PR{feedback.length === 1 ? '' : 's'}</span>{showDraftFeedback && <span className="review-count draft-count" aria-label={`${visibleDraftFeedback} matching draft pull requests authored by you`}>{visibleDraftFeedback} draft{visibleDraftFeedback === 1 ? '' : 's'}</span>}</div></div><label className="review-drafts"><span>Drafts</span><input type="checkbox" checked={showDraftFeedback} onChange={(event) => setShowDraftFeedback(event.target.checked)} /></label></div>
           <div className="review-grid feedback-viewport">
-            {feedback.map((review) => <button className="review-card feedback-card" key={review.id} onClick={() => setSelectedReview(review.id)}>
-              <div className="review-card-head"><span><span className="repo">{repositoryName(review.repository)}</span><span className="pr">#{review.number}</span></span><FeedbackBadges review={review} /></div>
+            {feedback.map((review) => <article className="review-card feedback-card" key={review.id} onClick={() => {
+              if (!window.getSelection()?.toString()) setSelectedReview(review.id);
+            }}>
+              <button type="button" className="review-card-open" aria-label={`Open authored PR ${review.repository} #${review.number}: ${review.title}`} />
+              <div className="review-card-head"><span><span className="repo">{repositoryName(review.repository)}</span><span className="pr">#{review.number}</span></span><FeedbackBadges review={review} onAgentFailed={() => setFailedReview(review.id)} /></div>
               <h3>{review.title}</h3><p><InlineCode text={review.simple_summary} /></p>
-              <footer className="feedback-card-footer">
-                <small className="feedback-updated" title={formatSyncTimestamp(review.remote_updated_at, dashboard?.profile.timezone)}>Updated: {formatElapsed(review.remote_updated_at, now)}</small>
-                <small className="line-counts" aria-label={`${review.additions} lines added and ${review.deletions} lines removed`}>
-                  <span className="lines-added">+{review.additions}</span><span className="lines-removed">−{review.deletions}</span>
-                </small>
-              </footer>
-            </button>)}
+              <footer className="review-card-footer"><ReviewMetadata review={review} timezone={dashboard?.profile.timezone} now={now} /></footer>
+            </article>)}
             {!feedback.length && <Empty message={queueSearch && allFeedback.length ? 'No authored pull requests match these filters.' : `You have no open ${showDraftFeedback ? '' : 'ready '}pull requests in the watched repositories.`} />}
           </div>
         </section>
@@ -543,14 +542,12 @@ export function App() {
 
 function Empty({ message }: { message: string }) { return <div className="empty"><span>∅</span><p>{message}</p></div>; }
 
-function FeedbackBadges({ review, onAgentFailed }: { review: Pick<Review, 'approved' | 'has_new_feedback' | 'has_review_activity' | 'needs_input' | 'is_draft' | 'status' | 'display_status' | 'pending_review_id'>; onAgentFailed?: () => void }) {
-  const agentStatus = review.status;
-  const showAgentStatus = ['agent_working', 'agent_failed'].includes(agentStatus)
-    || review.is_draft && ['issues_found', 'ready_to_merge'].includes(agentStatus);
+function FeedbackBadges({ review, onAgentFailed }: { review: Pick<Review, 'approved' | 'has_new_feedback' | 'has_review_activity' | 'needs_input' | 'is_draft' | 'status' | 'display_status' | 'pending_review_id' | 'head_sha' | 'last_reviewed_sha'>; onAgentFailed?: () => void }) {
+  const statuses = authoredReviewCardStatuses(review);
   return <span className="feedback-badges">
     {review.is_draft && <ReviewStatusBadge status="draft" />}
-    {showAgentStatus && <ReviewStatusBadge status={agentStatus} {...(onAgentFailed ? { onAgentFailed } : {})} />}
-    {review.pending_review_id && <ReviewStatusBadge status="pending_review" />}
+    {statuses.filter((status) => !review.is_draft || status !== 'ai_unreviewed').map((status) =>
+      <ReviewStatusBadge key={status} status={status} {...(onAgentFailed ? { onAgentFailed } : {})} />)}
     <ReviewStatusBadge status={authoredReviewDisplayStatus(review)} />
   </span>;
 }

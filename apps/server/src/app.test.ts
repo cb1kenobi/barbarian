@@ -689,7 +689,7 @@ describe('dashboard reviews', () => {
     `);
     const addReview = (number: number, author: string, status: string, decision: string | null,
       discussion: string, reviewed: string | null, draft = false) => {
-      const timestamp = `2026-01-02T0${number}:00:00Z`;
+      const timestamp = `2026-01-02T${String(number).padStart(2, '0')}:00:00Z`;
       insert.run(
         `github:Acme/storage#${number}`, number, `Review ${number}`, `Summary ${number}`,
         `https://github.com/Acme/storage/pull/${number}`, author, `head-${number}`,
@@ -702,6 +702,16 @@ describe('dashboard reviews', () => {
     addReview(3, 'CB1Kenobi', 'unreviewed', null, '2026-01-02T03:00:00Z', '2026-01-01T03:00:00Z');
     addReview(4, 'cb1kenobi', 'unreviewed', 'APPROVED', '', null, true);
     addReview(5, 'cb1kenobi', 'unreviewed', null, '', null);
+    addReview(10, 'cb1kenobi', 'ready_to_merge', null, '', null);
+    database.connection.prepare(`
+      UPDATE review_queue SET last_reviewed_sha=head_sha WHERE number=10
+    `).run();
+    database.connection.prepare(`
+      INSERT INTO agent_runs(review_id, provider, task, status, started_at, finished_at, reviewed_head_sha, output)
+      VALUES ('github:Acme/storage#10', 'codex', 'code_review:new_pr', 'complete',
+        '2026-01-02T10:00:00Z', '2026-01-02T10:05:00Z', 'head-10',
+        'BARBARIAN_RESULT: {"findings":0,"verdict":"ready","summary":"Clear."}')
+    `).run();
     addReview(6, 'cb1kenobi', 'unreviewed', 'APPROVED', '2026-01-02T06:00:00Z', '2026-01-01T06:00:00Z');
     addReview(7, 'cb1kenobi', 'ready_to_merge', null, '2026-01-02T07:00:00Z', null);
     addReview(9, 'cb1kenobi', 'ready_to_merge', 'CHANGES_REQUESTED', '2026-01-02T09:00:00Z', null);
@@ -726,6 +736,11 @@ describe('dashboard reviews', () => {
         expect.objectContaining({ number: 1, is_draft: false, display_status: 'unreviewed' }),
       ]);
       expect(payload.feedback).toEqual([
+        expect.objectContaining({
+          number: 10, has_review_activity: true, has_new_feedback: false, approved: false,
+          status: 'ready_to_merge', review_round_count: 1, new_commit_count: 0,
+          last_agent_review_at: '2026-01-02T10:05:00Z', issue_counts: { high: 0, medium: 0, low: 0 },
+        }),
         expect.objectContaining({
           number: 9, approved: false, has_new_feedback: false, has_review_activity: true,
         }),
@@ -756,6 +771,10 @@ describe('dashboard reviews', () => {
       const afterOpen = await app.inject({ method: 'GET', url: '/api/dashboard' });
       expect((afterOpen.json() as { feedback: Array<{ number: number }> }).feedback)
         .toContainEqual(expect.objectContaining({ number: 7, has_new_feedback: false }));
+      database.connection.prepare("UPDATE review_queue SET status='issues_found' WHERE number IN (1,5)").run();
+      database.connection.prepare("UPDATE review_queue SET author='CB1Kenobi' WHERE number=5").run();
+      const withFindings = await app.inject({ method: 'GET', url: '/api/dashboard' });
+      expect(withFindings.json().metrics.waiting).toBe(1);
     } finally {
       await app.close();
       database.close();
