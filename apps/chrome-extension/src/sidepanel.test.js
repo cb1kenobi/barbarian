@@ -89,6 +89,17 @@ async function panel(data = {}, reviewDetails = {}) {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('side panel chat drafts', () => {
+  it('renders embedded HTML in the PR overview without leaking into the panel', async () => {
+    const p = await panel({}, { review: {
+      id: 'owner/repo#1', title: 'Update oxfmt',
+      simple_summary: 'Bumps oxfmt. <details><summary>Release notes</summary><h2>oxfmt v0.72.0</h2><ul><li>Format <code>parser:markdown</code> files</li></ul></details></section><script>alert(1)</script>',
+    } });
+    expect(p.nodes.main.markup).toContain('<details><summary>Release notes</summary><h2>oxfmt v0.72.0</h2>');
+    expect(p.nodes.main.markup).toContain('<li>Format <code>parser:markdown</code> files</li>');
+    expect(p.nodes.main.markup).toContain('&lt;/section&gt;&lt;script&gt;alert(1)&lt;/script&gt;</div>');
+    expect(p.nodes.main.markup).toContain('AI Review Rounds:');
+  });
+
   it('preserves collapsed findings and rounds through refreshes, tab switches, and reopening', async () => {
     const reviewDetails = {
       rounds: [{ id: 1, status: 'complete', findings: 1, provider: 'codex', comments: [{ summary: 'Round finding', body: 'Details' }] }],

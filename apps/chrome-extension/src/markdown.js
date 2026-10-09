@@ -21,15 +21,73 @@ function safeUrl(value) {
   } catch { return null; }
 }
 
-function renderInline(value) {
+const htmlTags = new Set(['a', 'b', 'blockquote', 'br', 'code', 'del', 'details', 'em',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'kbd', 'li', 'ol', 'p', 'pre',
+  's', 'strong', 'sub', 'summary', 'sup', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul']);
+const htmlBlocks = new Set(['blockquote', 'details', 'h1', 'h2', 'h3', 'h4', 'h5',
+  'h6', 'hr', 'li', 'ol', 'p', 'pre', 'summary', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul']);
+const voidTags = new Set(['br', 'hr']);
+const htmlTagPattern = /<\/?[a-z][a-z0-9]*(?:\s+[^<>]*?)?\s*\/?\s*>/gi;
+
+function safeHtmlTag(value) {
+  const match = /^<(\/)?([a-z][a-z0-9]*)([\s\S]*?)>$/i.exec(value);
+  if (!match) return null;
+  const name = match[2].toLowerCase();
+  if (!htmlTags.has(name)) return null;
+  const closing = Boolean(match[1]);
+  const attributes = match[3].trim();
+  if (closing) return !attributes && !voidTags.has(name) ? { name, closing, html: `</${name}>` } : null;
+  let html = `<${name}>`;
+  if (name === 'details' && /^open$/i.test(attributes)) html = '<details open>';
+  else if (name === 'a' && attributes) {
+    const href = /^href\s*=\s*(?:"([^"]*)"|'([^']*)')$/i.exec(attributes);
+    if (!href) return null;
+    const url = href[1] ?? href[2];
+    html = safeUrl(url) ? `<a href="${escapeHtmlText(url)}" target="_blank" rel="noreferrer">` : '<a>';
+  } else if (attributes && !(voidTags.has(name) && attributes === '/')) return null;
+  return { name, closing, html };
+}
+
+function escapeHtmlText(value) {
+  return escapeMarkdownHtml(value).replace(/&amp;((?:#\d+|#x[\da-f]+|[a-z][a-z\d]+);)/gi, '&$1');
+}
+
+function updateHtmlStack(stack, tag) {
+  const literal = stack.at(-1);
+  if ((literal === 'code' || literal === 'pre') && !(tag.closing && tag.name === literal)) return '';
+  if (!tag.closing) {
+    if (!voidTags.has(tag.name)) stack.push(tag.name);
+    return tag.html;
+  }
+  const index = stack.lastIndexOf(tag.name);
+  if (index < 0) return escapeMarkdownHtml(tag.html);
+  return stack.splice(index).reverse().map((name) => `</${name}>`).join('');
+}
+
+function renderInline(value, lineBreaks = true) {
   const tokens = [];
+  let source = String(value);
+  let tokenPrefix = '\uE000';
+  while (source.includes(tokenPrefix)) tokenPrefix += '\uE000';
   const stash = (html) => {
-    const token = `\uE000${tokens.length}\uE001`;
+    const token = `${tokenPrefix}${tokens.length}\uE001`;
     tokens.push(html);
     return token;
   };
-  let source = String(value);
-  source = source.replace(/`([^`\n]+)`/g, (_match, code) => stash(`<code>${escapeMarkdownHtml(code)}</code>`));
+  let hasHtml = false;
+  source = source.replace(/`([^`\n]+)`|<(code|pre)>([\s\S]*?)(?:<\/\2>|$)/gi, (_match, inlineCode, name, code) => {
+    if (inlineCode !== undefined) return stash(`<code>${escapeMarkdownHtml(inlineCode)}</code>`);
+    hasHtml = true;
+    name = name.toLowerCase();
+    return stash(`<${name}>${escapeHtmlText(code)}</${name}>`);
+  });
+  const htmlStack = [];
+  source = source.replace(htmlTagPattern, (match) => {
+    const tag = safeHtmlTag(match);
+    if (!tag) return stash(escapeMarkdownHtml(match));
+    hasHtml = true;
+    return stash(updateHtmlStack(htmlStack, tag));
+  });
   source = source.replace(/!\[([^\]]*)]\(([^\s)]+)(?:\s+"[^"]*")?\)/g, (_match, alt, url) => {
     const src = safeUrl(url);
     return stash(src && /^https?:\/\//i.test(src)
@@ -48,17 +106,17 @@ function renderInline(value) {
       ? `<a href="${escapeMarkdownHtml(href)}" target="_blank" rel="noreferrer">${escapeMarkdownHtml(url)}</a>`
       : escapeMarkdownHtml(url));
   });
-  let html = escapeMarkdownHtml(source)
+  let html = (hasHtml ? escapeHtmlText(source) : escapeMarkdownHtml(source))
     .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
     .replace(/__([^_\n]+)__/g, '<strong>$1</strong>')
     .replace(/~~([^~\n]+)~~/g, '<del>$1</del>')
     .replace(/(^|[\s(])\*([^*\n]+)\*(?=$|[\s).,!?:;])/g, '$1<em>$2</em>')
-    .replace(/(^|[\s(])_([^_\n]+)_(?=$|[\s).,!?:;])/g, '$1<em>$2</em>')
-    .replaceAll('\n', '<br>');
+    .replace(/(^|[\s(])_([^_\n]+)_(?=$|[\s).,!?:;])/g, '$1<em>$2</em>');
+  if (lineBreaks) html = html.replaceAll('\n', '<br>');
   for (let index = tokens.length - 1; index >= 0; index -= 1) {
-    html = html.replaceAll(`\uE000${index}\uE001`, tokens[index]);
+    html = html.replaceAll(`${tokenPrefix}${index}\uE001`, tokens[index]);
   }
-  return html;
+  return html + htmlStack.reverse().map((name) => `</${name}>`).join('');
 }
 
 function tokenClass(token) {
@@ -95,8 +153,18 @@ function isBlockStart(lines, index) {
   const line = lines[index] || '';
   const next = lines[index + 1] || '';
   return /^\s*$|^\s*```|^\s{0,3}#{1,6}\s+|^\s*>\s?|^\s*[-+*]\s+|^\s*\d+[.)]\s+|^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)
+    || hasHtmlBlock(line)
     || /^\s*(?:<details(?:\s+open)?>|<\/details>|<summary>.*<\/summary>)\s*$/i.test(line)
     || (line.includes('|') && /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/.test(next));
+}
+
+function hasHtmlBlock(value) {
+  const source = value.replace(/`([^`\n]+)`|<(code|pre)>[\s\S]*?<\/\2>/gi,
+    (_match, inlineCode, name) => name?.toLowerCase() === 'pre' ? '<pre></pre>' : '');
+  return [...source.matchAll(htmlTagPattern)].some((match) => {
+    const tag = safeHtmlTag(match[0]);
+    return tag && !tag.closing && htmlBlocks.has(tag.name);
+  });
 }
 
 export function renderMarkdown(value = '') {
@@ -136,6 +204,21 @@ export function renderMarkdown(value = '') {
     if (summary) {
       output.push(`<summary>${renderInline(summary[1])}</summary>`);
       index += 1;
+      continue;
+    }
+
+    if (hasHtmlBlock(line)) {
+      const block = [];
+      const stack = [];
+      do {
+        const current = lines[index++];
+        block.push(current);
+        for (const match of current.matchAll(htmlTagPattern)) {
+          const tag = safeHtmlTag(match[0]);
+          if (tag) updateHtmlStack(stack, tag);
+        }
+      } while (index < lines.length && stack.length);
+      output.push(renderInline(block.join('\n'), false));
       continue;
     }
 

@@ -55,6 +55,53 @@ describe('chat markdown rendering', () => {
     expect(html).toBe('<p>Finding</p><details><summary>References</summary><ol><li>Guard <code>afterEach</code> cleanup.</li></ol></details><p>Following paragraph</p>');
   });
 
+  it('renders flattened Dependabot release notes as HTML', () => {
+    const html = renderMarkdown('Bumps oxfmt. <details> <summary>Release notes</summary> <p><em>Sourced from <a href="https://github.com/oxc-project/oxc/releases">oxfmt releases</a>.</em></p> <blockquote> <h2>oxfmt v0.72.0</h2> <h3>Breaking changes</h3> <ul> <li>Format <code>parser:markdown</code> files (<a href="https://example.com/27256">#27256</a>)</li> </ul> </blockquote> </details>');
+    expect(html).toContain('<details> <summary>Release notes</summary>');
+    expect(html).toContain('<p><em>Sourced from <a href="https://github.com/oxc-project/oxc/releases" target="_blank" rel="noreferrer">');
+    expect(html).toContain('<blockquote> <h2>oxfmt v0.72.0</h2>');
+    expect(html).toContain('<ul> <li>Format <code>parser:markdown</code>');
+    expect(html).not.toContain('&lt;');
+    expect(html).not.toMatch(/[\uE000\uE001]/);
+  });
+
+  it('renders HTML blocks across blank lines and balances truncated summaries', () => {
+    expect(renderMarkdown('<blockquote>\n<h2>Release</h2>\n\n<ul>\n<li>First</li>\n\n<li>Second</li>\n</ul>\n</blockquote>\nAfter'))
+      .toContain('</ul>\n</blockquote><p>After</p>');
+    expect(renderMarkdown('Update <details><summary>Notes</summary><ul><li>Truncated…'))
+      .toBe('Update <details><summary>Notes</summary><ul><li>Truncated…</li></ul></details>');
+    expect(renderMarkdown('<p>Safe</p></div></section></details>')).not.toContain('</section>');
+    expect(renderMarkdown('<p>Safe</p></details>')).toContain('&lt;/details&gt;');
+  });
+
+  it('supports inline HTML and entities without interpreting HTML code examples', () => {
+    expect(renderMarkdown('Use <strong>safe</strong> <em>HTML</em> &amp; <code>**literal** &lt;tag&gt;</code>.'))
+      .toBe('<p>Use <strong>safe</strong> <em>HTML</em> &amp; <code>**literal** &lt;tag&gt;</code>.</p>');
+    expect(renderMarkdown('<pre>const value = "&lt;script&gt;";\n**literal**</pre>'))
+      .toBe('<pre>const value = &quot;&lt;script&gt;&quot;;\n**literal**</pre>');
+    expect(renderMarkdown('`<code>literal</code>`')).toBe('<p><code>&lt;code&gt;literal&lt;/code&gt;</code></p>');
+  });
+
+  it('rejects executable HTML, attributes, and encoded unsafe URLs', () => {
+    const html = renderMarkdown('<p onclick="alert(1)">Text</p> <a href="javascript:alert(1)">bad</a> <a href="javascript&#58;alert(1)">encoded</a> <a href="https://example.com" onclick="alert(1)">event</a> <iframe src="https://example.com"></iframe> <svg onload="alert(1)"></svg>');
+    expect(html).not.toContain('<p onclick');
+    expect(html).not.toContain('<a href="javascript');
+    expect(html).not.toContain('<a href="https://example.com" onclick');
+    expect(html).not.toContain('<iframe');
+    expect(html).not.toContain('<svg');
+    expect(renderMarkdown('<a href="https://example.com/?a=1&amp;b=2">query</a>'))
+      .toContain('href="https://example.com/?a=1&amp;b=2"');
+    expect(renderMarkdown('<a href="https://example.com/?q=&quot; onclick=&quot;alert(1)">quoted</a>'))
+      .toContain('href="https://example.com/?q=&quot; onclick=&quot;alert(1)" target=');
+  });
+
+  it('keeps user text from duplicating internal HTML tokens', () => {
+    const html = renderMarkdown('<details></details>\uE0001\uE001');
+    expect(html).toBe('<details></details>\uE0001\uE001');
+    expect(renderMarkdown('<details></details>\uE000\uE0001\uE001'))
+      .toBe('<details></details>\uE000\uE0001\uE001');
+  });
+
   it('balances nested and unclosed details without closing an outside container', () => {
     expect(renderMarkdown('<details open>\n<summary>Outer</summary>\n<details>\n<summary>Inner</summary>\nText\n</details>'))
       .toBe('<details open><summary>Outer</summary><details><summary>Inner</summary><p>Text</p></details></details>');
