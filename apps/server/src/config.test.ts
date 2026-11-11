@@ -26,6 +26,12 @@ const base = {
 };
 
 describe('Barbarian config', () => {
+  it('enables Review Room networking for existing configs and accepts an explicit opt-out', () => {
+    expect(parseConfig(base).agents.reviewRoomNetworkAccess).toBe(true);
+    expect(parseConfig({ ...base, agents: { ...base.agents, reviewRoomNetworkAccess: false } })
+      .agents.reviewRoomNetworkAccess).toBe(false);
+    expect(() => parseConfig({ ...base, agents: { ...base.agents, reviewRoomNetworkAccess: 'yes' } })).toThrow();
+  });
   it('defaults older files to the primary axe, dark theme, and normal font size', () => {
     expect(parseConfig(base)).toMatchObject({
   server: { bindAddress: '127.0.0.1', port: 4142, trustedHosts: [] },
@@ -138,6 +144,7 @@ describe('Barbarian config', () => {
         usageHeadroomPercent: initial.agents.usageHeadroomPercent,
         autoReview: initial.agents.autoReview,
         autoAddressFeedback: true,
+        reviewRoomNetworkAccess: false,
         maxConcurrent: initial.agents.maxConcurrent,
         maxAutomaticAttempts: initial.agents.maxAutomaticAttempts,
         retryBaseMinutes: initial.agents.retryBaseMinutes,
@@ -157,6 +164,7 @@ describe('Barbarian config', () => {
     expect(store.get().agents.codeReview[0]).toEqual({ id: 'codex', provider: 'codex', model: 'gpt-review', effort: 'high', priority: 0 });
     expect(store.get().agents.chat).toEqual({ provider: 'codex', model: 'gpt-chat', effort: 'medium' });
     expect(store.get().agents.autoAddressFeedback).toBe(true);
+    expect(store.get().agents.reviewRoomNetworkAccess).toBe(false);
     expect(store.get().agents.providers.codex).toEqual(initial.agents.providers.codex);
     expect(Object.isFrozen(store.get().repositories)).toBe(true);
     expect(store.warning).toBeNull();
@@ -203,6 +211,7 @@ describe('Barbarian config', () => {
         usageHeadroomPercent: initial.agents.usageHeadroomPercent,
         autoReview: initial.agents.autoReview,
         autoAddressFeedback: true,
+        reviewRoomNetworkAccess: false,
         maxConcurrent: initial.agents.maxConcurrent,
         maxAutomaticAttempts: initial.agents.maxAutomaticAttempts,
         retryBaseMinutes: initial.agents.retryBaseMinutes,
@@ -219,6 +228,8 @@ describe('Barbarian config', () => {
     expect(saved).toContain('chat:');
     expect(saved).toContain('model: gpt-chat');
     expect(saved).toContain('autoAddressFeedback: true');
+    expect(saved).toContain('reviewRoomNetworkAccess: false');
+    expect((await ConfigStore.load(filename)).get().agents.reviewRoomNetworkAccess).toBe(false);
     expect(saved).toContain('saveAsDraft: true');
     expect(saved).not.toContain('default: codex');
     expect(readFileSync(`${filename}.bak`, 'utf8')).toContain('# keep this operator note');

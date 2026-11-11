@@ -597,6 +597,23 @@ describe('runReviewAgent', () => {
 });
 
 describe('executeAgent', () => {
+  it('passes GitHub authentication to Review Room chat only while networking is enabled', async () => {
+    vi.stubEnv('GH_TOKEN', 'test-review-room-token');
+    const { database, config, claim } = setup("console.log(process.env.GH_TOKEN === 'test-review-room-token' ? 'authenticated' : 'no token')");
+    try {
+      expect(await askAgent(database, config, claim.reviewId, 'Why did CI fail?')).toBe('authenticated');
+      expect(await askAgent(database, config, claim.reviewId, 'Why did CI fail?', undefined, undefined,
+        { networkAccess: false })).toBe('no token');
+      expect(await executeAgent(database, config, claim.reviewId, 'code_review:test', 'Review')).toBe('no token');
+      expect(await executeAgent(database, config, null, 'chat', 'Issue chat')).toBe('no token');
+      config.agents.reviewRoomNetworkAccess = false;
+      expect(await askAgent(database, config, claim.reviewId, 'Why did CI fail?')).toBe('no token');
+    } finally {
+      database.close();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('redacts credential-like provider arguments from stored display commands', async () => {
     const { database, config } = setup("console.log('unused')");
     config.agents.providers.fake = {

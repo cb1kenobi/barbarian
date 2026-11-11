@@ -29,6 +29,7 @@ export interface SettingsConfig {
   agents: {
     codeReview: CodeReviewAgentSettings[];
     chat: AgentSelectionSettings;
+    reviewRoomNetworkAccess: boolean;
     reviewRouting: 'random' | 'round_robin' | 'priority';
     usageHeadroomPercent: number;
     autoReview: boolean;
@@ -463,6 +464,8 @@ export function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSav
           <fieldset className="settings-section"><legend>Chat Agent</legend>
             <p className="settings-section-description">Used for conversations about pull requests, issues, and local branches.</p>
             <AgentPicker selection={draft.agents.chat} providers={advanced?.providers || []} modelsLoading={modelsLoading} onChange={(chat) => setDraft({ ...draft, agents: { ...draft.agents, chat } })} />
+            <label className="check-field"><input type="checkbox" checked={draft.agents.reviewRoomNetworkAccess} onChange={(event) => setDraft({ ...draft, agents: { ...draft.agents, reviewRoomNetworkAccess: event.target.checked } })} /><span>Allow network access in Review Room</span></label>
+            <p className="settings-section-description">Lets dashboard and PR-linked editor conversations access the network using your GitHub authentication to investigate CI checks and logs. Codex keeps file access read-only unless editing is enabled. Turning this off restores provider defaults and stops inheriting GitHub tokens.</p>
           </fieldset>
 
           <fieldset className="settings-section"><legend>Agent behavior</legend><div className="settings-grid four">

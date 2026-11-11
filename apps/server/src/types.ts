@@ -72,6 +72,7 @@ export interface BarbarianConfig {
   agents: {
     codeReview: CodeReviewAgentConfig[];
     chat: AgentSelectionConfig;
+    reviewRoomNetworkAccess?: boolean;
     reviewRouting: ReviewRoutingAlgorithm;
     usageHeadroomPercent: number;
     autoReview: boolean;
