@@ -169,6 +169,7 @@ function settingsView(config: BarbarianConfig, activeServer: BarbarianConfig['se
       agents: {
         codeReview: config.agents.codeReview,
         chat: config.agents.chat,
+        reviewRoomNetworkAccess: config.agents.reviewRoomNetworkAccess ?? true,
         reviewRouting: config.agents.reviewRouting,
         usageHeadroomPercent: config.agents.usageHeadroomPercent,
         autoReview: config.agents.autoReview,
@@ -1065,6 +1066,7 @@ export async function createApp(
           }
           return askAgent(database, config, id, body.message, body.provider, signal, {
             runtimeKey,
+            networkAccess: localAgentApiAllowed(request.headers.origin, request.headers.host, activeServer),
             ...(agentWorkspace ? {
               branchId: agentWorkspace.branchId,
               cwd: agentWorkspace.path,

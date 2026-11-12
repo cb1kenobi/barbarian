@@ -33,6 +33,7 @@ export function agentProviderSupportsAutomaticWorkspaceWrite(command: string): b
 }
 
 const environmentReference = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
+const githubEnvironmentNames = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'];
 
 const sensitiveEnvironmentName = /^(?:(?:ANTHROPIC|AWS|AZURE|CLAUDE|CODEX|CURSOR|GEMINI|GOOGLE|OPENAI)_|DATABASE_URL$)|(?:^|_)(?:API_KEY|AUTH_TOKEN|ACCESS_KEY(?:_ID)?|SECRET(?:_ACCESS_KEY)?|PASSWORD|TOKEN|CREDENTIALS?|COOKIE|DSN)$/i;
 
@@ -58,13 +59,15 @@ function inheritedProviderSecrets(command: string): Set<string> {
 export function agentProviderEnvironment(
   provider: AgentProviderConfig,
   base: NodeJS.ProcessEnv = process.env,
+  options: { githubAuth?: boolean } = {},
 ): NodeJS.ProcessEnv {
   const inheritedSecrets = inheritedProviderSecrets(provider.command);
   const environment = Object.fromEntries(Object.entries(base).filter(([name]) => (
     !sensitiveEnvironmentName.test(name) || inheritedSecrets.has(name)
   )));
-  for (const name of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']) {
-    delete environment[name];
+  for (const name of githubEnvironmentNames) {
+    if (options.githubAuth && base[name] !== undefined) environment[name] = base[name];
+    else delete environment[name];
   }
   for (const [name, configured] of Object.entries(provider.env || {})) {
     const reference = configured.match(environmentReference)?.[1];
@@ -117,12 +120,32 @@ function beforeStdinPrompt(args: string[], options: string[]): string[] {
 
 export function agentInvocationArgs(
   provider: AgentProviderConfig,
-  invocation: { workspaceWrite?: boolean } = {},
+  invocation: { workspaceWrite?: boolean; networkAccess?: boolean } = {},
 ): string[] {
   const family = agentProviderFamily(provider.command);
   let args = [...provider.args];
   const options: string[] = [];
   const model = provider.model?.trim();
+  if (invocation.networkAccess && family === 'codex') {
+    // Keep Codex's secret filtering, except for the GitHub tokens needed by gh.
+    const excludedTokens = Object.keys({ ...process.env, ...provider.env })
+      .filter((name) => /TOKEN/i.test(name) && !githubEnvironmentNames.includes(name));
+    options.push(
+      '-c', 'shell_environment_policy.ignore_default_excludes=true',
+      '-c', `shell_environment_policy.exclude=${JSON.stringify(['*KEY*', '*SECRET*', ...excludedTokens])}`,
+    );
+  }
+  if (invocation.networkAccess && family === 'codex' && !invocation.workspaceWrite) {
+    args = withoutOption(args, ['--sandbox', '-s']);
+    options.push(
+      '-c', 'sandbox_mode="read-only"',
+      '-c', 'default_permissions="barbarian-review-room"',
+      '-c', 'permissions.barbarian-review-room.extends=":read-only"',
+      '-c', 'permissions.barbarian-review-room.network.enabled=true',
+      '-c', 'project_doc_max_bytes=0',
+      '-c', 'project_doc_fallback_filenames=[]',
+    );
+  }
   if (invocation.workspaceWrite && family === 'codex') {
     args = withoutOption(args, ['--sandbox', '-s']);
     options.push(
@@ -130,6 +153,7 @@ export function agentInvocationArgs(
       '-c', 'project_doc_max_bytes=0',
       '-c', 'project_doc_fallback_filenames=[]',
     );
+    if (invocation.networkAccess) options.push('-c', 'sandbox_workspace_write.network_access=true');
   } else if (invocation.workspaceWrite && family === 'cursor') {
     args = withoutOption(args, ['--mode']);
     args = args.filter((argument) => argument !== '--plan');

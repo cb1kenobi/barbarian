@@ -53,6 +53,7 @@ agents:
   codeReview: []
   reviewRouting: round_robin
   usageHeadroomPercent: 20
+  reviewRoomNetworkAccess: true
   chat:
     provider: codex
     model: ""

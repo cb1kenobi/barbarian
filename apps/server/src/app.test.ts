@@ -1390,6 +1390,8 @@ describe('local branch context', () => {
       expect(database.connection.prepare(`
         SELECT branch_id FROM agent_runs ORDER BY id DESC LIMIT 1
       `).get()).toEqual({ branch_id: branch.id });
+      expect((database.connection.prepare('SELECT command FROM agent_runs ORDER BY id DESC LIMIT 1')
+        .get() as { command: string }).command).toContain('sandbox_workspace_write.network_access=true');
       const readOnlyResponse = await app.inject({
         method: 'POST',
         url: `/api/local/branches/${encodeURIComponent(branch.id)}/chat`,
@@ -1462,8 +1464,21 @@ describe('local branch context', () => {
       expect(database.connection.prepare(`
         SELECT branch_id, command FROM agent_runs ORDER BY id DESC LIMIT 1
       `).get()).toMatchObject({
-        branch_id: null, command: expect.stringContaining('--sandbox read-only'),
+        branch_id: null, command: expect.stringContaining('permissions.barbarian-review-room.extends=":read-only"'),
       });
+      expect((database.connection.prepare('SELECT command FROM agent_runs ORDER BY id DESC LIMIT 1')
+        .get() as { command: string }).command).toContain('permissions.barbarian-review-room.network.enabled=true');
+
+      const extensionQuestion = await app.inject({
+        method: 'POST', url: '/api/reviews/github%3AAcme%2Fstorage%238/chat',
+        headers: { origin: 'chrome-extension://unrelated-extension' },
+        payload: { message: 'Inspect CI.' },
+      });
+      expect(extensionQuestion.statusCode).toBe(200);
+      const extensionCommand = (database.connection.prepare('SELECT command FROM agent_runs ORDER BY id DESC LIMIT 1')
+        .get() as { command: string }).command;
+      expect(extensionCommand).toContain('--sandbox read-only');
+      expect(extensionCommand).not.toContain('network.enabled=true');
 
       const response = await app.inject({
         method: 'POST', url: '/api/reviews/github%3AAcme%2Fstorage%238/chat',
@@ -1476,6 +1491,8 @@ describe('local branch context', () => {
       `).get()).toMatchObject({
         branch_id: branch.id, command: expect.stringContaining('--sandbox workspace-write'),
       });
+      expect((database.connection.prepare('SELECT command FROM agent_runs ORDER BY id DESC LIMIT 1')
+        .get() as { command: string }).command).toContain('sandbox_workspace_write.network_access=true');
 
       mkdirSync(path.join(directory, 'agent-payload', 'rules'), { recursive: true });
       writeFileSync(
@@ -1594,6 +1611,7 @@ describe('settings API', () => {
           agents: {
             codeReview: [{ id: 'codex', provider: 'codex', model: '', effort: '', priority: 0 }],
             chat: { provider: 'codex', model: '', effort: '' },
+            reviewRoomNetworkAccess: true,
           },
         },
         advanced: {
@@ -1618,6 +1636,7 @@ describe('settings API', () => {
           ...(editable.agents as Record<string, unknown>),
           codeReview: [{ id: 'codex', provider: 'codex', model: 'gpt-review', effort: 'high', priority: 0 }],
           chat: { provider: 'codex', model: 'gpt-chat', effort: 'medium' },
+          reviewRoomNetworkAccess: false,
         },
         repositories: [...current.repositories, {
           name: 'Acme/ui', priority: 5, watchIssues: false, watchPullRequests: true,
@@ -1652,6 +1671,7 @@ describe('settings API', () => {
       expect(persisted[0]!.agents.providers.codex).toEqual(current.agents.providers.codex);
       expect(store.get().review.saveAsDraft).toBe(true);
       expect(saved.json().config.review.saveAsDraft).toBe(true);
+      expect(saved.json().config.agents.reviewRoomNetworkAccess).toBe(false);
       expect(persisted[0]!.review.workspaceRoot).toBe(current.review.workspaceRoot);
       expect(store.get()).toMatchObject({ profile: { name: 'Barbarian' }, appearance: next.appearance });
       expect((await app.inject({ method: 'GET', url: '/api/dashboard' })).statusCode).toBe(200);

@@ -1,10 +1,76 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   agentInvocationArgs, agentProviderCapabilities, agentProviderEnvironment,
   agentProviderSupportsAutomaticWorkspaceWrite, agentProviderSupportsWorkspaceWrite,
 } from './agent-provider.js';
 
 describe('agent provider options', () => {
+  it('enables networking for read-only Codex questions without granting workspace writes', () => {
+    expect(agentInvocationArgs({
+      command: 'codex', args: ['exec', '--sandbox=read-only', '--skip-git-repo-check', '-'],
+    }, { networkAccess: true })).toEqual([
+      'exec', '--skip-git-repo-check',
+      '-c', 'shell_environment_policy.ignore_default_excludes=true',
+      '-c', expect.stringContaining('shell_environment_policy.exclude=["*KEY*","*SECRET*"'),
+      '-c', 'sandbox_mode="read-only"',
+      '-c', 'default_permissions="barbarian-review-room"',
+      '-c', 'permissions.barbarian-review-room.extends=":read-only"',
+      '-c', 'permissions.barbarian-review-room.network.enabled=true',
+      '-c', 'project_doc_max_bytes=0', '-c', 'project_doc_fallback_filenames=[]', '-',
+    ]);
+  });
+
+  it('keeps non-GitHub tokens and key/secret variables excluded from Codex shell tools', () => {
+    vi.stubEnv('UNRELATEDTOKEN', 'test-only');
+    vi.stubEnv('GH_TOKEN', 'test-only-github');
+    try {
+      const args = agentInvocationArgs({
+        command: 'codex', args: ['exec', '-'], env: { CUSTOM_TOKEN: 'test-only-custom' },
+      }, { networkAccess: true });
+      const policy = args.find((value) => value.startsWith('shell_environment_policy.exclude='))!;
+      const excluded = JSON.parse(policy.slice(policy.indexOf('=') + 1));
+      expect(excluded).toEqual(expect.arrayContaining(['*KEY*', '*SECRET*', 'UNRELATEDTOKEN', 'CUSTOM_TOKEN']));
+      expect(excluded).not.toContain('GH_TOKEN');
+      expect(args.join(' ')).not.toContain('test-only');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('enables networking in an editable Codex room without affecting other writable runs', () => {
+    const provider = { command: 'codex', args: ['exec', '-s', 'read-only', '-'] };
+    const args = agentInvocationArgs(provider, { workspaceWrite: true, networkAccess: true });
+    expect(args).toContain('workspace-write');
+    expect(args).toContain('sandbox_workspace_write.network_access=true');
+    expect(args).toContain('shell_environment_policy.ignore_default_excludes=true');
+    expect(args).not.toContain('default_permissions="barbarian-review-room"');
+    expect(agentInvocationArgs(provider, { workspaceWrite: true }))
+      .not.toContain('sandbox_workspace_write.network_access=true');
+    expect(agentInvocationArgs(provider, { networkAccess: false })).toEqual(provider.args);
+  });
+
+  it('leaves network permissions to non-Codex providers', () => {
+    for (const command of ['claude', 'cursor-agent', 'gemini', 'custom-reviewer']) {
+      expect(agentInvocationArgs({ command, args: ['-p'] }, { networkAccess: true })).toEqual(['-p']);
+    }
+  });
+
+  it('inherits GitHub authentication only when requested and preserves provider overrides', () => {
+    const provider = { command: 'codex', args: [] };
+    const base = {
+      GH_TOKEN: 'test-gh', GITHUB_TOKEN: 'test-github',
+      GH_ENTERPRISE_TOKEN: 'test-enterprise', GITHUB_ENTERPRISE_TOKEN: 'test-github-enterprise',
+      OTHER_TOKEN: 'unrelated', PATH: '/bin',
+    };
+    expect(agentProviderEnvironment(provider, base)).toEqual({ PATH: '/bin' });
+    expect(agentProviderEnvironment(provider, base, { githubAuth: true })).toEqual({
+      GH_TOKEN: 'test-gh', GITHUB_TOKEN: 'test-github',
+      GH_ENTERPRISE_TOKEN: 'test-enterprise', GITHUB_ENTERPRISE_TOKEN: 'test-github-enterprise', PATH: '/bin',
+    });
+    expect(agentProviderEnvironment({ ...provider, env: { GH_TOKEN: '${OTHER_TOKEN}' } }, base, { githubAuth: true }).GH_TOKEN)
+      .toBe('unrelated');
+  });
+
   it('applies Codex model and effort before the stdin prompt', () => {
     expect(agentInvocationArgs({
       command: '/usr/local/bin/codex',
